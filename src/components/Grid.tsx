@@ -250,9 +250,11 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
     }
   };
   
+  const totalTableWidth = data.fields.reduce((acc, f) => acc + (f.width || 150), 0) + 64; // 64 for row corner
+
   return (
     <div className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate' }}>
-      <table className="w-max min-w-full text-left border-collapse" style={{ tableLayout: 'fixed' }}>
+      <table className="min-w-full text-left border-collapse" style={{ tableLayout: 'fixed', width: totalTableWidth }}>
         <thead className="sticky top-0 z-20 bg-gray-50 text-sm border-b border-gray-200">
           <tr>
             <th className="sticky left-0 w-16 bg-gray-50 border-r border-gray-200 z-30 p-0">
@@ -1071,8 +1073,8 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
         return <div className="px-2 h-full flex items-center justify-end truncate">{value}</div>;
       case 'url':
         return (
-          <div className="px-2 h-full flex items-center truncate">
-            {value ? <a href={value} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline inline-block truncate w-full" onClick={(e) => { e.stopPropagation(); window.open(value, '_blank'); }}>{value}</a> : null}
+          <div className="px-2 py-1 h-full flex flex-col justify-center w-full overflow-hidden">
+            {value ? <a href={value} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline whitespace-normal break-all overflow-hidden text-sm leading-tight w-full" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }} onClick={(e) => { e.stopPropagation(); window.open(value, '_blank'); }}>{value}</a> : null}
           </div>
         );
       case 'person': {
@@ -1106,8 +1108,8 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
         }
 
         return (
-          <div className="px-2 h-full flex items-center justify-between truncate group/ai w-full">
-            <span className="truncate pr-4">{displayValue}</span>
+          <div className="px-2 py-1 h-full flex flex-col justify-center relative group/ai w-full overflow-hidden">
+            <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full pr-4" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}>{displayValue}</span>
             {!value && !isGenerating && isActive && (
                <button 
                  onClick={handleAIGenerate} 
@@ -1126,7 +1128,11 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
         if (typeof value === 'object' && value !== null) {
           displayValue = JSON.stringify(value);
         }
-        return <div className="px-2 h-full flex items-center truncate select-none">{displayValue}</div>;
+        return (
+          <div className="px-2 py-1 h-full flex flex-col justify-center w-full overflow-hidden select-none">
+            <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}>{displayValue}</span>
+          </div>
+        );
       }
     }
   };
