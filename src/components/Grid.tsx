@@ -6,6 +6,25 @@ import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 
+function HighlightedText({ text, query }: { text: string; query?: string }) {
+  if (!query || !text) return <>{text}</>;
+  const lowerText = String(text).toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const parts = [];
+  let startIndex = 0;
+  while (true) {
+    const index = lowerText.indexOf(lowerQuery, startIndex);
+    if (index === -1) {
+      parts.push(<span key={`end-${startIndex}`}>{String(text).substring(startIndex)}</span>);
+      break;
+    }
+    parts.push(<span key={`text-${startIndex}`}>{String(text).substring(startIndex, index)}</span>);
+    parts.push(<span key={`match-${index}`} className="bg-blue-200 text-blue-900 rounded-sm px-0.5">{String(text).substring(index, index + query.length)}</span>);
+    startIndex = index + query.length;
+  }
+  return <>{parts}</>;
+}
+
 export const copyImageToClipboardMagic = (path: string) => {
    navigator.clipboard.writeText(`IMG_COPY_MAGIC:${path}`);
 };
@@ -185,6 +204,9 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
 
 interface GridProps {
   data: GridData;
+  searchQuery?: string;
+  searchMatches?: { recordId: string, fieldId: string }[];
+  activeSearchMatch?: { recordId: string, fieldId: string, recordIndex: number, fieldIndex: number } | null;
   onUpdateRecord: (recordId: string, fieldId: string, value: any) => void;
   onDeleteRecords?: (recordIds: string[]) => void;
   onAddRecord: () => void;
@@ -387,7 +409,8 @@ const triggerDownload = async (url: string, filename: string, folderPath?: strin
   return undefined;
 };
 
-export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh' }: GridProps) {
+export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh' }: GridProps) {
+  const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const [activeCell, setActiveCell] = useState<{ recordId: string; fieldId: string } | null>(null);
   const [forceEdit, setForceEdit] = useState(false);
@@ -447,6 +470,15 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onIns
     window.addEventListener('mouseup', handleMouseUp);
     return () => window.removeEventListener('mouseup', handleMouseUp);
   }, []);
+
+  useEffect(() => {
+    if (activeSearchMatch) {
+       const el = document.getElementById(`cell-${activeSearchMatch.recordId}-${activeSearchMatch.fieldId}`);
+       if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+       }
+    }
+  }, [activeSearchMatch]);
 
   const getSelectionBox = () => {
     if (!selectionStart || !selectionEnd) return null;
@@ -1215,6 +1247,9 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onIns
                     key={field.id}
                     record={record}
                     field={field}
+                    searchQuery={searchQuery}
+                    isSearchMatch={searchMatchSet.has(`${record.id}-${field.id}`)}
+                    isSearchMatchActive={activeSearchMatch?.recordId === record.id && activeSearchMatch?.fieldId === field.id}
                     isActive={activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
                     forceEdit={forceEdit && activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
                     isGeneratingCol={generatingCell?.recordId === record.id && generatingCell?.fieldId === field.id}
@@ -2021,6 +2056,9 @@ interface CellProps {
   isActive: boolean;
   forceEdit?: boolean;
   isGeneratingCol?: boolean;
+  searchQuery?: string;
+  isSearchMatch?: boolean;
+  isSearchMatchActive?: boolean;
   onActivate: () => void;
   onChange: (value: any) => void;
   onBlur: () => void;
@@ -2040,7 +2078,7 @@ interface CellProps {
   lang?: 'en' | 'zh';
 }
 
-function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh' }: CellProps) {
+function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh' }: CellProps) {
   const value = record[field.id];
   
   const [isEditingMode, setIsEditingMode] = useState(false);
@@ -2455,7 +2493,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
           <div className="flex items-center h-full px-2 cursor-pointer" onClick={() => { onActivate(); if (isActive) setIsEditingMode(true); }}>
             {option ? (
                <span className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium truncate max-w-full", option.color)}>
-                 {option.name}
+                 <HighlightedText text={option.name} query={searchQuery} />
                </span>
             ) : null}
           </div>
@@ -2470,7 +2508,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
               if (!option) return null;
               return (
                 <span key={id} className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium shrink-0", option.color)}>
-                  {option.name}
+                  <HighlightedText text={option.name} query={searchQuery} />
                 </span>
               );
             }) : null}
@@ -2478,11 +2516,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
         );
       }
       case 'number':
-        return <div className="px-2 h-full flex items-center justify-end truncate">{value}</div>;
+        return <div className="px-2 h-full flex items-center justify-end truncate"><HighlightedText text={String(value ?? '')} query={searchQuery} /></div>;
       case 'url':
         return (
           <div className="px-2 py-1 h-full flex flex-col justify-center w-full overflow-hidden">
-            {value ? <a href={value} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline whitespace-normal break-all overflow-hidden text-sm leading-tight w-full" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }} onClick={(e) => { e.stopPropagation(); window.open(value, '_blank'); }}>{value}</a> : null}
+            {value ? <a href={value} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline whitespace-normal break-all overflow-hidden text-sm leading-tight w-full" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }} onClick={(e) => { e.stopPropagation(); window.open(value, '_blank'); }}><HighlightedText text={String(value)} query={searchQuery} /></a> : null}
           </div>
         );
       case 'person': {
@@ -2494,7 +2532,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
                  <div className="w-5 h-5 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 text-[10px] font-bold shrink-0">
                    {typeof value === 'string' ? value.charAt(0).toUpperCase() : '?'}
                  </div>
-                 <span className="truncate">{displayValue}</span>
+                 <span className="truncate"><HighlightedText text={displayValue} query={searchQuery} /></span>
                </>
              ) : null}
            </div>
@@ -2504,6 +2542,8 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
         let displayValue = value;
         if (typeof value === 'object' && value !== null) {
           displayValue = JSON.stringify(value);
+        } else if (value == null) {
+          displayValue = '';
         }
         
         if (isGeneratingCol) {
@@ -2517,7 +2557,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
 
         return (
           <div className="px-2 py-1 h-full flex flex-col justify-center relative group/ai w-full overflow-hidden">
-            <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full pr-4" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}>{displayValue}</span>
+            <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full pr-4" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}><HighlightedText text={String(displayValue)} query={searchQuery} /></span>
             {!value && !isGeneratingCol && isActive && (
                <button onMouseDown={handleAIGenerate}
                  className="absolute right-1 top-1.5 p-1 rounded bg-gray-100 hover:bg-gradient-to-r hover:from-purple-500 hover:to-indigo-500 hover:text-white text-gray-400 opacity-0 group-hover/ai:opacity-100 transition-all z-10"
@@ -2599,10 +2639,12 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
         } catch (e) {
           displayValue = '#ERROR';
         }
+
+        if (displayValue == null) displayValue = '';
         
         return (
           <div className="px-2 h-full flex flex-col justify-center w-full overflow-hidden select-text bg-gray-50/50">
-            <span className="truncate text-sm leading-tight text-gray-700 italic font-medium">{String(displayValue)}</span>
+            <span className="truncate text-sm leading-tight text-gray-700 italic font-medium"><HighlightedText text={String(displayValue)} query={searchQuery} /></span>
           </div>
         );
       }
@@ -2610,10 +2652,12 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
         let displayValue = value;
         if (typeof value === 'object' && value !== null) {
           displayValue = JSON.stringify(value);
+        } else if (value == null) {
+          displayValue = '';
         }
         return (
           <div className="px-2 py-1 h-full flex flex-col justify-center w-full overflow-hidden select-none">
-            <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}>{displayValue}</span>
+            <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}><HighlightedText text={String(displayValue)} query={searchQuery} /></span>
           </div>
         );
       }
@@ -2622,6 +2666,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
 
   return (
     <td
+      id={`cell-${record.id}-${field.id}`}
       ref={ref}
       tabIndex={0}
       onKeyDown={handleKeyDown}
@@ -2683,7 +2728,8 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
       className={cn(
         "border-b border-r border-gray-200 relative p-0 transition-colors cursor-cell group-hover:bg-gray-50",
         heightClass,
-        isSelectedBox && !isEditingMode ? "bg-[#ebf4ff] group-hover:bg-[#e1effe]" : "bg-white",
+        isSelectedBox && !isEditingMode ? "bg-[#ebf4ff] group-hover:bg-[#e1effe]" : (isSearchMatch && !isEditingMode ? "bg-blue-100" : "bg-white"),
+        isSearchMatchActive && !isEditingMode && "ring-[2px] ring-blue-400 z-10",
         isCutBox && !isEditingMode && "opacity-50 ring-1 ring-dashed ring-gray-400 ring-inset",
         isActive && !isEditingMode && "ring-[1.5px] ring-blue-500 ring-inset z-20 outline-none",
         frozenLeftOffset !== undefined ? (isActive ? "sticky z-20" : "sticky z-10") : "",

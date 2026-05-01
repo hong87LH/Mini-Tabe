@@ -470,6 +470,69 @@ export default function App() {
   const [showHideFieldsMenu, setShowHideFieldsMenu] = useState(false);
   const [showGlobalSortMenu, setShowGlobalSortMenu] = useState(false);
   const [showGroupMenu, setShowGroupMenu] = useState(false);
+  
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatches, setSearchMatches] = useState<{ recordIndex: number, fieldIndex: number, recordId: string, fieldId: string }[]>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        setShowSearch(true);
+        setTimeout(() => searchInputRef.current?.focus(), 100);
+      } else if (e.key === 'Escape' && showSearch) {
+        setShowSearch(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showSearch]);
+
+  useEffect(() => {
+    if (!searchQuery || !showSearch) {
+      setSearchMatches([]);
+      setCurrentSearchIndex(-1);
+      return;
+    }
+    const query = searchQuery.toLowerCase();
+    const visibleFields = data.fields.filter((f: any) => !f.hidden);
+    const matches: any[] = [];
+    data.records.forEach((record: any, rIdx: number) => {
+      visibleFields.forEach((field: any, cIdx: number) => {
+         let val = record[field.id];
+         if (val != null) {
+            let strVal = '';
+            if (field.type === 'attachment' && Array.isArray(val)) {
+                strVal = val.map(v => v.name || v.url || '').join(' ');
+            } else if (field.type === 'multiSelect' && Array.isArray(val)) {
+                strVal = val.map(v => field.options?.find((o:any) => o.id === v)?.name || '').join(' ');
+            } else if (field.type === 'singleSelect') {
+                strVal = field.options?.find((o:any) => o.id === val)?.name || '';
+            } else {
+                strVal = String(val);
+            }
+            if (strVal.toLowerCase().includes(query)) {
+                matches.push({ recordIndex: rIdx, fieldIndex: cIdx, recordId: record.id, fieldId: field.id });
+            }
+         }
+      });
+    });
+    setSearchMatches(matches);
+    setCurrentSearchIndex(matches.length > 0 ? 0 : -1);
+  }, [searchQuery, data, showSearch]);
+
+  const handleNextSearch = () => {
+    if (searchMatches.length === 0) return;
+    setCurrentSearchIndex((prev) => (prev + 1) % searchMatches.length);
+  };
+
+  const handlePrevSearch = () => {
+    if (searchMatches.length === 0) return;
+    setCurrentSearchIndex((prev) => (prev - 1 + searchMatches.length) % searchMatches.length);
+  };
 
   const setData = (update: any) => {
     setTables(prev => {
@@ -1661,7 +1724,13 @@ export default function App() {
              </div>
           </div>
           <div className="flex items-center space-x-2">
-            <button className="text-gray-400 hover:text-gray-600 p-1.5 rounded hover:bg-gray-100">
+            <button 
+              className={`text-gray-400 hover:text-gray-600 p-1.5 rounded hover:bg-gray-100 ${showSearch ? 'bg-gray-100 text-gray-800' : ''}`}
+              onClick={() => {
+                setShowSearch(!showSearch);
+                if (!showSearch) setTimeout(() => searchInputRef.current?.focus(), 50);
+              }}
+            >
               <Search className="w-4 h-4" />
             </button>
             <button 
@@ -1675,10 +1744,53 @@ export default function App() {
         </div>
 
         {/* Grid Area */}
-        <div className="flex-1 flex flex-col min-h-0 relative bg-white">
+        <div className="flex-1 flex flex-col min-h-0 relative bg-white overflow-hidden">
+          {showSearch && (
+            <div className="absolute top-4 right-4 z-50 bg-white shadow-lg rounded-lg border border-gray-200 flex items-center px-2 py-1.5 space-x-2">
+              <Search className="w-4 h-4 text-gray-400" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={lang === 'en' ? "Search..." : "查找..."}
+                className="w-40 text-sm border-none focus:outline-none focus:ring-0 bg-transparent text-gray-800 placeholder-gray-400"
+              />
+              <div className="flex items-center space-x-1 border-l border-gray-200 pl-2">
+                <span className="text-xs text-gray-500 min-w-12 text-center select-none">
+                  {searchQuery ? `${searchMatches.length > 0 ? currentSearchIndex + 1 : 0} / ${searchMatches.length}` : ''}
+                </span>
+                <button 
+                  onClick={handlePrevSearch}
+                  disabled={searchMatches.length === 0}
+                  className="p-1 hover:bg-gray-100 rounded text-gray-500 disabled:opacity-50"
+                  title={lang === 'en' ? "Previous" : "上一个"}
+                >
+                  <ChevronDown className="w-4 h-4 transform rotate-180" />
+                </button>
+                <button 
+                  onClick={handleNextSearch}
+                  disabled={searchMatches.length === 0}
+                  className="p-1 hover:bg-gray-100 rounded text-gray-500 disabled:opacity-50"
+                  title={lang === 'en' ? "Next" : "下一个"}
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                <button 
+                  onClick={() => setShowSearch(false)}
+                  className="p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-500 ml-1"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
           <Grid 
             lang={lang}
             data={displayData}
+            searchQuery={showSearch ? searchQuery : ''}
+            searchMatches={showSearch ? searchMatches : undefined}
+            activeSearchMatch={showSearch && searchMatches.length > 0 ? searchMatches[currentSearchIndex] : null}
             rowHeight={rowHeight}
             groupConfig={groupConfig}
             onUpdateRecord={handleUpdateRecord}
