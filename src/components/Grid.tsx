@@ -1,15 +1,192 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn } from '../lib/utils';
-import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter } from 'lucide-react';
+import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
+import { Parser } from 'expr-eval';
 
-export const imagePreviewCache = new Map<string, string>();
+export const copyImageToClipboardMagic = (path: string) => {
+   navigator.clipboard.writeText(`IMG_COPY_MAGIC:${path}`);
+};
+
+const ZoomableImage = ({ src, onPrev, onNext, onClose }: { src: string, onPrev: (e: React.MouseEvent) => void, onNext: (e: React.MouseEvent) => void, onClose: () => void }) => {
+  const [scale, setScale] = useState(1);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  return (
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 cursor-move outline-none"
+      onWheel={(e) => {
+        e.preventDefault();
+        setScale(s => Math.min(Math.max(0.5, s - e.deltaY * 0.01), 10));
+      }}
+      onMouseDown={e => { setIsDragging(true); setDragStart({ x: e.clientX - pos.x, y: e.clientY - pos.y }); e.stopPropagation(); }}
+      onMouseMove={e => { if (isDragging) { setPos({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }); } }}
+      onMouseUp={() => setIsDragging(false)}
+      onMouseLeave={() => setIsDragging(false)}
+      onClick={onClose}
+    >
+      <div className="absolute top-4 right-4 flex items-center gap-4 z-50">
+         <button onClick={(e) => { e.stopPropagation(); setScale(1); setPos({x: 0, y: 0}); }} title="Reset Zoom" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+         </button>
+         <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(src); }} title="Copy Image" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
+            <Copy className="w-5 h-5" />
+         </button>
+         <button onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
+            <X className="w-6 h-6" />
+         </button>
+      </div>
+
+      <button onClick={onPrev} className="absolute left-8 top-1/2 -translate-y-1/2 text-white/50 hover:text-white z-10 p-4">
+         <ChevronLeft className="w-12 h-12" />
+      </button>
+      <img src={src} style={{ transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`, transition: isDragging ? 'none' : 'transform 0.1s' }} className="max-w-[90%] max-h-[90%] object-contain" draggable={false} onClick={e => e.stopPropagation()} />
+      <button onClick={onNext} className="absolute right-8 top-1/2 -translate-y-1/2 text-white/50 hover:text-white z-10 p-4">
+         <ChevronRight className="w-12 h-12" />
+      </button>
+    </div>
+  );
+};
+
+
+export const fullImageBlobCache = new Map<string, string>();
+export const thumbnailCache = new Map<string, string>();
+
+// Concurrency queue for generating canvas thumbnails to prevent memory spikes
+const thumbnailQueue: Array<() => Promise<void>> = [];
+let activeThumbnails = 0;
+const MAX_CONCURRENT_THUMBNAILS = 5;
+
+async function processThumbnailQueue() {
+  if (activeThumbnails >= MAX_CONCURRENT_THUMBNAILS || thumbnailQueue.length === 0) return;
+  activeThumbnails++;
+  const task = thumbnailQueue.shift()!;
+  try {
+    await task();
+  } finally {
+    activeThumbnails--;
+    processThumbnailQueue();
+  }
+}
+
+async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<string> {
+  if (thumbnailCache.has(pathStr)) return thumbnailCache.get(pathStr)!;
+
+  const w = window as any;
+  const isElectronPath = pathStr.startsWith('/') || pathStr.match(/^[a-zA-Z]:\\/);
+
+  if (isElectronPath && w.electronAPI && w.electronAPI.getThumbnail) {
+    try {
+      const dataUrl = await w.electronAPI.getThumbnail(pathStr, { width: 150, height: 150 });
+      if (dataUrl) {
+        thumbnailCache.set(pathStr, dataUrl);
+        return dataUrl;
+      }
+    } catch (e) {}
+  }
+
+  return new Promise((resolve) => {
+    thumbnailQueue.push(async () => {
+      if (thumbnailCache.has(pathStr)) {
+         resolve(thumbnailCache.get(pathStr)!);
+         return;
+      }
+      
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      let urlToLoad = '';
+      let objectUrl = '';
+
+      if (file) {
+        objectUrl = URL.createObjectURL(file);
+        urlToLoad = objectUrl;
+      } else if (fullImageBlobCache.has(pathStr)) {
+        urlToLoad = fullImageBlobCache.get(pathStr)!;
+      } else if (isElectronPath) {
+        urlToLoad = `file://${pathStr.replace(/\\/g, '/')}`;
+      } else {
+        urlToLoad = pathStr;
+      }
+
+      await new Promise<void>((imgResolve) => {
+        img.onload = () => {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+
+          const MAX_DIM = 256;
+          if (img.width <= MAX_DIM && img.height <= MAX_DIM && !file) {
+            thumbnailCache.set(pathStr, urlToLoad);
+            resolve(urlToLoad);
+            imgResolve();
+            return;
+          }
+
+          const canvas = document.createElement('canvas');
+          let w = img.width;
+          let h = img.height;
+          if (w > h) {
+            h *= MAX_DIM / w;
+            w = MAX_DIM;
+          } else {
+            w *= MAX_DIM / h;
+            h = MAX_DIM;
+          }
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, w, h);
+            try {
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+              thumbnailCache.set(pathStr, dataUrl);
+              resolve(dataUrl);
+            } catch (e) {
+              resolve(urlToLoad);
+            }
+          } else {
+            resolve(urlToLoad);
+          }
+          imgResolve();
+        };
+
+        img.onerror = () => {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          resolve(urlToLoad);
+          imgResolve();
+        };
+
+        img.src = urlToLoad;
+      });
+    });
+    processThumbnailQueue();
+  });
+}
+
+const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string, alt: string, className: string, title?: string, onClick?: (e: React.MouseEvent) => void }) => {
+  const [src, setSrc] = useState<string>('');
+
+  useEffect(() => {
+    let isMounted = true;
+    if (thumbnailCache.has(path)) {
+      setSrc(thumbnailCache.get(path)!);
+    } else {
+      getOrGenerateThumbnail(path).then(fetched => {
+        if (isMounted) setSrc(fetched);
+      });
+    }
+    return () => { isMounted = false; };
+  }, [path]);
+
+  return <img src={src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='} alt={alt} className={className} title={title} onClick={onClick} />;
+};
 
 interface GridProps {
   data: GridData;
   onUpdateRecord: (recordId: string, fieldId: string, value: any) => void;
+  onDeleteRecords?: (recordIds: string[]) => void;
   onAddRecord: () => void;
   onAddField: () => void;
   onDeleteField?: (fieldId: string) => void;
@@ -28,8 +205,190 @@ interface GridProps {
   lang?: 'en' | 'zh';
 }
 
-export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, rowHeight, modelSettings, lang = 'zh' }: GridProps) {
+const resolveFieldValueForAI = (val: any, refField: Field) => {
+  if (!val) return val;
+  if (refField.type === 'singleSelect') {
+    return refField.options?.find(o => o.id === val)?.name || val;
+  }
+  if (refField.type === 'multiSelect' && Array.isArray(val)) {
+    return val.map((id: string) => refField.options?.find(o => o.id === id)?.name || id).join(', ');
+  }
+  return val;
+};
+
+const getBase64ImageParts = async (templateStr: string, fields: Field[], record: any) => {
+  const parts: any[] = [];
+  const dataUrlsOut: string[] = [];
+  if (!templateStr) return { cleanString: '', parts, dataUrls: dataUrlsOut };
+  let str = templateStr;
+  
+  for (let f of fields) {
+    const marker = `{${f.name}}`;
+    if (str.includes(marker)) {
+      let val = record[f.id];
+      if (f.type === 'attachment' || f.type === 'aiImage') {
+        const urls: string[] = [];
+        if (Array.isArray(val)) {
+          val.forEach((v: any) => urls.push(String(v?.url || v)));
+        } else if (typeof val === 'string') {
+          val.split(',').forEach(v => urls.push(v.trim()));
+        } else if (val) {
+          urls.push(String(val?.url || val));
+        }
+        
+        const dataUrls: string[] = [];
+        for (let u of urls) {
+          if (!u.trim()) continue;
+          
+          let fetchUrl = u;
+          if (thumbnailCache.has(u)) {
+             fetchUrl = thumbnailCache.get(u)!;
+          } else if (fullImageBlobCache.has(u)) {
+             fetchUrl = fullImageBlobCache.get(u)!;
+          } else if (!u.startsWith('data:') && !u.startsWith('http') && !u.startsWith('blob:')) {
+             fetchUrl = `file://${u.replace(/\\\\/g, '/')}`;
+          }
+
+          if (fetchUrl.startsWith('data:')) {
+            const mime = fetchUrl.match(/data:(.*?);/)?.[1] || 'image/jpeg';
+            let b64 = fetchUrl.split(',')[1];
+            parts.push({ inlineData: { mimeType: mime, data: b64 } });
+            dataUrls.push(fetchUrl);
+            dataUrlsOut.push(fetchUrl);
+          } else {
+            try {
+              const res = await fetch(fetchUrl);
+              const blob = await res.blob();
+              const b64: string = await new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(blob);
+              });
+              parts.push({ inlineData: { mimeType: blob.type, data: b64.split(',')[1] } });
+              dataUrls.push(b64);
+              dataUrlsOut.push(b64);
+            } catch(e) {
+              console.error("Could not load image reference:", u, "via fetchUrl:", fetchUrl);
+              dataUrls.push(u); 
+            }
+          }
+        }
+        str = str.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), dataUrls.join(' '));
+      } else {
+         if (Array.isArray(val)) val = val.map(v => v?.url || v).join(', ');
+         else val = String(val || '');
+         str = str.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), val);
+      }
+    }
+  }
+
+  return { cleanString: str, parts, dataUrls: dataUrlsOut };
+};
+
+const triggerDownload = async (url: string, filename: string, folderPath?: string): Promise<string | undefined> => {
+  const w = window as any;
+
+  // 1. 优先尝试咱们最新挂载的安全 API (此时 main.js 会全权处理重名逻辑并返回最新目标路径)
+  if (w.electronAPI && w.electronAPI.downloadFile) {
+    try {
+      const finalSavedPath = await w.electronAPI.downloadFile({ url, filename, folderPath });
+      return finalSavedPath || (folderPath ? `${folderPath}/${filename}` : undefined);
+    } catch (e) {
+      console.error("ElectronAPI download failed:", e);
+    }
+  } else if (w.electron && w.electron.downloadFile) {
+    try {
+      const finalSavedPath = await w.electron.downloadFile({ url, filename, folderPath });
+      return finalSavedPath || (folderPath ? `${folderPath}/${filename}` : undefined);
+    } catch (e) {
+      console.error("Electron download failed:", e);
+    }
+  }
+
+  // 2. 只有上面都没有时，才降级使用 nodeIntegration（但如果是新架构 nodeIntegration 为 false 时，本段不会被执行）
+  if (w.require && folderPath) {
+    try {
+      const fs = w.require('fs');
+      const pathNode = w.require('path');
+      if (!fs.existsSync(folderPath)) fs.mkdirSync(folderPath, { recursive: true });
+      
+      let fullPath = pathNode.join(folderPath, filename);
+      // 👇 防覆盖逻辑：如果本地直接通过 fs 落盘（降级方案），也要确保不覆盖
+      if (fs.existsSync(fullPath)) {
+        let parsedExt = pathNode.extname(filename);
+        let parsedBase = pathNode.basename(filename, parsedExt);
+        let finalName = filename;
+        let counter = 1;
+
+        const match = parsedBase.match(/-(\d+)$/);
+        if (match) {
+           counter = parseInt(match[1], 10);
+           parsedBase = parsedBase.substring(0, parsedBase.length - match[0].length);
+        }
+
+        while (fs.existsSync(fullPath)) {
+           finalName = `${parsedBase}-${counter}${parsedExt}`;
+           fullPath = pathNode.join(folderPath, finalName);
+           counter++;
+        }
+      }
+
+      let buffer: any;
+      if (url.startsWith('data:')) {
+         buffer = w.require('buffer').Buffer.from(url.split(',')[1], 'base64');
+      } else {
+         const arrayBuf = await (await fetch(url)).arrayBuffer();
+         buffer = w.require('buffer').Buffer.from(arrayBuf);
+      }
+      // 注意：这里不再做复杂的文件去重，交给 main.js 更合适
+      fs.writeFileSync(fullPath, buffer);
+      return fullPath;
+    } catch (e) {
+      console.error("Node fs integration writing failed:", e);
+    }
+  }
+
+  // 3. 尝试其他通用的 IPC Renderer 方式
+  const ipc = w.ipcRenderer || (w.electron?.ipcRenderer) || (w.electronAPI?.ipcRenderer);
+  if (ipc && folderPath) {
+    try {
+      if (ipc.invoke) {
+         try {
+           const finalSavedPath = await ipc.invoke('download-file', { url, filename, folderPath });
+           if (finalSavedPath) return finalSavedPath;
+         } catch(e) {}
+      }
+      // Fire and forget fallback 
+      ipc.send('save-file-silent', { url, filename, folderPath });
+      return folderPath + (folderPath.includes('\\') ? '\\' : '/') + filename;
+    } catch (e) {
+      console.error("IPC save failed:", e);
+    }
+  }
+
+  // Plan B: Do NOT fallback to browser dialogue if the user explicitly wants silent saving to a folderPath!
+  if (folderPath) {
+     console.warn(`[Plan B] 无法找到 Electron 或 Node 环境来执行静默物理写入 (目录: ${folderPath})。当前已取消下载，保留线上图片地址，以避免恼人的浏览器弹窗。请在 Electron 设置中开启 nodeIntegration 或添加 preload IPC 服务。`);
+     // Return an empty string or undefined so the caller uses the original network/base64 URL
+     return undefined; 
+  }
+
+  // Fallback to standard browser download ONLY IF it's a manual click without a folderPath configured.
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename || 'image.png';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  return undefined;
+};
+
+export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAddField, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, rowHeight, modelSettings, lang = 'zh' }: GridProps) {
   const [activeCell, setActiveCell] = useState<{ recordId: string; fieldId: string } | null>(null);
+  const [forceEdit, setForceEdit] = useState(false);
+  const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+  const [contextMenuState, setContextMenuState] = useState<{ x: number, y: number, recordId?: string } | null>(null);
+  const [cutBox, setCutBox] = useState<{ minR: number, maxR: number, minC: number, maxC: number } | null>(null);
   
   const [draggedColId, setDraggedColId] = useState<string | null>(null);
   const [dragOverColId, setDragOverColId] = useState<string | null>(null);
@@ -37,7 +396,38 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
   const [draggedRowId, setDraggedRowId] = useState<string | null>(null);
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
 
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [previewImageState, setPreviewImageState] = useState<{ images: string[], currentIndex: number } | null>(null);
+
+  const setPreviewImage = (path: string | null, allPaths: string[] = []) => {
+      if (!path) { setPreviewImageState(null); return; }
+      if (allPaths.length === 0) allPaths = [path];
+      const currentIndex = allPaths.indexOf(path);
+      setPreviewImageState({ images: allPaths, currentIndex: currentIndex === -1 ? 0 : currentIndex });
+  };
+
+  const handlePreviewPrev = () => {
+      if (!previewImageState) return;
+      setPreviewImageState(prev => prev ? { ...prev, currentIndex: (prev.currentIndex - 1 + prev.images.length) % prev.images.length } : null);
+  };
+
+  const handlePreviewNext = () => {
+      if (!previewImageState) return;
+      setPreviewImageState(prev => prev ? { ...prev, currentIndex: (prev.currentIndex + 1) % prev.images.length } : null);
+  };
+
+  useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          if (!previewImageState) return;
+          if (e.key === 'ArrowLeft') { e.preventDefault(); handlePreviewPrev(); }
+          else if (e.key === 'ArrowRight') { e.preventDefault(); handlePreviewNext(); }
+          else if (e.key === 'Escape') { e.preventDefault(); setPreviewImage(null); }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewImageState]);
+
+  const [extraSelectedCells, setExtraSelectedCells] = useState<{ r: number, c: number }[]>([]);
+
 
   const [selectionStart, setSelectionStart] = useState<{ r: number, c: number } | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<{ r: number, c: number } | null>(null);
@@ -65,32 +455,52 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
     const handleCopy = (e: ClipboardEvent) => {
       // Allow natural copy inside inputs
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (!selectionBox) return;
+      if (!selectionBox && extraSelectedCells.length === 0) return;
       
-      const rows = [];
-      for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
-        const colVals = [];
-        for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
-           const record = data.records[r];
-           const field = data.fields[c];
-           let val = record[field.id];
-           if (field.type === 'attachment') {
-              if (Array.isArray(val)) {
-                val = val.map((a: any) => a.url || a).join(',');
-              } else if (typeof val === 'string') {
-                val = val;
-              } else {
-                val = '';
-              }
-           } else if (typeof val === 'object' && val !== null) {
-              val = JSON.stringify(val);
-           }
-           colVals.push(val || '');
-        }
-        rows.push(colVals.join('\t'));
+      const allSelectedCells = new Set<string>();
+      if (selectionBox) {
+         for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+            for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+               allSelectedCells.add(`${r},${c}`);
+            }
+         }
       }
+      extraSelectedCells.forEach(cell => allSelectedCells.add(`${cell.r},${cell.c}`));
+      const selectedArr = Array.from(allSelectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
+      if (selectedArr.length === 0) return;
+
+      const minR = Math.min(...selectedArr.map(x => x.r));
+      const maxR = Math.max(...selectedArr.map(x => x.r));
+      const minC = Math.min(...selectedArr.map(x => x.c));
+      const maxC = Math.max(...selectedArr.map(x => x.c));
+
+      const rows: string[] = [];
+      for (let r = minR; r <= maxR; r++) {
+          const colVals: string[] = [];
+          for (let c = minC; c <= maxC; c++) {
+              if (allSelectedCells.has(`${r},${c}`)) {
+                  const record = data.records[r];
+                  const field = data.fields[c];
+                  let val = record[field.id];
+                  if (field.type === 'attachment') {
+                     if (Array.isArray(val)) {
+                       val = val.map((a: any) => a.url || a).join(',');
+                     } else if (typeof val === 'string') val = val;
+                     else val = '';
+                  } else if (typeof val === 'object' && val !== null) {
+                     val = JSON.stringify(val);
+                  }
+                  colVals.push(val || '');
+              } else {
+                  colVals.push('');
+              }
+          }
+          rows.push(colVals.join('\t'));
+      }
+
       e.clipboardData?.setData('text/plain', rows.join('\n'));
       e.preventDefault();
+      if (cutBox) setCutBox(null);
     };
 
     const handlePaste = (e: ClipboardEvent) => {
@@ -104,68 +514,164 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
       const rows = text.split(/\r?\n/).map(row => row.split('\t'));
       if (rows.length === 0) return;
 
-      // Start pasting from selectionStart
-      const startR = Math.min(selectionStart.r, selectionEnd?.r ?? selectionStart.r);
-      const startC = Math.min(selectionStart.c, selectionEnd?.c ?? selectionStart.c);
-
-      const updates: { recordId: string, fieldId: string, value: any }[] = [];
-
-      for (let i = 0; i < rows.length; i++) {
-         const rIdx = startR + i;
-         if (rIdx >= data.records.length) break;
-         
-         const cols = rows[i];
-         for (let j = 0; j < cols.length; j++) {
-            const cIdx = startC + j;
-            if (cIdx >= data.fields.length) break;
-            
-            const record = data.records[rIdx];
-            const field = data.fields[cIdx];
-            let val: any = cols[j];
-            
-            if (field.type === 'attachment') {
-               // Keep path string as is
-               val = val || '';
-            } else if (field.type === 'number') {
-               val = val ? Number(val) : null;
-            } else if (field.type === 'checkbox') {
-               val = val === 'true' || val === '1';
-            } else if (field.type === 'multiSelect') {
-               if (val) {
-                  // Wait, earlier my export to CSV was joining with comma, maybe tab or comma depending on the text?
-                  // For simplicity we just set the string and let the user fix it or if it matches existing opt.id it will just work perfectly.
-                  val = val.split(',');
-               } else {
-                 val = [];
-               }
+      const allSelectedCells = new Set<string>();
+      if (selectionBox) {
+         for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+            for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+               allSelectedCells.add(`${r},${c}`);
             }
-            onUpdateRecord(record.id, field.id, val);
          }
+      }
+      extraSelectedCells.forEach(cell => allSelectedCells.add(`${cell.r},${cell.c}`));
+      const selectedArr = Array.from(allSelectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
+      if (selectedArr.length === 0) return;
+
+      const minR = Math.min(...selectedArr.map(x => x.r));
+      const minC = Math.min(...selectedArr.map(x => x.c));
+
+      const pasteCells: { rIdx: number, cIdx: number, val: any }[] = [];
+
+      if (selectedArr.length > 1) {
+          // Map to multiple selected cells with tiling relative to minR, minC
+          for (const { r, c } of selectedArr) {
+             const val = rows[(r - minR) % rows.length][(c - minC) % rows[0].length];
+             pasteCells.push({ rIdx: r, cIdx: c, val });
+          }
+      } else {
+          // Map to a block expanding right and down
+          for (let i = 0; i < rows.length; i++) {
+             const rIdx = minR + i;
+             if (rIdx >= data.records.length) break;
+             for (let j = 0; j < rows[0].length; j++) {
+                const cIdx = minC + j;
+                if (cIdx >= data.fields.length) break;
+                pasteCells.push({ rIdx, cIdx, val: rows[i][j] });
+             }
+          }
+      }
+
+      for (const { rIdx, cIdx, val: rawVal } of pasteCells) {
+          const record = data.records[rIdx];
+          const field = data.fields[cIdx];
+          let val = rawVal;
+          
+          if (field.type === 'attachment' || field.type === 'aiImage') {
+               let pathToAdd = val || '';
+               if (pathToAdd.startsWith('IMG_COPY_MAGIC:')) {
+                  pathToAdd = pathToAdd.substring('IMG_COPY_MAGIC:'.length);
+                  const existing = record[field.id] || [];
+                  const existingArr = Array.isArray(existing) ? existing : (typeof existing === 'string' && existing ? existing.split(',') : []);
+                  if (pathToAdd) {
+                      val = [...existingArr, pathToAdd.trim()].filter(Boolean).join(',');
+                  } else {
+                      val = existingArr.join(',');
+                  }
+               } else {
+                  val = pathToAdd;
+               }
+          } else if (field.type === 'number') {
+             val = val ? Number(val) : null;
+          } else if (field.type === 'checkbox') {
+             val = val === 'true' || val === '1';
+          } else if (field.type === 'multiSelect') {
+             val = val ? val.split(',') : [];
+          }
+          onUpdateRecord(record.id, field.id, val);
+      }
+
+      if (cutBox) {
+         for (let r = cutBox.minR; r <= cutBox.maxR; r++) {
+           for (let c = cutBox.minC; c <= cutBox.maxC; c++) {
+              // skip updating if the cut cell was just overwritten by the paste (optimisation)
+              // but for safety, clear it.
+              const field = data.fields[c];
+              onUpdateRecord(data.records[r].id, field.id, field.type === 'multiSelect' ? [] : '');
+           }
+         }
+         setCutBox(null);
       }
     };
 
     const handleDeleteKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
-         if (!selectionBox) return;
-         if (selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1 && selectionBox.minC === selectionBox.maxC) {
+         if (!selectionBox && extraSelectedCells.length === 0) return;
+         if (selectionBox && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1 && selectionBox.minC === selectionBox.maxC && extraSelectedCells.length === 0) {
              const fieldId = data.fields[selectionBox.minC].id;
              if (onDeleteField) {
                  onDeleteField(fieldId);
+                 return;
              }
          }
+         // Clear cells
+         if (selectionBox) {
+           for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+             for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+                const field = data.fields[c];
+                onUpdateRecord(data.records[r].id, field.id, field.type === 'multiSelect' ? [] : '');
+             }
+           }
+         }
+         extraSelectedCells.forEach(cell => {
+             const field = data.fields[cell.c];
+             if (field) {
+               onUpdateRecord(data.records[cell.r].id, field.id, field.type === 'multiSelect' ? [] : '');
+             }
+         });
+      }
+    };
+
+    const handleCut = (e: ClipboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (!selectionBox) return;
+
+      const rows: string[] = [];
+      for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+         const colVals: string[] = [];
+         const record = data.records[r];
+         for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+            const field = data.fields[c];
+            let val = record[field.id];
+            if (field.type === 'attachment') {
+               if (Array.isArray(val)) {
+                 val = val.map((a: any) => a.url || a).join(',');
+               } else if (typeof val === 'string') {
+                 val = val;
+               } else {
+                 val = '';
+               }
+            } else if (typeof val === 'object' && val !== null) {
+               val = JSON.stringify(val);
+            }
+            colVals.push(val || '');
+         }
+         rows.push(colVals.join('\t'));
+      }
+      e.clipboardData?.setData('text/plain', rows.join('\n'));
+      e.preventDefault();
+      
+      setCutBox(selectionBox);
+    };
+
+    const handleEscapeKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && cutBox) {
+         setCutBox(null);
       }
     };
 
     window.addEventListener('copy', handleCopy);
+    window.addEventListener('cut', handleCut);
     window.addEventListener('paste', handlePaste);
     window.addEventListener('keydown', handleDeleteKey);
+    window.addEventListener('keydown', handleEscapeKey);
     return () => {
       window.removeEventListener('copy', handleCopy);
+      window.removeEventListener('cut', handleCut);
       window.removeEventListener('paste', handlePaste);
       window.removeEventListener('keydown', handleDeleteKey);
+      window.removeEventListener('keydown', handleEscapeKey);
     };
-  }, [selectionBox, selectionStart, selectionEnd, data, activeCell, onDeleteField]);
+  }, [selectionBox, selectionStart, selectionEnd, data, activeCell, onDeleteField, cutBox, extraSelectedCells]);
 
   const heightClass = {
     short: 'h-[40px]',
@@ -188,14 +694,21 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
 
   const [generatingCell, setGeneratingCell] = useState<{ recordId: string, fieldId: string } | null>(null);
 
-  const handleGenerateColumn = async (field: Field) => {
+
+
+  const handleGenerateColumn = async (field: Field, targetRecordIds?: string[]) => {
     if (!field.prompt) {
       alert("Please configure a prompt for this Smart Text column first.");
       return;
     }
     
     try {
-      for (const record of data.records) {
+      const recordsToProcess = targetRecordIds ? data.records.filter(r => targetRecordIds.includes(r.id)) : data.records.filter(r => {
+          let val = r[field.id];
+          if (field.type === 'aiImage') return !val || (Array.isArray(val) && val.length === 0);
+          return val === undefined || val === null || val === '';
+      });
+      for (const record of recordsToProcess) {
         setGeneratingCell({ recordId: record.id, fieldId: field.id });
         let resultText = '';
         const contextData: any = {};
@@ -204,44 +717,244 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
           field.refFields.forEach(refId => {
             const refField = data.fields.find(f => f.id === refId);
             if (refField) {
-              contextData[refField.name] = record[refId];
+              contextData[refField.name] = resolveFieldValueForAI(record[refId], refField);
             }
           });
         }
         
-        const promptString = `You are an AI assistant helping to evaluate a table row. Here is the data context for this row:\n\n${JSON.stringify(contextData, null, 2)}\n\nBased ONLY on the context provided, perform the following instruction and respond with the concise result. Do not include markdown formatting or conversational filler.\n\nInstruction: ${field.prompt}`;
+        let promptString = field.prompt || "";
+        let promptImageParts: any[] = [];
+        let promptDataUrls: string[] = [];
         
-        if (modelSettings.activeModel === 'gemini') {
-          if (!modelSettings.geminiKey) throw new Error("Gemini API Key is required");
-          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${modelSettings.geminiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-               contents: [{ parts: [{ text: promptString }] }]
-            })
-          });
-          const resData = await res.json();
-          if (resData.error) throw new Error(resData.error.message);
-          resultText = resData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (field.type === 'aiImage') {
+           const { cleanString, parts, dataUrls } = await getBase64ImageParts(promptString, data.fields, record);
+           promptString = cleanString;
+           promptImageParts = parts;
+           promptDataUrls = dataUrls;
         } else {
-          if (!modelSettings.openaiKey) throw new Error("OpenAI API Key is required");
-          const res = await fetch(`${modelSettings.openaiEndpoint}/chat/completions`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${modelSettings.openaiKey}`
-            },
-            body: JSON.stringify({
-              model: modelSettings.openaiModel || 'gpt-3.5-turbo',
-              messages: [{ role: 'user', content: promptString }]
-            })
-          });
-          const json = await res.json();
-          if (json.error) throw new Error(json.error.message);
-          resultText = json.choices[0].message.content;
+           // For text, just interpolate textually
+           data.fields.forEach(f => {
+              let val = record[f.id];
+              if (Array.isArray(val)) val = val.map(v => v?.url || v).join(', ');
+              else val = String(val || '');
+              promptString = promptString.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), val);
+           });
+           promptString = `You are an AI assistant helping to evaluate a table row. Here is the data context for this row:\n\n${JSON.stringify(contextData, null, 2)}\n\nBased ONLY on the context provided, perform the following instruction and respond with the concise result. Do not include markdown formatting or conversational filler.\n\nInstruction: ${promptString}`;
         }
         
-        onUpdateRecord(record.id, field.id, resultText);
+        let resultParams: any = '';
+
+        if (field.type === 'aiImage') {
+          const cfg = field.aiImageConfig || {};
+          const count = cfg.count || 1;
+          const ratio = cfg.ratio || "1:1";
+          const res4kMap: Record<string, string> = {
+            '1:1': '4096x4096',
+            '16:9': '4096x2304',
+            '9:16': '2304x4096',
+            '4:3': '4096x3072',
+            '3:4': '3072x4096'
+          };
+          const res2kMap: Record<string, string> = {
+            '1:1': '2048x2048',
+            '16:9': '2048x1152',
+            '9:16': '1152x2048',
+            '4:3': '2048x1536',
+            '3:4': '1536x2048'
+          };
+          const hdMap: Record<string, string> = {
+             '1:1': '1024x1024',
+             '16:9': '1792x1024',
+             '9:16': '1024x1792',
+             '4:3': '1024x1024',
+             '3:4': '1024x1024'
+          };
+          const sizeStr = (cfg.resolution === '4k') ? (res4kMap[ratio] || '4096x4096') : (cfg.resolution === '2k') ? (res2kMap[ratio] || '2048x2048') : (hdMap[ratio] || "1024x1024");
+          
+          const imgSet = modelSettings.image || {};
+          
+          let resolvedModel = (imgSet.modelName || 'dall-e-3').split(',')[0].trim();
+          if (cfg.modelTemplate) {
+             let template = cfg.modelTemplate;
+             data.fields.forEach(f => {
+               template = template.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`, 'g'), String(record[f.id] || ''));
+             });
+             if (template.trim()) {
+               resolvedModel = template.trim();
+             }
+          }
+
+          let finalPrompt = promptString;
+          let imageParts: any[] = [...promptImageParts];
+          let finalDataUrls: string[] = [...promptDataUrls];
+          if (cfg.sourceImageTemplate) {
+             const { parts, dataUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record);
+             imageParts = [...imageParts, ...parts];
+             finalDataUrls = [...finalDataUrls, ...dataUrls];
+          }
+
+          if (imgSet.provider === 'gemini') {
+            throw new Error("Local Gemini Image generation not natively supported in this preview without vertex AI. Please use OpenAI-compatible proxy for images.");
+          } else if (imgSet.provider === 'gemini-custom') {
+            if (!imgSet.key) throw new Error("Gemini API Key is required for Image Generation");
+            let imgEndpoint = imgSet.endpoint || 'https://generativelanguage.googleapis.com/v1beta';
+            if (imgEndpoint.endsWith('/')) imgEndpoint = imgEndpoint.slice(0, -1);
+            if (!imgEndpoint.includes(':predict') && !imgEndpoint.includes(':generateContent') && !imgEndpoint.includes(':generateImages')) {
+               imgEndpoint = `${imgEndpoint}/models/${resolvedModel}:generateContent`;
+            }
+            
+            const fetchPromises = Array.from({ length: count }).map(async () => {
+              let payload;
+              if (imgEndpoint.includes(':predict')) {
+                payload = {
+                  instances: [
+                    { prompt: finalPrompt }
+                  ],
+                  parameters: {
+                    sampleCount: 1,
+                    aspectRatio: ratio
+                  }
+                };
+              } else {
+                const geminiImageSize = cfg.resolution ? cfg.resolution.toUpperCase() : undefined;
+                const imageConfig: any = { aspectRatio: ratio, numberOfImages: 1 };
+                if (geminiImageSize && geminiImageSize !== '1K') {
+                   imageConfig.imageSize = geminiImageSize;
+                }
+                payload = {
+                  contents: [{ parts: [...imageParts, { text: finalPrompt }], role: 'user' }],
+                  generationConfig: {
+                    responseModalities: ["IMAGE"],
+                    imageConfig
+                  }
+                };
+              }
+              const res = await fetch(`${imgEndpoint}?key=${imgSet.key}`, {
+                method: 'POST',
+                headers: {
+                   'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+              });
+              const json = await res.json();
+              if (json.error) throw new Error(json.error.message);
+              
+              let newUrls: string[] = [];
+              if (json.predictions && json.predictions.length > 0) {
+                 newUrls = json.predictions.map((p: any) => `data:image/png;base64,${p.bytesBase64Encoded}`);
+              } else if (json.candidates && json.candidates.length > 0 && json.candidates[0].content?.parts) {
+                 for (const part of json.candidates[0].content.parts) {
+                   if (part.inlineData) {
+                     newUrls.push(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+                   } else if (part.text) {
+                     const match = part.text.match(/!\[.*?\]\((.*?)\)/);
+                     if (match) newUrls.push(match[1]);
+                     else newUrls.push(part.text);
+                   }
+                 }
+              } else {
+                 throw new Error("Invalid response from Gemini Custom Image Endpoint");
+              }
+              return newUrls;
+            });
+            
+            const resultsNested = await Promise.all(fetchPromises);
+            resultParams = resultsNested.flat();
+          } else {
+            if (!imgSet.key) throw new Error("OpenAI API Key is required for Image Generation");
+            const imgEndpoint = (imgSet.endpoint || 'https://api.openai.com/v1').replace('/chat/completions', '') + '/images/generations';
+            
+            const payload: any = {
+              model: resolvedModel,
+              prompt: finalPrompt,
+              n: count,
+              size: sizeStr,
+              response_format: 'b64_json'
+            };
+            if (finalDataUrls && finalDataUrls.length > 0) {
+              payload.base64Array = finalDataUrls;
+            }
+            
+            const res = await fetch(imgEndpoint, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${imgSet.key}`
+              },
+              body: JSON.stringify(payload)
+            });
+            const json = await res.json();
+            if (json.error) throw new Error(json.error.message);
+            const urls = json.data.map((d: any) => d.url || (d.b64_json ? `data:image/png;base64,${d.b64_json}` : null)).filter(Boolean);
+            resultParams = urls;
+          }
+        } else {
+          const txtSet = modelSettings.text || {};
+          if (txtSet.provider === 'gemini') {
+            if (!txtSet.key) throw new Error("Gemini API Key is required");
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${txtSet.key}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                 contents: [{ parts: [{ text: promptString }] }]
+              })
+            });
+            const resData = await res.json();
+            if (resData.error) throw new Error(resData.error.message);
+            resultParams = resData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          } else {
+            if (!txtSet.key) throw new Error("OpenAI API Key is required");
+            const res = await fetch(`${txtSet.endpoint || 'https://api.openai.com/v1'}/chat/completions`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${txtSet.key}`
+              },
+              body: JSON.stringify({
+                model: txtSet.modelName || 'gpt-3.5-turbo',
+                messages: [{ role: 'user', content: promptString }]
+              })
+            });
+            const json = await res.json();
+            if (json.error) throw new Error(json.error.message);
+            resultParams = json.choices[0].message.content;
+          }
+        }
+        
+        let finalResultParams = resultParams;
+        if (field.type === 'aiImage') {
+           const existing = Array.isArray(record[field.id]) ? record[field.id] : (record[field.id] ? [record[field.id]] : []);
+           let downloadedUrls: string[] = [...(resultParams || [])];
+           
+           if (resultParams && Array.isArray(resultParams)) {
+              const cfg = field.aiImageConfig || {};
+              if (cfg.filenameTemplate || cfg.folderPath) {
+                 let template = cfg.filenameTemplate || 'image';
+                 let folderTemplate = cfg.folderPath || '';
+                 data.fields.forEach(f => {
+                   let val = record[f.id];
+                   if (Array.isArray(val)) val = val.map(v => v?.name || String(v?.url || v)).join(', ');
+                   else val = String(val || '');
+                   const regex = new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g');
+                   template = template.replace(regex, val);
+                   folderTemplate = folderTemplate.replace(regex, val);
+                 });
+                 const filename = template.trim();
+                 const folderPath = folderTemplate.trim();
+                 
+                 const savedUrls: string[] = [];
+                 for (let i = 0; i < resultParams.length; i++) {
+                     const url = resultParams[i];
+                     const savedPath = await triggerDownload(url, filename + (resultParams.length > 1 ? `_${i+1}` : '') + '.png', folderPath);
+                     savedUrls.push(savedPath || url);
+                 }
+                 downloadedUrls = savedUrls;
+              }
+           }
+           finalResultParams = [...existing, ...downloadedUrls];
+        }
+        
+        onUpdateRecord(record.id, field.id, finalResultParams);
       }
     } catch (err: any) {
       alert("AI Generation failed: " + err.message);
@@ -258,8 +971,29 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
         <thead className="sticky top-0 z-20 bg-gray-50 text-sm border-b border-gray-200">
           <tr>
             <th className="sticky left-0 w-16 bg-gray-50 border-r border-gray-200 z-30 p-0">
-              <div className="w-full justify-center flex items-center h-8 text-gray-400 border-b border-t border-transparent">
-                {/* Row number corner */}
+              <div 
+                 className="w-full justify-center flex items-center h-8 text-gray-400 border-b border-t border-transparent cursor-pointer"
+                 onClick={() => {
+                   if (selectedRecordIds.size === data.records.length && data.records.length > 0) {
+                     setSelectedRecordIds(new Set());
+                   } else {
+                     setSelectedRecordIds(new Set(data.records.map(r => r.id)));
+                   }
+                 }}
+              >
+                  {selectedRecordIds.size > 0 ? (
+                    <input 
+                      type="checkbox" 
+                      className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 pointer-events-none" 
+                      checked={selectedRecordIds.size === data.records.length}
+                      ref={input => {
+                        if (input) {
+                          input.indeterminate = selectedRecordIds.size > 0 && selectedRecordIds.size < data.records.length;
+                        }
+                      }}
+                      onChange={() => {}} 
+                    />
+                  ) : null}
               </div>
             </th>
             {data.fields.map((field, colIdx) => (
@@ -305,6 +1039,7 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
                   setDragOverColId(null);
                 }}
                 onDragEnd={() => { setDraggedColId(null); setDragOverColId(null); }}
+                modelSettings={modelSettings}
               />
             ))}
             <th className="bg-gray-50 border-r border-transparent font-normal group cursor-pointer hover:bg-gray-100" style={{ width: 100 }} onClick={onAddField}>
@@ -342,21 +1077,52 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
               }}
             >
               <td 
-                className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 w-16 z-10 transition-colors p-0 select-none cursor-grab active:cursor-grabbing"
+                className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 w-16 z-10 transition-colors p-0 select-none cursor-grab active:cursor-grabbing relative"
                 draggable
                 onDragStart={(e) => handleDragStartRow(e, record.id)}
                 onDragEnd={() => { setDraggedRowId(null); setDragOverRowId(null); }}
               >
                 <div className={cn("flex items-center justify-center border-t border-transparent", heightClass)}>
-                  <span className="group-hover:hidden">{index + 1}</span>
-                  <div className="hidden group-hover:flex items-center space-x-1">
-                    <GripVertical className="w-3.5 h-3.5 text-gray-300" />
+                  <div 
+                    className={cn("flex flex-1 items-center justify-center h-full cursor-pointer relative", selectedRecordIds.has(record.id) ? 'bg-blue-50/50' : '')} 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newSet = new Set(selectedRecordIds);
+                      if (newSet.has(record.id)) newSet.delete(record.id);
+                      else newSet.add(record.id);
+                      setSelectedRecordIds(newSet);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      let sel = new Set(selectedRecordIds);
+                      if (!sel.has(record.id)) {
+                         sel = new Set([record.id]);
+                         setSelectedRecordIds(sel);
+                      }
+                      setContextMenuState({ x: e.clientX, y: e.clientY });
+                    }}
+                  >
+                    <span className={cn("group-hover:hidden", selectedRecordIds.has(record.id) ? 'hidden' : '')}>{index + 1}</span>
+                    <div className={cn("items-center justify-center space-x-1 hidden group-hover:flex", selectedRecordIds.has(record.id) ? '!flex' : '')}>
+                      <input 
+                        type="checkbox" 
+                        checked={selectedRecordIds.has(record.id)}
+                        onChange={() => {}}
+                        className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 pointer-events-none" 
+                      />
+                      <GripVertical className="w-3.5 h-3.5 text-gray-300" />
+                    </div>
                   </div>
                 </div>
               </td>
               {data.fields.map((field, colIdx) => {
-                const isSelectedBox = selectionBox 
+                const isSelectedBox = (selectionBox 
                     ? index >= selectionBox.minR && index <= selectionBox.maxR && colIdx >= selectionBox.minC && colIdx <= selectionBox.maxC 
+                    : false) || extraSelectedCells.some(c => c.r === index && c.c === colIdx);
+
+                const isCutBox = cutBox
+                    ? index >= cutBox.minR && index <= cutBox.maxR && colIdx >= cutBox.minC && colIdx <= cutBox.maxC 
                     : false;
 
                 return (
@@ -365,10 +1131,11 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
                     record={record}
                     field={field}
                     isActive={activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
+                    forceEdit={forceEdit && activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
                     isGeneratingCol={generatingCell?.recordId === record.id && generatingCell?.fieldId === field.id}
-                    onActivate={() => setActiveCell({ recordId: record.id, fieldId: field.id })}
+                    onActivate={() => { setActiveCell({ recordId: record.id, fieldId: field.id }); setForceEdit(false); }}
                     onChange={(val) => onUpdateRecord(record.id, field.id, val)}
-                    onBlur={() => setActiveCell(null)}
+                    onBlur={() => { setActiveCell(null); setForceEdit(false); }}
                     onPreviewImage={setPreviewImage}
                     allFields={data.fields}
                     modelSettings={modelSettings}
@@ -376,10 +1143,46 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
                     lang={lang}
                     onUpdateField={(updates) => onUpdateField(field.id, updates)}
                     isSelectedBox={isSelectedBox}
-                    onMouseDown={() => {
-                       setIsSelecting(true);
-                       setSelectionStart({ r: index, c: colIdx });
-                       setSelectionEnd({ r: index, c: colIdx });
+                    isCutBox={isCutBox}
+                    onBatchAIGenerate={() => {
+                        let targetRecordIds = [record.id];
+                        if (selectionBox || extraSelectedCells.length > 0) {
+                            const selectedRecordIds = new Set<string>();
+                            if (selectionBox) {
+                                for(let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+                                     if (colIdx >= selectionBox.minC && colIdx <= selectionBox.maxC) {
+                                         selectedRecordIds.add(data.records[r].id);
+                                     }
+                                }
+                            }
+                            extraSelectedCells.forEach(cell => {
+                                if (cell.c === colIdx) selectedRecordIds.add(data.records[cell.r].id);
+                            });
+                            
+                            // If the current cell is selected, we batch generate for all selected cells in this column.
+                            // Otherwise, we only generate for the current cell as expected by typical isolated clicks.
+                            if (selectedRecordIds.has(record.id)) {
+                                targetRecordIds = Array.from(selectedRecordIds);
+                            }
+                        }
+                        // Now we trigger generate!
+                        handleGenerateColumn(field, targetRecordIds);
+                    }}
+                    onMouseDown={(e: React.MouseEvent) => {
+                       if (e.shiftKey && selectionStart) {
+                           setSelectionEnd({ r: index, c: colIdx });
+                       } else if (e.ctrlKey || e.metaKey) {
+                           setExtraSelectedCells(prev => {
+                               const exists = prev.find(p => p.r === index && p.c === colIdx);
+                               if (exists) return prev.filter(p => !(p.r === index && p.c === colIdx));
+                               return [...prev, {r: index, c: colIdx}];
+                           });
+                       } else {
+                           setIsSelecting(true);
+                           setSelectionStart({ r: index, c: colIdx });
+                           setSelectionEnd({ r: index, c: colIdx });
+                           setExtraSelectedCells([]);
+                       }
                     }}
                     onMouseEnter={() => {
                        if (isSelecting) {
@@ -389,6 +1192,7 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
                     onActivateNextRow={() => {
                        if (index < data.records.length - 1) {
                           setActiveCell({ recordId: data.records[index + 1].id, fieldId: field.id });
+                          setForceEdit(true);
                        }
                     }}
                   />
@@ -411,13 +1215,35 @@ export function Grid({ data, onUpdateRecord, onAddRecord, onAddField, onDeleteFi
         </tbody>
       </table>
 
-      {previewImage && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80" onClick={() => setPreviewImage(null)}>
-           <img src={previewImage} className="max-w-[90%] max-h-[90%] object-contain" onClick={e => e.stopPropagation()} />
-           <button className="absolute top-4 right-4 text-white hover:text-gray-300 pointer-events-auto" onClick={() => setPreviewImage(null)}>
-             <X className="w-8 h-8" />
-           </button>
-        </div>
+      {previewImageState && previewImageState.images.length > 0 && (
+          <ZoomableImage 
+             src={previewImageState.images[previewImageState.currentIndex]}
+             onPrev={(e) => { e.stopPropagation(); handlePreviewPrev(); }}
+             onNext={(e) => { e.stopPropagation(); handlePreviewNext(); }}
+             onClose={() => setPreviewImageState(null)}
+          />
+      )}
+
+      {contextMenuState && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenuState(null); }}></div>
+          <div 
+             className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[150px] text-sm"
+             style={{ left: contextMenuState.x, top: contextMenuState.y }}
+          >
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 transition-colors flex items-center"
+                onClick={() => {
+                   onDeleteRecords?.(Array.from(selectedRecordIds));
+                   setSelectedRecordIds(new Set());
+                   setContextMenuState(null);
+                }}
+             >
+                <Trash2 className="w-4 h-4 mr-2" /> 
+                {lang === 'en' ? `Delete ${selectedRecordIds.size} row(s)` : `删除 ${selectedRecordIds.size} 行`}
+             </button>
+          </div>
+        </>
       )}
     </div>
   );
@@ -445,6 +1271,7 @@ interface HeaderCellProps {
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent) => void;
   onDragEnd: () => void;
+  modelSettings: any;
   lang?: 'en' | 'zh';
 }
 
@@ -458,12 +1285,14 @@ const FIELD_TYPES: { type: FieldType, label: string, labelZh: string }[] = [
   { type: 'person', label: 'Person', labelZh: '人员' },
   { type: 'url', label: 'URL', labelZh: '链接' },
   { type: 'attachment', label: 'Attachment', labelZh: '附件' },
+  { type: 'formula', label: 'Formula', labelZh: '公式' },
   { type: 'aiText', label: 'Smart Text', labelZh: '智能文本' },
+  { type: 'aiImage', label: 'AI Image', labelZh: '智能图片' },
 ];
 
 function HeaderCell({ 
   field, onRename, onChangeType, onResize, onUpdateField, onGenerateColumn, onDeleteField, onSortField, onFilterField, sortDirection, filterValue, onSelectCol, allFields,
-  isDragged, isDragOver, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, lang = 'zh'
+  isDragged, isDragOver, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, modelSettings, lang = 'zh'
 }: HeaderCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -471,13 +1300,16 @@ function HeaderCell({
   
   const [draftPrompt, setDraftPrompt] = useState(field.prompt || '');
   const [draftRefs, setDraftRefs] = useState<string[]>(field.refFields || []);
+  const [draftAiImageConfig, setDraftAiImageConfig] = useState(field.aiImageConfig || { count: 1, size: '1024x1024' });
+  const [showPromptRefs, setShowPromptRefs] = useState(false);
 
   useEffect(() => {
     if (showMenu) {
       setDraftPrompt(field.prompt || '');
       setDraftRefs(field.refFields || []);
+      setDraftAiImageConfig(field.aiImageConfig || { count: 1, size: '1024x1024' });
     }
-  }, [showMenu, field.prompt, field.refFields]);
+  }, [showMenu, field.prompt, field.refFields, field.aiImageConfig]);
 
   const ref = useClickOutside(() => setIsEditing(false));
   const menuRef = useClickOutside(() => setShowMenu(false));
@@ -599,43 +1431,266 @@ function HeaderCell({
              ))}
            </div>
 
-           {field.type === 'aiText' && (
+           {field.type === 'formula' && (
              <div className="border-t border-gray-100 pt-3">
-               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{lang === 'en' ? 'Smart Text Setup' : '智能文本设置'}</div>
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{lang === 'en' ? 'Formula Setup' : '公式设置'}</div>
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1 relative">
+                      <label className="block text-xs text-gray-600">{lang === 'en' ? 'Expression' : '表达式 (如 {价格} * {数量})'}</label>
+                      <button
+                        onClick={() => setShowPromptRefs(!showPromptRefs)}
+                        className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 hover:bg-blue-100 flex items-center"
+                      >
+                        <Plus className="w-3 h-3 mr-0.5" />
+                        {lang === 'en' ? 'Insert Field' : '引用字段'}
+                      </button>
+                      {showPromptRefs && (
+                        <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 p-2 max-h-48 overflow-y-auto">
+                          <div className="text-[10px] text-gray-500 mb-1 px-1">{lang === 'en' ? 'Select field to insert' : '选择要插入的字段'}</div>
+                          <div className="flex flex-col space-y-1">
+                            {allFields.filter(f => f.id !== field.id && f.type !== 'formula').map(f => (
+                              <button
+                                key={f.id}
+                                onClick={() => {
+                                  const el = document.getElementById(`prompt-textarea-${field.id}`) as HTMLTextAreaElement;
+                                  const cursorPosition = el ? el.selectionStart : draftPrompt.length;
+                                  const textBefore = draftPrompt.substring(0, cursorPosition);
+                                  const textAfter = draftPrompt.substring(cursorPosition);
+                                  const newPrompt = textBefore + `{${f.name}}` + textAfter;
+                                  const newRefs = Array.from(new Set([...draftRefs, f.id]));
+                                  setDraftPrompt(newPrompt);
+                                  setDraftRefs(newRefs);
+                                  setShowPromptRefs(false);
+                                  setTimeout(() => {
+                                     if (el) { el.focus(); el.setSelectionRange(cursorPosition + f.name.length + 2, cursorPosition + f.name.length + 2); }
+                                  }, 0);
+                                }}
+                                className="text-xs text-left px-2 py-1.5 hover:bg-gray-100 rounded text-gray-700"
+                              >
+                                {f.name}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <textarea
+                      id={`prompt-textarea-${field.id}`}
+                      className="w-full text-sm border border-gray-300 rounded p-1.5 h-16 outline-none focus:border-blue-500 font-mono"
+                      placeholder="e.g. {Price} * {Qty} + 10"
+                      value={draftPrompt}
+                      onChange={(e) => setDraftPrompt(e.target.value)}
+                      onMouseDown={e => e.stopPropagation()}
+                    />
+                    <div className="mt-3 flex justify-end items-center">
+                      <button 
+                        className="text-xs bg-blue-600 text-white px-3 flex items-center h-7 rounded hover:bg-blue-700 transition-colors shadow-sm"
+                        onClick={() => {
+                          onUpdateField({ prompt: draftPrompt, refFields: draftRefs });
+                          setShowMenu(false);
+                        }}
+                      >
+                        {lang === 'en' ? 'Save' : '保存公式'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+             </div>
+           )}
+
+           {(field.type === 'aiText' || field.type === 'aiImage') && (
+             <div className="border-t border-gray-100 pt-3">
+               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{lang === 'en' ? (field.type === 'aiText' ? 'Smart Text Setup' : 'AI Image Setup') : (field.type === 'aiText' ? '智能文本设置' : '智能图片设置')}</div>
                <div className="space-y-3">
                  <div>
-                   <label className="block text-xs text-gray-600 mb-1">{lang === 'en' ? 'Prompt' : '提示词'}</label>
-                   <textarea
-                     id={`prompt-textarea-${field.id}`}
-                     className="w-full text-sm border border-gray-300 rounded p-1.5 h-16 outline-none focus:border-blue-500"
-                     placeholder={lang === 'en' ? "e.g. Translate to Spanish" : "例如：翻译为西班牙语"}
-                     value={draftPrompt}
-                     onChange={(e) => setDraftPrompt(e.target.value)}
-                     onMouseDown={e => e.stopPropagation()}
-                   />
-                   <div className="mt-1 flex flex-wrap gap-1">
-                     {allFields.filter(f => f.id !== field.id).map(f => (
-                       <button
-                         key={f.id}
-                         onClick={() => {
-                           const el = document.getElementById(`prompt-textarea-${field.id}`) as HTMLTextAreaElement;
-                           const cursorPosition = el ? el.selectionStart : draftPrompt.length;
-                           const textBefore = draftPrompt.substring(0, cursorPosition);
-                           const textAfter = draftPrompt.substring(cursorPosition);
-                           const newPrompt = textBefore + `{${f.name}}` + textAfter;
-                           const newRefs = Array.from(new Set([...draftRefs, f.id]));
-                           setDraftPrompt(newPrompt);
-                           setDraftRefs(newRefs);
-                           setTimeout(() => {
-                              if (el) { el.focus(); el.setSelectionRange(cursorPosition + f.name.length + 2, cursorPosition + f.name.length + 2); }
-                           }, 0);
-                         }}
-                         className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 hover:bg-blue-100"
-                       >
-                         +{f.name}
-                       </button>
-                     ))}
-                   </div>
+                                       <div className="flex items-center justify-between mb-1 relative">
+                      <label className="block text-xs text-gray-600">{lang === 'en' ? 'Prompt' : '提示词'}</label>
+                      <button
+                        onClick={() => setShowPromptRefs(!showPromptRefs)}
+                        className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 hover:bg-blue-100 flex items-center"
+                      >
+                        <Plus className="w-3 h-3 mr-0.5" />
+                        {lang === 'en' ? 'Insert Field' : '引用字段'}
+                      </button>
+                      {showPromptRefs && (
+                        <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 p-2 max-h-48 overflow-y-auto">
+                          <div className="text-[10px] text-gray-500 mb-1 px-1">{lang === 'en' ? 'Select field to insert' : '选择要插入的字段'}</div>
+                          <div className="flex flex-col space-y-1">
+                            {allFields.filter(f => f.id !== field.id && f.type !== 'formula').map(f => (
+                              <button
+                                key={f.id}
+                                onClick={() => {
+                                  const el = document.getElementById(`prompt-textarea-${field.id}`) as HTMLTextAreaElement;
+                                  const cursorPosition = el ? el.selectionStart : draftPrompt.length;
+                                  const textBefore = draftPrompt.substring(0, cursorPosition);
+                                  const textAfter = draftPrompt.substring(cursorPosition);
+                                  const newPrompt = textBefore + `{${f.name}}` + textAfter;
+                                  const newRefs = Array.from(new Set([...draftRefs, f.id]));
+                                  setDraftPrompt(newPrompt);
+                                  setDraftRefs(newRefs);
+                                  setShowPromptRefs(false);
+                                  setTimeout(() => {
+                                     if (el) { el.focus(); el.setSelectionRange(cursorPosition + f.name.length + 2, cursorPosition + f.name.length + 2); }
+                                  }, 0);
+                                }}
+                                className="text-xs text-left px-2 py-1.5 hover:bg-gray-100 rounded text-gray-700"
+                              >
+                                {f.name}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <textarea
+                      id={`prompt-textarea-${field.id}`}
+                      className="w-full text-sm border border-gray-300 rounded p-1.5 h-16 outline-none focus:border-blue-500"
+                      placeholder={lang === 'en' ? "e.g. Translate to Spanish" : "例如：翻译为西班牙语"}
+                      value={draftPrompt}
+                      onChange={(e) => setDraftPrompt(e.target.value)}
+                      onMouseDown={e => e.stopPropagation()}
+                    />
+                    {field.type === 'aiImage' && (
+                     <div className="mt-2 space-y-2">
+                       <div>
+                         <label className="block text-[10px] text-gray-500 mb-1">原始图片 (引用字段)</label>
+                         <div className="relative">
+                           <textarea
+                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none"
+                             value={draftAiImageConfig.sourceImageTemplate || ''}
+                             placeholder="{Image 1} {Image 2}"
+                             onChange={e => setDraftAiImageConfig(prev => ({ ...prev, sourceImageTemplate: e.target.value }))}
+                             onMouseDown={e => e.stopPropagation()}
+                           />
+                           <select 
+                             className="absolute bottom-1 right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px]"
+                             value=""
+                             onChange={e => {
+                               if (!e.target.value) return;
+                               const curTpl = draftAiImageConfig.sourceImageTemplate || '';
+                               setDraftAiImageConfig(prev => ({ ...prev, sourceImageTemplate: curTpl + `{${e.target.value}}` }));
+                             }}
+                           >
+                             <option value="">+ 引用</option>
+                             {allFields.filter(f => f.id !== field.id && (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'url')).map(f => (
+                               <option key={f.id} value={f.name}>{f.name}</option>
+                             ))}
+                           </select>
+                         </div>
+                       </div>
+                       <div className="grid grid-cols-3 gap-2">
+                         <div>
+                           <label className="block text-[10px] text-gray-500 mb-1">分辨率</label>
+                           <select 
+                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none"
+                             value={draftAiImageConfig.resolution || '1k'}
+                             onChange={e => setDraftAiImageConfig(prev => ({ ...prev, resolution: e.target.value }))}
+                           >
+                             <option value="1k">1K</option>
+                             <option value="2k">2K</option>
+                             <option value="4k">4K</option>
+                           </select>
+                         </div>
+                         <div>
+                           <label className="block text-[10px] text-gray-500 mb-1">比例</label>
+                           <select 
+                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none"
+                             value={draftAiImageConfig.ratio || '1:1'}
+                             onChange={e => setDraftAiImageConfig(prev => ({ ...prev, ratio: e.target.value }))}
+                           >
+                             <option value="1:1">1:1</option>
+                             <option value="16:9">16:9</option>
+                             <option value="9:16">9:16</option>
+                             <option value="4:3">4:3</option>
+                             <option value="3:4">3:4</option>
+                           </select>
+                         </div>
+                         <div>
+                           <label className="block text-[10px] text-gray-500 mb-1">生成数量</label>
+                           <input 
+                             type="number"
+                             min="1"
+                             max="10"
+                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none"
+                             value={draftAiImageConfig.count || 1}
+                             onChange={e => setDraftAiImageConfig(prev => ({ ...prev, count: parseInt(e.target.value) || 1 }))}
+                             onMouseDown={e => e.stopPropagation()}
+                           />
+                         </div>
+                       </div>
+                       <div className="relative">
+                          <label className="block text-[10px] text-gray-500 mb-1">保存的图片文件名 (可引用字段)</label>
+                          <input 
+                            type="text" 
+                            className="w-full text-xs border border-gray-300 rounded p-1 outline-none placeholder:text-gray-300"
+                            placeholder="例如: {Task Name}_{Date}"
+                            value={draftAiImageConfig.filenameTemplate || ''}
+                            onChange={e => setDraftAiImageConfig(prev => ({ ...prev, filenameTemplate: e.target.value }))}
+                            onMouseDown={e => e.stopPropagation()}
+                          />
+                          <select 
+                             className="absolute bottom-1 right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px]"
+                             value=""
+                             onChange={e => {
+                               if (!e.target.value) return;
+                               const curTpl = draftAiImageConfig.filenameTemplate || '';
+                               setDraftAiImageConfig(prev => ({ ...prev, filenameTemplate: curTpl + `{${e.target.value}}` }));
+                             }}
+                           >
+                             <option value="">+ 引用</option>
+                             {allFields.filter(f => f.id !== field.id).map(f => (
+                               <option key={f.id} value={f.name}>{f.name}</option>
+                             ))}
+                          </select>
+                       </div>
+                       <div className="relative">
+                          <label className="block text-[10px] text-gray-500 mb-1">图片生成模型 (可引用字段，覆盖默认)</label>
+                          <input 
+                            type="text" 
+                            list={`model-suggestions-${field.id}`}
+                            className="w-full text-xs border border-gray-300 rounded p-1 outline-none placeholder:text-gray-300"
+                            placeholder="例如: {Model} 或 dall-e-3"
+                            value={draftAiImageConfig.modelTemplate || ''}
+                            onChange={e => setDraftAiImageConfig(prev => ({ ...prev, modelTemplate: e.target.value }))}
+                            onMouseDown={e => e.stopPropagation()}
+                          />
+                          <datalist id={`model-suggestions-${field.id}`}>
+                            {modelSettings?.image?.modelName?.split(',').map((m: string) => m.trim()).filter(Boolean).map((m: string) => (
+                               <option key={m} value={m} />
+                            ))}
+                            <option value="gemini-3.1-flash-image-preview" />
+                            <option value="gemini-3-pro-image-preview" />
+                          </datalist>
+                          <select 
+                             className="absolute bottom-1 right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px]"
+                             value=""
+                             onChange={e => {
+                               if (!e.target.value) return;
+                               const curTpl = draftAiImageConfig.modelTemplate || '';
+                               setDraftAiImageConfig(prev => ({ ...prev, modelTemplate: curTpl + `{${e.target.value}}` }));
+                             }}
+                           >
+                             <option value="">+ 引用</option>
+                             {allFields.filter(f => f.id !== field.id).map(f => (
+                               <option key={f.id} value={f.name}>{f.name}</option>
+                             ))}
+                          </select>
+                       </div>
+                       <div>
+                          <label className="block text-[10px] text-gray-500 mb-1">默认保存目录 (Electron可用)</label>
+                          <input 
+                            type="text" 
+                            className="w-full text-xs border border-gray-300 rounded p-1 outline-none placeholder:text-gray-300"
+                            placeholder="C:\images"
+                            value={draftAiImageConfig.folderPath || ''}
+                            onChange={e => setDraftAiImageConfig(prev => ({ ...prev, folderPath: e.target.value }))}
+                            onMouseDown={e => e.stopPropagation()}
+                          />
+                       </div>
+                     </div>
+                   )}
+
                    <div className="mt-3 flex justify-between items-center">
                      <button
                        className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-2 flex items-center h-7 rounded border border-purple-200 transition-colors"
@@ -649,7 +1704,7 @@ function HeaderCell({
                      <button 
                        className="text-xs bg-blue-600 text-white px-3 flex items-center h-7 rounded hover:bg-blue-700 transition-colors shadow-sm"
                        onClick={() => {
-                         onUpdateField({ prompt: draftPrompt, refFields: draftRefs });
+                         onUpdateField({ prompt: draftPrompt, refFields: draftRefs, aiImageConfig: draftAiImageConfig });
                          setShowMenu(false);
                        }}
                      >
@@ -686,28 +1741,46 @@ interface CellProps {
   record: BaseRecord;
   field: Field;
   isActive: boolean;
+  forceEdit?: boolean;
   isGeneratingCol?: boolean;
   onActivate: () => void;
   onChange: (value: any) => void;
   onBlur: () => void;
-  onPreviewImage: (url: string) => void;
+  onPreviewImage: (url: string, images?: string[]) => void;
   allFields: Field[];
   modelSettings: any;
   heightClass: string;
   onUpdateField: (updates: Partial<Field>) => void;
   isSelectedBox: boolean;
-  onMouseDown: () => void;
+  isCutBox: boolean;
+  onMouseDown: (e: React.MouseEvent) => void;
   onMouseEnter: () => void;
   onActivateNextRow: () => void;
+  onBatchAIGenerate?: () => void;
   lang?: 'en' | 'zh';
 }
 
-function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, onMouseDown, onMouseEnter, onActivateNextRow, lang = 'zh' }: CellProps) {
+function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onBatchAIGenerate, lang = 'zh' }: CellProps) {
   const value = record[field.id];
   
   const [isEditingMode, setIsEditingMode] = useState(false);
 
   const [localText, setLocalText] = useState('');
+
+  useEffect(() => {
+    if (!isActive) setIsEditingMode(false);
+  }, [isActive]);
+
+  useEffect(() => {
+    if (forceEdit && isActive && !isEditingMode) {
+      if (['text', 'aiText', 'url'].includes(field.type)) {
+         const v = typeof value === 'object' && value !== null ? JSON.stringify(value) : value;
+         setLocalText(String(v || ''));
+      }
+      setIsEditingMode(true);
+    }
+  }, [forceEdit, isActive, isEditingMode, field.type, value]);
+
   useEffect(() => {
     if (isEditingMode && (field.type === 'text' || field.type === 'url' || field.type === 'aiText')) {
       const v = typeof value === 'object' && value !== null ? JSON.stringify(value) : value;
@@ -729,68 +1802,29 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
     if (!isActive) setIsEditingMode(false);
   }, [isActive]);
 
-  const [isGenerating, setIsGenerating] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  React.useLayoutEffect(() => {
+    if (textareaRef.current && isEditingMode && ['text', 'aiText', 'url'].includes(field.type)) {
+      const el = textareaRef.current;
+      el.style.height = 'auto'; // Reset height
+      const scrollHeight = el.scrollHeight;
+      
+      let minHeightPx = 40;
+      if (heightClass === 'h-[56px]') minHeightPx = 56;
+      else if (heightClass === 'h-[80px]') minHeightPx = 80;
+      else if (heightClass === 'h-[120px]') minHeightPx = 120;
+
+      let newHeight = Math.max(minHeightPx, scrollHeight);
+      if (newHeight > 200) newHeight = 200;
+      
+      el.style.height = `${newHeight + 2}px`; // +2 for borders since it's absolutely positioned at -1
+    }
+  }, [localText, isEditingMode, field.type, heightClass]);
 
   const handleAIGenerate = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!field.prompt) {
-      alert("Please configure a prompt for this Smart Text column first.");
-      return;
-    }
-    
-    setIsGenerating(true);
-    
-    try {
-      const contextData: any = {};
-      if (field.refFields && field.refFields.length > 0) {
-        field.refFields.forEach(refId => {
-          const refField = allFields.find(f => f.id === refId);
-          if (refField) {
-            contextData[refField.name] = record[refId];
-          }
-        });
-      }
-      
-      const promptString = `You are an AI assistant helping to evaluate a table row. Here is the data context for this row:\n\n${JSON.stringify(contextData, null, 2)}\n\nBased ONLY on the context provided, perform the following instruction and respond with the concise result. Do not include markdown formatting or conversational filler.\n\nInstruction: ${field.prompt}`;
-
-      let resultText = '';
-
-      if (modelSettings.activeModel === 'gemini') {
-        if (!modelSettings.geminiKey) throw new Error("Gemini API Key is required");
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${modelSettings.geminiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-             contents: [{ parts: [{ text: promptString }] }]
-          })
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error.message);
-        resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      } else {
-        if (!modelSettings.openaiKey) throw new Error("OpenAI API Key is required");
-        const res = await fetch(`${modelSettings.openaiEndpoint}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${modelSettings.openaiKey}`
-          },
-          body: JSON.stringify({
-            model: modelSettings.openaiModel || 'gpt-3.5-turbo',
-            messages: [{ role: 'user', content: promptString }]
-          })
-        });
-        const json = await res.json();
-        if (json.error) throw new Error(json.error.message);
-        resultText = json.choices[0].message.content;
-      }
-      
-      onChange(resultText);
-    } catch (err: any) {
-      alert("AI Generation failed: " + err.message);
-    } finally {
-      setIsGenerating(false);
-    }
+    if (onBatchAIGenerate) onBatchAIGenerate();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -802,6 +1836,9 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
       setIsEditingMode(false);
       // Let it stay active, but not editing
       e.stopPropagation();
+    } else if ((e.key === 'Backspace' || e.key === 'Delete') && !isEditingMode) {
+      e.preventDefault();
+      onChange(''); // clear cell
     }
   };
 
@@ -826,8 +1863,13 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
         return (
           <div className="flex h-full w-full relative">
             <textarea
+              ref={textareaRef}
               autoFocus
-              className="flex-1 w-full h-full px-2 py-1.5 outline-none bg-blue-50/50 resize-none overflow-y-auto"
+              onFocus={(e) => {
+                const len = e.target.value.length;
+                e.target.setSelectionRange(len, len);
+              }}
+              className="flex-1 w-full px-2 py-1.5 outline-none bg-white resize-none overflow-y-auto ring-[1.5px] ring-blue-500 ring-inset"
               value={localText}
               onChange={(e) => setLocalText(e.target.value)}
               onBlur={() => {
@@ -860,14 +1902,14 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
                    }
                 }
               }}
-              style={{ minHeight: '60px', position: 'absolute', zIndex: 30, left: -1, right: -1, top: -1, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }}
+              style={{ position: 'absolute', zIndex: 30, left: -1, right: -1, top: -1, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }}
             />
             <div className="absolute right-0 top-0 h-[32px] flex items-center pr-1 z-40">
                <button 
                  onMouseDown={handleAIGenerate} 
-                 className={cn("p-1 rounded shadow-sm text-white", isGenerating ? "bg-gray-400" : "bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600")}
+                 className={cn("p-1 rounded shadow-sm text-white", isGeneratingCol ? "bg-gray-400" : "bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600")}
                  title="Generate with AI"
-                 disabled={isGenerating}
+                 disabled={isGeneratingCol}
                >
                   <Sparkles className="w-3.5 h-3.5" />
                </button>
@@ -878,15 +1920,20 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
       if (field.type === 'text' || field.type === 'url') {
         return (
           <textarea
+            ref={textareaRef}
             autoFocus
-            className="w-full h-full px-2 py-1.5 outline-none bg-blue-50/50 resize-none overflow-y-auto absolute z-30 shadow-md border border-blue-200 rounded-sm"
+            onFocus={(e) => {
+              const len = e.target.value.length;
+              e.target.setSelectionRange(len, len);
+            }}
+            className="w-full px-2 py-1.5 outline-none bg-white resize-none overflow-y-auto absolute z-30 shadow-[0_4px_6px_-1px_rgb(0,0,0,0.1),0_2px_4px_-2px_rgb(0,0,0,0.1)] border-none ring-[1.5px] ring-blue-500 ring-inset"
             value={localText}
             onChange={(e) => setLocalText(e.target.value)}
             onBlur={() => {
               onChange(localText);
               setIsEditingMode(false);
             }}
-            style={{ minHeight: '60px', left: -1, right: -1, top: -1 }}
+            style={{ left: -1, right: -1, top: -1 }}
             onKeyDown={(e) => {
                if (e.key === 'Escape') {
                   onChange(localText);
@@ -921,7 +1968,7 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
           <input
             autoFocus
             type="number"
-            className="w-full h-full px-2 outline-none bg-blue-50/50 text-right absolute z-30 shadow-md border border-blue-200"
+            className="w-full h-full px-2 outline-none bg-white text-right absolute z-30 shadow-[0_4px_6px_-1px_rgb(0,0,0,0.1),0_2px_4px_-2px_rgb(0,0,0,0.1)] border-none ring-[1.5px] ring-blue-500 ring-inset"
             defaultValue={value}
             onBlur={(e) => {
               const val = e.target.value === '' ? null : Number(e.target.value);
@@ -944,7 +1991,7 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
           <input
             autoFocus
             type="date"
-            className="w-full h-full px-2 outline-none bg-blue-50/50 absolute z-30 shadow-md border border-blue-200"
+            className="w-full h-full px-2 outline-none bg-white absolute z-30 shadow-[0_4px_6px_-1px_rgb(0,0,0,0.1),0_2px_4px_-2px_rgb(0,0,0,0.1)] border-none ring-[1.5px] ring-blue-500 ring-inset"
             defaultValue={value || ''}
             onBlur={(e) => onChange(e.target.value)}
             style={{ left: -1, right: -1, top: -1, height: 'calc(100% + 2px)' }}
@@ -970,12 +2017,12 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
       if (field.type === 'checkbox') {
          // Checkbox edits instantly
          return (
-          <div className="flex h-full items-center justify-center bg-blue-50/50 cursor-pointer" onClick={() => { onChange(!value); setIsEditingMode(false); onBlur(); }}>
+          <div className="flex h-full items-center justify-center bg-white cursor-pointer ring-[1.5px] ring-blue-500 ring-inset z-30 relative" onClick={() => { onChange(!value); setIsEditingMode(false); onBlur(); }}>
             <input type="checkbox" checked={!!value} readOnly className="w-4 h-4 cursor-pointer" />
           </div>
         );
       }
-      if (field.type === 'attachment') {
+      if (field.type === 'attachment' || field.type === 'aiImage') {
         return (
           <AttachmentCellEditor 
             value={value} 
@@ -1014,22 +2061,103 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
              ) : (
                <div className={`flex items-center gap-1 overflow-hidden w-full ${containerHeightClass}`}>
                   {filePaths.map((path, i) => {
-                    let displayUrl = imagePreviewCache.get(path);
-                    if (!displayUrl) {
-                      displayUrl = path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path;
-                    }
+                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
                     return (
-                      <img 
-                        key={i} 
-                        src={displayUrl} 
-                        alt={path.split('/').pop()?.split('\\').pop() || 'image'} 
-                        className={`${imgSizeClass} object-cover rounded border border-gray-200 shrink-0 bg-gray-100`} 
-                        title={path}
-                        onClick={(e) => { e.stopPropagation(); onPreviewImage(displayUrl!); }}
-                      />
+                      <div key={i} className="relative group/img-item shrink-0">
+                        <ThumbnailImage 
+                          path={path}
+                          alt={path.split('/').pop()?.split('\\').pop() || 'image'} 
+                          className={`${imgSizeClass} object-cover rounded border border-gray-200 bg-gray-100 cursor-pointer`} 
+                          title={path}
+                          onClick={(e) => { e.stopPropagation(); onPreviewImage(fullUrl, filePaths.map(p => fullImageBlobCache.get(p) || (p.startsWith('/') || p.match(/^[a-zA-Z]:\\/) ? `file://${p}` : p))); }}
+                        />
+                        <div className="absolute top-0.5 right-0.5 bg-white/80 text-gray-700 rounded p-0.5 opacity-0 group-hover/img-item:opacity-100 flex items-center gap-1 shadow-sm z-10 transition-opacity">
+                          <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
+                             <Copy className="w-3.5 h-3.5 hover:text-blue-500" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onChange(filePaths.filter((_, idx) => idx !== i).join(','));
+                            }}
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 hover:text-red-500 text-gray-500" />
+                          </button>
+                        </div>
+                      </div>
                     );
                   })}
                </div>
+             )}
+          </div>
+        );
+      }
+      case 'aiImage': {
+        let filePaths: string[] = [];
+        if (Array.isArray(value)) {
+          filePaths = value.map((v: any) => typeof v === 'string' ? v : v.url || v.name || '');
+        } else if (typeof value === 'string' && value.trim() !== '') {
+          filePaths = value.split(',').map(s => s.trim());
+        }
+        
+        let imgSizeClass = 'h-[24px] w-[24px]';
+        let containerHeightClass = 'h-[26px]';
+        if (heightClass === 'h-[40px]') { imgSizeClass = 'h-[28px] w-[28px]'; containerHeightClass = 'h-[30px]'; }
+        else if (heightClass === 'h-[56px]') { imgSizeClass = 'h-[44px] w-[44px]'; containerHeightClass = 'h-[46px]'; }
+        else if (heightClass === 'h-[80px]') { imgSizeClass = 'h-[68px] w-[68px]'; containerHeightClass = 'h-[70px]'; }
+        else if (heightClass === 'h-[120px]') { imgSizeClass = 'h-[108px] w-[108px]'; containerHeightClass = 'h-[110px]'; }
+
+        return (
+          <div className="px-1 py-1 h-full flex flex-col justify-center relative group/ai w-full overflow-hidden">
+             {isGeneratingCol ? (
+               <div className="flex items-center gap-1.5 text-blue-500 font-medium text-xs px-1">
+                 <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+                 <span>Generating...</span>
+               </div>
+             ) : filePaths.length > 0 ? (
+               <div className={`flex items-center gap-1 overflow-hidden w-full ${containerHeightClass}`}>
+                  {filePaths.map((path, i) => {
+                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
+                    return (
+                      <div key={i} className="relative group/img-item shrink-0">
+                        <ThumbnailImage 
+                          path={path}
+                          alt="ai-generated" 
+                          className={`${imgSizeClass} object-cover rounded border border-gray-200 bg-gray-100 cursor-pointer`} 
+                          title={path}
+                          onClick={(e) => { e.stopPropagation(); onPreviewImage(fullUrl, filePaths.map(p => fullImageBlobCache.get(p) || (p.startsWith('/') || p.match(/^[a-zA-Z]:\\/) ? `file://${p}` : p))); }}
+                        />
+                        <div className="absolute top-0.5 right-0.5 bg-white/80 text-gray-700 rounded p-0.5 opacity-0 group-hover/img-item:opacity-100 flex items-center gap-1 shadow-sm z-10 transition-opacity">
+                          <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
+                             <Copy className="w-3.5 h-3.5 hover:text-blue-500" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onChange(filePaths.filter((_, idx) => idx !== i).join(','));
+                            }}
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 hover:text-red-500 text-gray-500" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+               </div>
+             ) : (
+                <div className="text-gray-300 w-full text-center text-xs italic opacity-0 group-hover/ai:opacity-100 transition-opacity">Empty</div>
+             )}
+             
+             {!isGeneratingCol && isActive && (
+                <button 
+                  onMouseDown={handleAIGenerate} 
+                  className="absolute right-1 top-1.5 p-1 rounded bg-white shadow-sm hover:bg-gradient-to-r hover:from-purple-500 hover:to-indigo-500 hover:text-white text-gray-400 opacity-0 group-hover/ai:opacity-100 transition-all z-10 border border-gray-200"
+                  title="Generate AI Image"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                </button>
              )}
           </div>
         );
@@ -1110,16 +2238,91 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
         return (
           <div className="px-2 py-1 h-full flex flex-col justify-center relative group/ai w-full overflow-hidden">
             <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full pr-4" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}>{displayValue}</span>
-            {!value && !isGenerating && isActive && (
-               <button 
-                 onClick={handleAIGenerate} 
+            {!value && !isGeneratingCol && isActive && (
+               <button onMouseDown={handleAIGenerate}
                  className="absolute right-1 top-1.5 p-1 rounded bg-gray-100 hover:bg-gradient-to-r hover:from-purple-500 hover:to-indigo-500 hover:text-white text-gray-400 opacity-0 group-hover/ai:opacity-100 transition-all z-10"
                  title="Quick Generate"
                >
                  <Sparkles className="w-3.5 h-3.5" />
                </button>
             )}
-            {isGenerating && <span className="absolute right-2 top-2 text-[10px] text-gray-400">Gen...</span>}
+            {isGeneratingCol && <span className="absolute right-2 top-2 text-[10px] text-gray-400">Gen...</span>}
+          </div>
+        );
+      }
+      case 'formula': {
+        let displayValue: any = '';
+        try {
+          // Fallback to the globally exposed computeFormulaValue 
+          // wait, we don't have it imported here. I can just write it here or export it from App.tsx. 
+          // Wait, App.tsx is importing Grid, so Grid cannot import App. But wait, `import { computeFormulaValue } from '../App'` might cause circular dependency?
+          // Let's implement the same logic here.
+          if (field.prompt) {
+            let formulaStr = field.prompt;
+            const variableNames: string[] = [];
+            const variableValues: any[] = [];
+            
+            if (field.refFields) {
+              field.refFields.forEach(refId => {
+                const refField = allFields.find(f => f.id === refId);
+                if (refField) {
+                  const rawVal = record[refId];
+                  let valToUse = rawVal;
+                  if (refField.type === 'singleSelect') {
+                    valToUse = refField.options?.find((o: any) => o.id === rawVal)?.name || rawVal;
+                  } else if (refField.type === 'multiSelect' && Array.isArray(rawVal)) {
+                    valToUse = rawVal.map((id: string) => refField.options?.find((o: any) => o.id === id)?.name || id).join(', ');
+                  }
+
+                  const varName = 'VAR_' + refId.replace(/[^a-zA-Z0-9]/g, '_');
+                  const safeFieldName = refField.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                  formulaStr = formulaStr.replace(new RegExp(`{${safeFieldName}}`, 'g'), varName);
+                  variableNames.push(varName);
+                  variableValues.push(valToUse === undefined || valToUse === null ? '' : valToUse);
+                }
+              });
+            }
+
+            let jsFormula = formulaStr;
+            if (jsFormula.startsWith('=')) {
+              jsFormula = jsFormula.substring(1).replace(/&/g, '+');
+            }
+
+            try {
+              const fn = new Function(...variableNames, `return (${jsFormula});`);
+              displayValue = fn(...variableValues);
+            } catch (jsErr) {
+              // fallback loop
+              let legacyStr = field.prompt;
+              const contextData: any = {};
+              if (field.refFields) {
+                field.refFields.forEach(refId => {
+                  const refField = allFields.find(f => f.id === refId);
+                  if (refField) {
+                    const safeFieldName = refField.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    legacyStr = legacyStr.replace(new RegExp(`{${safeFieldName}}`, 'g'), refField.name);
+                    const rawVal = record[refId];
+                    let valToUse = rawVal;
+                    if (refField.type === 'singleSelect') {
+                      valToUse = refField.options?.find((o: any) => o.id === rawVal)?.name || rawVal;
+                    } else if (refField.type === 'multiSelect' && Array.isArray(rawVal)) {
+                      valToUse = rawVal.map((id: string) => refField.options?.find((o: any) => o.id === id)?.name || id).join(', ');
+                    }
+                    const numVal = parseFloat(valToUse as string);
+                    contextData[refField.name] = !isNaN(numVal) ? numVal : valToUse || '';
+                  }
+                });
+              }
+              displayValue = Parser.evaluate(legacyStr, contextData);
+            }
+          }
+        } catch (e) {
+          displayValue = '#ERROR';
+        }
+        
+        return (
+          <div className="px-2 h-full flex flex-col justify-center w-full overflow-hidden select-text bg-gray-50/50">
+            <span className="truncate text-sm leading-tight text-gray-700 italic font-medium">{String(displayValue)}</span>
           </div>
         );
       }
@@ -1163,9 +2366,11 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
                }
 
                const pathMatches = files.map((file: any) => {
-                 const pathStr = (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
-                 const objectUrl = URL.createObjectURL(file);
-                 imagePreviewCache.set(pathStr, objectUrl);
+                 const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
+                 getOrGenerateThumbnail(pathStr, file);
+                 if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/)) {
+                   fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
+                 }
                  return pathStr;
                });
 
@@ -1179,7 +2384,7 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
          // Only select box if not in edit mode, otherwise allow text selection
          if (!isEditingMode) {
              e.preventDefault(); // Prevents text selection while dragging to select cells
-             onMouseDown();
+             onMouseDown(e);
          }
       }}
       onMouseEnter={() => {
@@ -1199,7 +2404,8 @@ function Cell({ record, field, isActive, isGeneratingCol, onActivate, onChange, 
         "border-b border-r border-gray-200 relative p-0 bg-white transition-colors cursor-cell group-hover:bg-blue-50/10",
         heightClass,
         isSelectedBox && !isEditingMode && "bg-blue-100/50 group-hover:bg-blue-100/70",
-        isActive && "ring-[1.5px] ring-blue-500 ring-inset z-20 outline-none"
+        isCutBox && !isEditingMode && "opacity-50 ring-1 ring-dashed ring-gray-400 ring-inset",
+        isActive && !isEditingMode && "ring-[1.5px] ring-blue-500 ring-inset z-20 outline-none"
       )}
     >
       {renderContent()}
@@ -1409,7 +2615,7 @@ function SelectCellEditor({ field, ids, isMulti, onChange, onClose, onUpdateFiel
   );
 }
 
-function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: any, onChange: (v: any) => void, onClose: () => void, onPreview: (url: string) => void }) {
+function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: any, onChange: (v: any) => void, onClose: () => void, onPreview: (url: string, allUrls?: string[]) => void }) {
   let filePaths: string[] = [];
   if (Array.isArray(value)) {
     filePaths = value.map((v: any) => typeof v === 'string' ? v : v.url || v.name || '');
@@ -1420,52 +2626,47 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
   const ref = useClickOutside(onClose);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [draggedImgId, setDraggedImgId] = useState<string | null>(null);
-  const [dragOverImgId, setDragOverImgId] = useState<string | null>(null);
+  const [draggedImgIndex, setDraggedImgIndex] = useState<number | null>(null);
+  const [dragOverImgIndex, setDragOverImgIndex] = useState<number | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const files = Array.from(e.target.files as FileList);
       const pathMatches = files.map((file: any) => {
-        const pathStr = (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
-        const objectUrl = URL.createObjectURL(file);
-        imagePreviewCache.set(pathStr, objectUrl);
+        const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
+        getOrGenerateThumbnail(pathStr, file);
+        if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/)) {
+          fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
+        }
         return pathStr;
       });
       onChange([...filePaths, ...pathMatches].join(','));
     }
   };
 
-  const handleRemove = (path: string) => {
-    onChange(filePaths.filter(p => p !== path).join(','));
+  const handleRemove = (index: number) => {
+    onChange(filePaths.filter((_, idx) => idx !== index).join(','));
   };
 
-  const handleDrop = (e: React.DragEvent, targetPath?: string) => {
+  const handleDrop = (e: React.DragEvent, targetIndex?: number) => {
     e.preventDefault();
     e.stopPropagation();
 
     // Prioritize internal drag and drop of attachment images 
-    if (draggedImgId) {
-      if (!targetPath || draggedImgId === targetPath) {
-        setDraggedImgId(null);
-        setDragOverImgId(null);
-        return;
-      }
-      const sourceIndex = filePaths.findIndex(p => p === draggedImgId);
-      const targetIndex = filePaths.findIndex(p => p === targetPath);
-      if (sourceIndex === -1 || targetIndex === -1) {
-        setDraggedImgId(null);
-        setDragOverImgId(null);
+    if (draggedImgIndex !== null) {
+      if (targetIndex === undefined || draggedImgIndex === targetIndex) {
+        setDraggedImgIndex(null);
+        setDragOverImgIndex(null);
         return;
       }
 
       const newArr = [...filePaths];
-      const [moved] = newArr.splice(sourceIndex, 1);
+      const [moved] = newArr.splice(draggedImgIndex, 1);
       newArr.splice(targetIndex, 0, moved);
       onChange(newArr.join(','));
       
-      setDraggedImgId(null);
-      setDragOverImgId(null);
+      setDraggedImgIndex(null);
+      setDragOverImgIndex(null);
       return;
     }
 
@@ -1473,14 +2674,16 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
       const files = Array.from(e.dataTransfer.files).filter((f: any) => f.type.startsWith('image/'));
       if (files.length > 0) {
         const pathMatches = files.map((file: any) => {
-          // Add support for window.electron.getPathForFile if exposed in preload
-          const pathStr = (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
-          const objectUrl = URL.createObjectURL(file);
-          imagePreviewCache.set(pathStr, objectUrl);
+          // Add support for window.electronAPI.getPathForFile if exposed in preload
+          const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
+          getOrGenerateThumbnail(pathStr, file);
+          if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/)) {
+            fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
+          }
           return pathStr;
         });
         onChange([...filePaths, ...pathMatches].join(','));
-        setDragOverImgId(null);
+        setDragOverImgIndex(null);
         return;
       }
     }
@@ -1489,57 +2692,67 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
   return (
     <div 
       ref={ref} 
-      className="absolute top-0 left-0 min-w-[200px] bg-white rounded shadow-lg border border-gray-200 z-50 p-2 flex flex-col gap-2"
+      className="absolute top-0 left-0 min-w-[350px] bg-white rounded shadow-lg border border-gray-200 z-50 p-3 flex flex-col gap-2"
       onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
       onDrop={(e) => handleDrop(e)}
     >
-      <div className="flex flex-wrap gap-2">
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-xs font-semibold text-gray-500">Attachments</label>
+        <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded text-gray-400">
+           <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-2 w-[340px]">
         {filePaths.map((path, index) => {
-           let displayUrl = imagePreviewCache.get(path);
-           if (!displayUrl) {
-             displayUrl = path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path;
-           }
+           let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
            
            return (
              <div 
                key={`${path}_${index}`} 
                className={cn(
-                 "relative group cursor-grab active:cursor-grabbing w-16 h-16 border rounded bg-gray-50 flex items-center justify-center overflow-hidden",
-                 draggedImgId === path ? "opacity-30" : "",
-                 dragOverImgId === path ? "ring-2 ring-blue-500" : "border-gray-200"
+                 "relative group/attachment cursor-grab active:cursor-grabbing w-[108px] h-[108px] border rounded bg-gray-50 flex items-center justify-center overflow-hidden",
+                 draggedImgIndex === index ? "opacity-30" : "",
+                 dragOverImgIndex === index ? "ring-2 ring-blue-500" : "border-gray-200"
                )}
                draggable
                onDragStart={(e) => {
-                 setDraggedImgId(path);
+                 setDraggedImgIndex(index);
                  e.dataTransfer.effectAllowed = 'move';
                }}
                onDragOver={(e) => {
                  e.preventDefault();
-                 if (dragOverImgId !== path) setDragOverImgId(path);
+                 if (dragOverImgIndex !== index) setDragOverImgIndex(index);
                }}
                onDragLeave={() => {
-                 if (dragOverImgId === path) setDragOverImgId(null);
+                 if (dragOverImgIndex === index) setDragOverImgIndex(null);
                }}
-               onDrop={(e) => handleDrop(e, path)}
-               onDragEnd={() => { setDraggedImgId(null); setDragOverImgId(null); }}
-               onClick={() => onPreview(displayUrl!)}
+               onDrop={(e) => handleDrop(e, index)}
+               onDragEnd={() => { setDraggedImgIndex(null); setDragOverImgIndex(null); }}
+               onClick={() => onPreview(fullUrl, filePaths.map(p => fullImageBlobCache.get(p) || (p.startsWith('/') || p.match(/^[a-zA-Z]:\\/) ? `file://${p}` : p)))}
              >
-               <img src={displayUrl} alt="attachment" className="w-full h-full object-cover cursor-pointer" />
+               <ThumbnailImage path={path} className="w-full h-full object-cover cursor-pointer" alt="attachment" />
                <div 
-                 className="absolute top-0.5 right-0.5 bg-black/50 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 cursor-pointer hover:bg-black"
-                 onClick={(e) => { e.stopPropagation(); handleRemove(path); }}
+                 className="absolute top-1 right-1 bg-black/60 text-white rounded p-1 opacity-0 group-hover/attachment:opacity-100 cursor-pointer flex items-center gap-1.5 transition-opacity"
                >
-                 <X className="w-3 h-3" />
+                 <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
+                    <Copy className="w-3.5 h-3.5 hover:text-blue-300" />
+                 </button>
+                 <button onClick={(e) => { e.stopPropagation(); triggerDownload(path, path.split('/').pop()?.split('\\').pop() || 'download.png'); }} title="Download">
+                    <Download className="w-3.5 h-3.5 hover:text-blue-300" />
+                 </button>
+                 <button onClick={(e) => { e.stopPropagation(); handleRemove(index); }} title="Delete">
+                    <Trash2 className="w-3.5 h-3.5 text-red-400 hover:text-red-300" />
+                 </button>
                </div>
              </div>
            );
         })}
         
         <div 
-          className="w-16 h-16 border border-dashed border-gray-300 rounded flex items-center justify-center cursor-pointer hover:bg-gray-50 text-gray-400 hover:text-blue-500 transition-colors"
+          className="w-[108px] h-[108px] border border-dashed border-gray-300 rounded flex items-center justify-center cursor-pointer hover:bg-gray-50 text-gray-400 hover:text-blue-500 transition-colors"
           onClick={() => fileInputRef.current?.click()}
         >
-          <Plus className="w-6 h-6" />
+          <Plus className="w-8 h-8" />
         </div>
       </div>
       

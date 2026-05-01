@@ -1,18 +1,99 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { initialGridData } from './initialData';
 import { Grid } from './components/Grid';
 import { FieldType, Attachment, GridData } from './types';
-import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy } from 'lucide-react';
 import Papa from 'papaparse';
+import { Parser } from 'expr-eval';
+
+export const computeFormulaValue = (field: any, record: any, fields: any[]) => {
+  if (!field.prompt) return '';
+  let formulaStr = field.prompt;
+  
+  const variableNames: string[] = [];
+  const variableValues: any[] = [];
+  const contextData: any = {};
+  
+  // Replace {Field Name} with safe variables
+  if (field.refFields) {
+    field.refFields.forEach((refId: string) => {
+      const refField = fields.find((f: any) => f.id === refId);
+      if (refField) {
+        // for expr-eval fallback
+        const rawVal = record[refId];
+        let valToUse = rawVal;
+        if (refField.type === 'singleSelect') {
+          valToUse = refField.options?.find((o: any) => o.id === rawVal)?.name || rawVal;
+        } else if (refField.type === 'multiSelect' && Array.isArray(rawVal)) {
+          valToUse = rawVal.map((id: string) => refField.options?.find((o: any) => o.id === id)?.name || id).join(', ');
+        }
+        
+        const numVal = parseFloat(valToUse as string);
+        contextData[refField.name] = !isNaN(numVal) ? numVal : valToUse || '';
+        
+        // for JS evaluation
+        const varName = 'VAR_' + refId.replace(/[^a-zA-Z0-9]/g, '_');
+        // Escape special regex chars in field name just in case
+        const safeFieldName = refField.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        formulaStr = formulaStr.replace(new RegExp(`{${safeFieldName}}`, 'g'), varName);
+        variableNames.push(varName);
+        variableValues.push(valToUse === undefined || valToUse === null ? '' : valToUse);
+      }
+    });
+  }
+
+  // Handle Excel-like syntax starting with =
+  let jsFormula = formulaStr;
+  if (jsFormula.startsWith('=')) {
+    jsFormula = jsFormula.substring(1).replace(/&/g, '+');
+  }
+
+  try {
+    const fn = new Function(...variableNames, `return (${jsFormula});`);
+    return fn(...variableValues);
+  } catch (e) {
+    // Fallback to expr-eval for legacy Math formulas
+    try {
+      let legacyStr = field.prompt;
+      if (field.refFields) {
+        field.refFields.forEach((refId: string) => {
+          const refField = fields.find((f: any) => f.id === refId);
+          if (refField) {
+            const safeFieldName = refField.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            legacyStr = legacyStr.replace(new RegExp(`{${safeFieldName}}`, 'g'), refField.name);
+          }
+        });
+      }
+      return Parser.evaluate(legacyStr, contextData);
+    } catch (err) {
+      return '#ERROR';
+    }
+  }
+};
+
+const TABLE_ICONS = [
+  '💼','📅','📊','📁','📝','📌',
+  '⭐','❤️','🔥','✨','💎','🎁',
+  '💻','📱','🔋','🔌','⌨️','🌐',
+  '📷','🖼️','🎨','🌅','📸','🌆',
+  '🎬','🎥','📺','🎞️','▶️','📹',
+  '📄','📚','📖','📋','🧾','📕'
+];
 
 function TableNavItem({ 
-  tbl, isActive, onClick, onRename, onDelete 
+  tbl, isActive, onClick, onRename, onDelete, onDuplicate, onIconChange,
+  isDragged, isDragOverTop, isDragOverBottom, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd
 }: { 
-  key?: React.Key; tbl: any; isActive: boolean; onClick: () => void; onRename: (n: string) => void; onDelete: () => void;
+  key?: React.Key; tbl: any; isActive: boolean; onClick: () => void; onRename: (n: string) => void; onDelete: () => void; onDuplicate: () => void; onIconChange: (icon: string | null) => void;
+  isDragged?: boolean; isDragOverTop?: boolean; isDragOverBottom?: boolean; onDragStart?: (e: React.DragEvent) => void; onDragOver?: (e: React.DragEvent) => void; onDragLeave?: () => void; onDrop?: (e: React.DragEvent) => void; onDragEnd?: () => void;
 }) {
   const [isEditing, setIsEditing] = React.useState(false);
   const [name, setName] = React.useState(tbl.name);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const [showIconMenu, setShowIconMenu] = React.useState(false);
+  const iconMenuRef = React.useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = React.useState<{top: number, left: number} | null>(null);
 
   React.useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -20,24 +101,101 @@ function TableNavItem({
     }
   }, [isEditing]);
 
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      // Portal drops it on document body, but handleClickOutside shouldn't close it if clicking the portal? 
+      // The portal might be outside iconMenuRef. So we wait, if portal, e.target is outside iconMenuRef.
+      // Easiest is to add a data attribute or class to identify the portal and skip.
+      if (iconMenuRef.current && !iconMenuRef.current.contains(e.target as Node) && !(e.target as Element).closest('.icon-menu-portal')) {
+        setShowIconMenu(false);
+      }
+    };
+    if (showIconMenu) {
+       document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showIconMenu]);
+
   const handleSave = () => {
     if (name.trim()) onRename(name.trim());
     else setName(tbl.name);
     setIsEditing(false);
   };
 
+  const handleIconClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!showIconMenu && iconMenuRef.current) {
+       const rect = iconMenuRef.current.getBoundingClientRect();
+       setMenuPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setShowIconMenu(!showIconMenu);
+  };
+
   return (
     <div 
-      className={`group flex flex-1 items-center justify-between px-2 py-1.5 rounded-md cursor-pointer transition-colors ${isActive ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'}`}
+      className={`group relative flex flex-1 items-center justify-between px-2 py-1.5 rounded-md cursor-pointer transition-[background-color,opacity] ${isActive ? 'bg-blue-100/80 text-blue-800 font-medium' : 'text-gray-600 hover:bg-gray-200/50 hover:text-gray-900'} ${isDragged ? 'opacity-40' : ''}`}
+      style={isDragOverTop ? { boxShadow: 'inset 0 2px 0 0 #3b82f6' } : isDragOverBottom ? { boxShadow: 'inset 0 -2px 0 0 #3b82f6' } : {}}
       onClick={!isEditing ? onClick : undefined}
       onDoubleClick={() => setIsEditing(true)}
+      draggable={!isEditing}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
     >
       <div className="flex items-center truncate min-w-0 flex-1">
-        <GridIcon className={`w-4 h-4 mr-2 shrink-0 ${isActive ? 'text-blue-600' : 'text-gray-400 group-hover:text-gray-500'}`} />
+        <div 
+           className="relative mr-2 flex items-center justify-center shrink-0" 
+           ref={iconMenuRef}
+           onClick={handleIconClick}
+           onMouseDown={(e) => e.stopPropagation()}
+           onDoubleClick={(e) => e.stopPropagation()}
+           onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        >
+           <div 
+             className="w-5 h-5 flex items-center justify-center cursor-pointer hover:bg-white/50 rounded transition-colors"
+             title="Change Icon"
+           >
+             {tbl.icon ? <span className="text-sm leading-none flex items-center justify-center -mt-px">{tbl.icon}</span> : <GridIcon className={`w-4 h-4 ${isActive ? 'text-blue-600' : 'text-gray-400 group-hover:text-gray-600'}`} />}
+           </div>
+           
+           {showIconMenu && menuPos && (
+             typeof document !== 'undefined' ? 
+             createPortal(
+               <div 
+                 className="icon-menu-portal fixed bg-white border border-gray-200 rounded-lg shadow-xl p-2 z-[99999] grid grid-cols-6 gap-1 w-[200px]" 
+                 style={{ top: menuPos.top, left: menuPos.left }}
+                 onMouseDown={e => e.stopPropagation()}
+                 onClick={e => e.stopPropagation()}
+                 onDoubleClick={e => e.stopPropagation()}
+               >
+                  <button 
+                    className={`w-7 h-7 flex items-center justify-center rounded hover:bg-blue-50 ${!tbl.icon ? 'bg-blue-100 text-blue-600' : 'text-gray-500'}`} 
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); onIconChange(null); setShowIconMenu(false); }}
+                    title="Default"
+                  >
+                    <GridIcon className="w-4 h-4" />
+                  </button>
+                  {TABLE_ICONS.map(icon => (
+                    <button 
+                      key={icon}
+                      className={`w-7 h-7 flex items-center justify-center rounded hover:bg-blue-50 text-sm ${tbl.icon === icon ? 'bg-blue-100' : ''}`}
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onIconChange(icon); setShowIconMenu(false); }}
+                    >
+                      {icon}
+                    </button>
+                  ))}
+               </div>,
+               document.body
+             ) : null
+           )}
+        </div>
         {isEditing ? (
           <input
             ref={inputRef} type="text"
-            className="flex-1 bg-white border border-blue-400 rounded px-1 text-sm outline-none text-gray-900"
+            className="flex-1 bg-white border border-blue-400 rounded px-1 text-sm outline-none text-gray-900 min-w-0"
             value={name} onChange={(e) => setName(e.target.value)} onBlur={handleSave}
             onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') { setName(tbl.name); setIsEditing(false); } }}
           />
@@ -46,8 +204,9 @@ function TableNavItem({
         )}
       </div>
       {!isEditing && (
-        <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 shrink-0 ml-2">
+        <div className="flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 shrink-0 ml-1">
           <button onClick={(e) => { e.stopPropagation(); setIsEditing(true); }} className="p-0.5 text-gray-400 hover:text-blue-600 rounded" title="Rename"><Edit2 className="w-3.5 h-3.5" /></button>
+          <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }} className="p-0.5 text-gray-400 hover:text-green-600 rounded" title="Duplicate"><Copy className="w-3.5 h-3.5" /></button>
           <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-0.5 text-gray-400 hover:text-red-600 rounded" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
         </div>
       )}
@@ -56,9 +215,148 @@ function TableNavItem({
 }
 
 export default function App() {
-  const [tables, setTablesInternal] = useState<{ id: string, name: string, data: GridData }[]>([
-    { id: 'table_1', name: 'Master Table', data: initialGridData }
-  ]);
+  const [tables, setTablesInternal] = useState<{ id: string, name: string, data: GridData }[]>(() => {
+     try {
+         const cached = localStorage.getItem('bitable_project_cache');
+         if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+         }
+     } catch (e) {}
+     return [{ id: 'table_1', name: 'Master Table', data: initialGridData }];
+  });
+
+  useEffect(() => {
+     localStorage.setItem('bitable_project_cache', JSON.stringify(tables));
+  }, [tables]);
+
+  const [projectName, setProjectName] = useState(() => {
+     return localStorage.getItem('bitable_project_name') || 'Untitled Project';
+  });
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 2000);
+  };
+
+  useEffect(() => {
+     localStorage.setItem('bitable_project_name', projectName);
+  }, [projectName]);
+
+  const saveProjectToDisk = async (saveAs = false) => {
+      try {
+         const json = JSON.stringify(tables, null, 2);
+         if ((window as any).showSaveFilePicker) {
+             let fileHandle = (window as any).activeProjectFileHandle;
+             if (!fileHandle || saveAs) {
+                 fileHandle = await (window as any).showSaveFilePicker({
+                     suggestedName: projectName + '.aistudio.json',
+                     types: [{
+                         description: 'AI Studio Project',
+                         accept: {'application/json': ['.aistudio.json', '.json']}
+                     }]
+                 });
+                 (window as any).activeProjectFileHandle = fileHandle;
+                 setProjectName(fileHandle.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+             }
+             const writable = await fileHandle.createWritable();
+             await writable.write(json);
+             await writable.close();
+         } else if ((window as any).electronAPI?.downloadFile) {
+             const base64Str = btoa(unescape(encodeURIComponent(json)));
+             await (window as any).electronAPI.downloadFile({ url: `data:application/json;base64,${base64Str}`, filename: projectName + '.aistudio.json' });
+         } else {
+             const blob = new Blob([json], { type: 'application/json' });
+             const url = URL.createObjectURL(blob);
+             const a = document.createElement('a');
+             a.href = url;
+             a.download = projectName + '.aistudio.json';
+             a.click();
+             URL.revokeObjectURL(url);
+         }
+         showToast(lang === 'en' ? 'Project saved successfully' : '保存成功');
+      } catch (err: any) {
+         if (err.name !== 'AbortError') alert("Failed to save project: " + err.message);
+      }
+  };
+
+  const handleNewProject = () => {
+     if (window.confirm(lang === 'en' ? 'Create a new project? Unsaved changes will be lost if not saved.' : '确定要新建工程吗？如果未保存为文件，当前的更改可能会丢失。')) {
+        setTablesInternal([{ id: 'table_1', name: 'Master Table', data: initialGridData }]);
+        setActiveTableIdState('table_1');
+        activeTableIdRef.current = 'table_1';
+        setProjectName('Untitled Project');
+        setHistory([]);
+        setFuture([]);
+     }
+  };
+
+  const handleOpenProject = async () => {
+     try {
+        if ((window as any).showOpenFilePicker) {
+            const [fileHandle] = await (window as any).showOpenFilePicker({
+                types: [{
+                    description: 'AI Studio Project',
+                    accept: {'application/json': ['.aistudio.json', '.json']}
+                }],
+                multiple: false
+            });
+            const file = await fileHandle.getFile();
+            const text = await file.text();
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].data) {
+                setTablesInternal(parsed);
+                setActiveTableId(parsed[0].id);
+                setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+                setHistory([]);
+                setFuture([]);
+                (window as any).activeProjectFileHandle = fileHandle;
+            } else {
+                alert("Invalid project file.");
+            }
+        } else {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.aistudio.json,.json';
+            input.onchange = (e) => {
+               const file = (e.target as HTMLInputElement).files?.[0];
+               if (!file) return;
+               const reader = new FileReader();
+               reader.onload = (ev) => {
+                  try {
+                      const parsed = JSON.parse(ev.target?.result as string);
+                      if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].data) {
+                          setTablesInternal(parsed);
+                          setActiveTableId(parsed[0].id);
+                          setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+                          setHistory([]);
+                          setFuture([]);
+                      } else {
+                          alert("Invalid project file.");
+                      }
+                  } catch (e) { alert("Invalid JSON file"); }
+               };
+               reader.readAsText(file);
+            };
+            input.click();
+        }
+     } catch (err: any) {
+         if (err.name !== 'AbortError') alert("Failed to open: " + err.message);
+     }
+  };
+
+  useEffect(() => {
+     const handleKeyDown = (e: KeyboardEvent) => {
+         // Ctrl+S / Cmd+S
+         if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+             e.preventDefault();
+             saveProjectToDisk();
+         }
+     };
+     window.addEventListener('keydown', handleKeyDown);
+     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [tables]);
   const [history, setHistory] = useState<{ id: string, name: string, data: GridData }[][]>([]);
   const [future, setFuture] = useState<{ id: string, name: string, data: GridData }[][]>([]);
 
@@ -104,8 +402,32 @@ export default function App() {
     }
   };
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [showTableMenu, setShowTableMenu] = useState(false);
+  const [showLoadMenu, setShowLoadMenu] = useState(false);
+  const [showSaveMenu, setShowSaveMenu] = useState(false);
+  const [showShareMenu, setShowShareMenu] = useState(false);
+  const [draggedTableId, setDraggedTableId] = useState<string | null>(null);
+  const [dragOverTableId, setDragOverTableId] = useState<string | null>(null);
+  const [dragOverTablePosition, setDragOverTablePosition] = useState<'top' | 'bottom' | null>(null);
+
+  const handleDuplicateTable = (id: string) => {
+    setTables((prev: any[]) => {
+      const idx = prev.findIndex(t => t.id === id);
+      if (idx === -1) return prev;
+      const target = prev[idx];
+      const newId = `table_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const newData = JSON.parse(JSON.stringify(target.data));
+      const newTable = { ...target, id: newId, name: `${target.name} Copy`, data: newData };
+      const res = [...prev];
+      res.splice(idx + 1, 0, newTable);
+      return res;
+    });
+  };
+
+  const handleIconChange = (id: string, icon: string | null) => {
+    setTables((prev: any[]) => prev.map(t => t.id === id ? { ...t, icon } : t));
+  };
 
   const activeTableIndex = tables.findIndex(t => t.id === activeTableId);
   const data = tables[activeTableIndex]?.data || initialGridData;
@@ -171,13 +493,104 @@ export default function App() {
   const [showRowHeightMenu, setShowRowHeightMenu] = useState(false);
   
   // Model settings
-  const [modelSettings, setModelSettings] = useState({
-    geminiKey: (import.meta as any).env?.VITE_GEMINI_API_KEY || '',
-    openaiKey: '',
-    openaiEndpoint: 'https://api-inference.modelscope.cn/v1',
-    openaiModel: 'deepseek-ai/DeepSeek-V3.2',
-    activeModel: 'openai'
+  const [modelSettings, setModelSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem('bitable_model_settings_v2');
+      if (saved) return JSON.parse(saved);
+      // fallback to migration
+      const savedV1 = localStorage.getItem('bitable_model_settings');
+      if (savedV1) {
+        const v1 = JSON.parse(savedV1);
+        return {
+          text: {
+            provider: v1.activeModel || 'openai',
+            key: v1.activeModel === 'gemini' ? (v1.geminiKey || '') : (v1.openaiKey || ''),
+            endpoint: v1.openaiEndpoint || 'https://api-inference.modelscope.cn/v1',
+            modelName: v1.openaiModel || 'deepseek-ai/DeepSeek-V3.2',
+          },
+          image: {
+            provider: 'openai',
+            key: '',
+            endpoint: 'https://api.openai.com/v1',
+            modelName: 'dall-e-3'
+          }
+        };
+      }
+    } catch (e) {}
+    return {
+      text: {
+        provider: 'openai',
+        key: '',
+        endpoint: 'https://api-inference.modelscope.cn/v1',
+        modelName: 'deepseek-ai/DeepSeek-V3.2'
+      },
+      image: {
+        provider: 'openai',
+        key: '',
+        endpoint: 'https://api.openai.com/v1',
+        modelName: 'dall-e-3'
+      }
+    };
   });
+
+  useEffect(() => {
+    localStorage.setItem('bitable_model_settings_v2', JSON.stringify(modelSettings));
+  }, [modelSettings]);
+
+  const [autoSaveSettings, setAutoSaveSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem('bitable_autosave_settings');
+      if (saved) return { enabled: false, interval: 5, ...JSON.parse(saved) };
+    } catch (e) {}
+    return { enabled: false, interval: 5 };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('bitable_autosave_settings', JSON.stringify({ ...autoSaveSettings, enabled: false })); // Don't persist enabled state as dir handle is lost
+  }, [autoSaveSettings]);
+
+  const dirHandleRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!autoSaveSettings.enabled) return;
+    
+    const intervalId = setInterval(async () => {
+      try {
+        if (!dirHandleRef.current) return;
+        
+        // Prepare clean data
+        const currentData = tables.find(t => t.id === activeTableId)?.data || data;
+        const validFieldIds = new Set(['id', ...currentData.fields.map((f: any) => f.id)]);
+        const cleanRecords = currentData.records.map((r: any) => {
+           const cleanR: any = {};
+           for (const key in r) {
+             if (validFieldIds.has(key)) {
+               cleanR[key] = r[key];
+             }
+           }
+           currentData.fields.forEach((f: any) => {
+             if (f.type === 'formula') {
+               cleanR[f.id] = computeFormulaValue(f, r, currentData.fields);
+             }
+           });
+           return cleanR;
+        });
+        const cleanData = { ...currentData, records: cleanRecords };
+        const jsonStr = JSON.stringify(cleanData, null, 2);
+
+        // Write to file
+        const fileHandle = await dirHandleRef.current.getFileHandle('bitable_backup.json', { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(jsonStr);
+        await writable.close();
+        console.log("Auto-saved to bitable_backup.json at", new Date().toLocaleTimeString());
+      } catch (err) {
+        console.error("Auto-save failed:", err);
+      }
+    }, (autoSaveSettings.interval || 5) * 60 * 1000);
+
+    return () => clearInterval(intervalId);
+  }, [autoSaveSettings.enabled, autoSaveSettings.interval, data, tables, activeTableId]);
 
   const handleUpdateRecord = (recordId: string, fieldId: string, value: any) => {
     setData(prev => ({
@@ -195,6 +608,13 @@ export default function App() {
         ...prev.records,
         { id: `rec_${Date.now()}` }
       ]
+    }));
+  };
+
+  const handleDeleteRecords = (recordIds: string[]) => {
+    setData(prev => ({
+      ...prev,
+      records: prev.records.filter(rec => !recordIds.includes(rec.id))
     }));
   };
 
@@ -221,17 +641,103 @@ export default function App() {
   };
 
   const handleRenameField = (fieldId: string, name: string) => {
-    setData(prev => ({
-      ...prev,
-      fields: prev.fields.map(f => f.id === fieldId ? { ...f, name } : f)
-    }));
+    setData(prev => {
+      const field = prev.fields.find(f => f.id === fieldId);
+      if (!field) return prev;
+      const oldName = field.name;
+      
+      const updateTemplate = (tpl: string | undefined) => {
+         if (!tpl) return tpl;
+         // replace {oldName} with {name} globally
+         return tpl.replace(new RegExp(`\\{${oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`, 'g'), `{${name}}`);
+      };
+
+      const newFields = prev.fields.map(f => {
+         if (f.id === fieldId) {
+            return { ...f, name };
+         }
+         // update prompts and templates using the old name
+         let updated = { ...f };
+         if (updated.prompt) {
+            updated.prompt = updateTemplate(updated.prompt) as string;
+         }
+         if (updated.aiImageConfig) {
+            updated.aiImageConfig = {
+               ...updated.aiImageConfig,
+               filenameTemplate: updateTemplate(updated.aiImageConfig.filenameTemplate),
+               sourceImageTemplate: updateTemplate(updated.aiImageConfig.sourceImageTemplate),
+               modelTemplate: updateTemplate(updated.aiImageConfig.modelTemplate),
+            };
+         }
+         return updated;
+      });
+
+      return {
+        ...prev,
+        fields: newFields
+      };
+    });
   };
 
   const handleChangeFieldType = (fieldId: string, type: FieldType) => {
-    setData(prev => ({
-      ...prev,
-      fields: prev.fields.map(f => f.id === fieldId ? { ...f, type } : f)
-    }));
+    setData(prev => {
+      const field = prev.fields.find(f => f.id === fieldId);
+      if (!field) return prev;
+      
+      let newFields = [...prev.fields];
+      let newRecords = [...prev.records];
+      let options = field.options || [];
+
+      // Converting TO text from select
+      if ((type === 'text' || type === 'aiText') && (field.type === 'singleSelect' || field.type === 'multiSelect')) {
+         const optMap = new Map(options.map(o => [o.id, o.name]));
+         newRecords = newRecords.map(r => {
+            const v = r[fieldId];
+            if (!v) return r;
+            if (Array.isArray(v)) {
+              return { ...r, [fieldId]: v.map(id => optMap.get(id) || id).join(', ') };
+            }
+            return { ...r, [fieldId]: optMap.get(v) || v };
+         });
+      } 
+      // Converting TO select FROM text
+      else if ((type === 'singleSelect' || type === 'multiSelect') && (field.type === 'text' || field.type === 'aiText' || field.type === 'url')) {
+         const newOptions = [...options];
+         
+         const getOrCreateOption = (val: string) => {
+           const trimmed = val.trim();
+           if (!trimmed) return null;
+           let opt = newOptions.find(o => o.name === trimmed);
+           if (!opt) {
+             const colors = ['bg-blue-100 text-blue-800', 'bg-green-100 text-green-800', 'bg-orange-100 text-orange-800', 'bg-red-100 text-red-800', 'bg-purple-100 text-purple-800', 'bg-yellow-100 text-yellow-800'];
+             opt = { id: `opt_${Date.now()}_${Math.floor(Math.random()*1000)}`, name: trimmed, color: colors[newOptions.length % colors.length] };
+             newOptions.push(opt);
+           }
+           return opt.id;
+         };
+
+         newRecords = newRecords.map(r => {
+            const v = r[fieldId];
+            if (typeof v === 'string') {
+               if (type === 'multiSelect') {
+                 const parts = v.split(',').map(s => s.trim()).filter(Boolean);
+                 const mapped = parts.map(getOrCreateOption).filter(Boolean);
+                 return { ...r, [fieldId]: mapped };
+               } else {
+                 return { ...r, [fieldId]: getOrCreateOption(v) };
+               }
+            }
+            return r;
+         });
+         options = newOptions;
+
+         newFields = newFields.map(f => f.id === fieldId ? { ...f, type, options } : f);
+         return { ...prev, fields: newFields, records: newRecords };
+      }
+
+      newFields = newFields.map(f => f.id === fieldId ? { ...f, type } : f);
+      return { ...prev, fields: newFields, records: newRecords };
+    });
   };
   
   const handleReorderFields = (sourceId: string, targetId: string) => {
@@ -271,6 +777,12 @@ export default function App() {
            cleanR[key] = r[key];
          }
        }
+       // Process formulas
+       data.fields.forEach((f: any) => {
+         if (f.type === 'formula') {
+           cleanR[f.id] = computeFormulaValue(f, r, data.fields);
+         }
+       });
        return cleanR;
     });
     const cleanData = { ...data, records: cleanRecords };
@@ -304,7 +816,29 @@ export default function App() {
     reader.onload = (ev) => {
       try {
         const parsed = JSON.parse(ev.target?.result as string);
-        if (parsed.fields && parsed.records) {
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].data) {
+           // It's a full project
+           if (isDrop) {
+               if (window.confirm(lang === 'en' ? "This is a project file. Replace current workspace (OK) or append as new tables (Cancel)?" : "这是一个工程文件。选“确定”替换当前工作区，选“取消”将表格追加到当前工作区。")) {
+                   setTablesInternal(parsed);
+                   setActiveTableId(parsed[0].id);
+                   setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+                   setHistory([]);
+                   setFuture([]);
+               } else {
+                   const newTables = parsed.map((t: any) => ({...t, id: `table_${Date.now()}_${Math.random().toString(36).substring(2, 9)}` }));
+                   setTables((prev: any[]) => [...prev, ...newTables]);
+                   setActiveTableId(newTables[0].id);
+               }
+           } else {
+               setTablesInternal(parsed);
+               setActiveTableId(parsed[0].id);
+               setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+               setHistory([]);
+               setFuture([]);
+           }
+        } else if (parsed.fields && parsed.records) {
+           // It's a single table
           if (isDrop) {
             const newId = `table_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
             const cleanName = file.name.replace(/\.[^/.]+$/, "");
@@ -318,7 +852,7 @@ export default function App() {
             setData(parsed);
           }
         } else {
-          alert('Invalid format. Must contain fields and records.');
+          alert('Invalid format. Must contain fields and records or be a valid project array.');
         }
       } catch (err) {
         alert('Invalid JSON file');
@@ -370,7 +904,9 @@ export default function App() {
       const row: any = {};
       data.fields.forEach(f => {
         let val = record[f.id];
-        if (f.type === 'attachment') {
+        if (f.type === 'formula') {
+          val = computeFormulaValue(f, record, data.fields);
+        } else if (f.type === 'attachment' || f.type === 'aiImage') {
           if (Array.isArray(val)) {
             val = val.map((a: any) => typeof a === 'string' ? a : a.url || a.name || '').join(',');
           } else if (typeof val === 'string') {
@@ -439,7 +975,7 @@ export default function App() {
     
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
-      if (file.name.endsWith('.json')) {
+      if (file.name.endsWith('.json') || file.name.endsWith('.aistudio.json')) {
         processJSONFile(file, true);
       } else if (file.name.endsWith('.csv')) {
         processCSVFile(file, true);
@@ -515,8 +1051,20 @@ export default function App() {
       {/* Sidebar Navigation */}
       <div className={`transition-all duration-300 ease-in-out flex flex-col shrink-0 flex-none overflow-hidden h-full z-10 bg-white border-r border-gray-200 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.05)] ${sidebarCollapsed ? 'w-14 items-center' : 'w-60'}`}>
         <div className="h-14 w-full flex items-center px-4 border-b border-gray-200 shrink-0 select-none">
-          <div className="w-8 h-8 rounded bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold shrink-0">B</div>
-          {!sidebarCollapsed && <span className="ml-2 font-bold text-gray-800 tracking-tight whitespace-nowrap">AI Studio Table</span>}
+          <div className="w-8 h-8 rounded bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold shrink-0">
+             <Sparkles className="w-5 h-5" />
+          </div>
+          {!sidebarCollapsed && (
+             <div className="ml-2 flex items-center group/proj overflow-hidden min-w-0 flex-1">
+                 <input 
+                   type="text" 
+                   value={projectName} 
+                   onChange={(e) => setProjectName(e.target.value)} 
+                   className="font-bold text-gray-800 tracking-tight whitespace-nowrap bg-transparent outline-none truncate hover:bg-gray-100 focus:bg-white focus:ring-1 focus:ring-blue-500 rounded px-1 -ml-1 transition-all w-full"
+                 />
+                 <Edit2 className="w-3.5 h-3.5 text-gray-400 opacity-0 group-hover/proj:opacity-100 transition-opacity ml-1 shrink-0 pointer-events-none" />
+             </div>
+          )}
         </div>
         <div className={`p-3 flex-1 overflow-y-auto hide-scrollbar select-none w-full ${sidebarCollapsed ? 'px-2' : ''}`}>
           {!sidebarCollapsed ? (
@@ -536,6 +1084,55 @@ export default function App() {
                       onClick={() => { setActiveTableId(tbl.id); setSortConfig(null); setFilterConfig({}); }}
                       onRename={(name) => handleRenameTable(tbl.id, name)}
                       onDelete={() => handleDeleteTable(tbl.id)}
+                      onDuplicate={() => handleDuplicateTable(tbl.id)}
+                      onIconChange={(icon) => handleIconChange(tbl.id, icon)}
+                      isDragged={draggedTableId === tbl.id}
+                      isDragOverTop={dragOverTableId === tbl.id && dragOverTablePosition === 'top'}
+                      isDragOverBottom={dragOverTableId === tbl.id && dragOverTablePosition === 'bottom'}
+                      onDragStart={(e) => {
+                         setDraggedTableId(tbl.id);
+                         e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        if (draggedTableId && draggedTableId !== tbl.id) {
+                          setDragOverTableId(tbl.id);
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          const mid = rect.top + rect.height / 2;
+                          setDragOverTablePosition(e.clientY < mid ? 'top' : 'bottom');
+                        }
+                      }}
+                      onDragLeave={() => {
+                         if (dragOverTableId === tbl.id) {
+                            setDragOverTableId(null);
+                            setDragOverTablePosition(null);
+                         }
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (draggedTableId && draggedTableId !== tbl.id) {
+                           setTables((prev: any[]) => {
+                              const dragIdx = prev.findIndex(t => t.id === draggedTableId);
+                              const dropIdx = prev.findIndex(t => t.id === tbl.id);
+                              if (dragIdx === -1 || dropIdx === -1) return prev;
+                              const newTables = [...prev];
+                              const [moved] = newTables.splice(dragIdx, 1);
+                              
+                              // Calculate new drop index after splice
+                              const finalDropIdx = newTables.findIndex(t => t.id === tbl.id);
+                              newTables.splice(dragOverTablePosition === 'bottom' ? finalDropIdx + 1 : finalDropIdx, 0, moved);
+                              return newTables;
+                           });
+                        }
+                        setDraggedTableId(null);
+                        setDragOverTableId(null);
+                        setDragOverTablePosition(null);
+                      }}
+                      onDragEnd={() => {
+                        setDraggedTableId(null);
+                        setDragOverTableId(null);
+                        setDragOverTablePosition(null);
+                      }}
                     />
                   ))}
                 </div>
@@ -550,9 +1147,9 @@ export default function App() {
                     key={tbl.id} 
                     title={tbl.name}
                     onClick={() => setActiveTableId(tbl.id)}
-                    className={`w-10 h-10 flex items-center justify-center rounded transition-colors ${tbl.id === activeTableId ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:bg-gray-100'}`}
+                    className={`w-10 h-10 flex items-center justify-center rounded transition-colors ${tbl.id === activeTableId ? 'bg-blue-100/80 text-blue-800' : 'text-gray-400 hover:bg-gray-200/50 hover:text-gray-900'}`}
                   >
-                    <GridIcon className="w-5 h-5" />
+                    {tbl.icon ? <span className="text-xl flex items-center justify-center -mt-px">{tbl.icon}</span> : <GridIcon className="w-5 h-5" />}
                   </button>
                ))}
             </div>
@@ -612,6 +1209,7 @@ export default function App() {
                 className="flex items-center text-lg font-bold text-gray-800 tracking-tight cursor-pointer hover:bg-gray-100 px-2 py-1 rounded transition-colors group"
                 onClick={() => setShowTableMenu(!showTableMenu)}
               >
+                 {tables[activeTableIndex]?.icon && <span className="mr-2 text-[22px] leading-none flex items-center">{tables[activeTableIndex].icon}</span>}
                  {activeTableName}
                  <ChevronDown className="w-4 h-4 ml-1 text-gray-400 opacity-50 group-hover:opacity-100 transition-opacity" />
               </div>
@@ -621,8 +1219,9 @@ export default function App() {
                     <button 
                       key={tbl.id}
                       onClick={() => { setActiveTableId(tbl.id); setShowTableMenu(false); }}
-                      className={`w-full text-left px-4 py-2 text-sm transition-colors ${tbl.id === activeTableId ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}
+                      className={`w-full flex items-center px-4 py-2 text-sm transition-colors ${tbl.id === activeTableId ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}
                     >
+                      {tbl.icon ? <span className="mr-2.5 text-base leading-none -mt-px w-4 text-center">{tbl.icon}</span> : <GridIcon className="w-4 h-4 mr-2.5 opacity-60" />}
                       {tbl.name}
                     </button>
                   ))}
@@ -655,32 +1254,94 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center space-x-2 text-sm text-gray-600">
-             <div className="relative group/load flex items-center space-x-1.5 px-3 py-1.5 rounded-md transition-colors font-medium border border-gray-200 cursor-pointer hover:bg-gray-50">
-                <Upload className="w-4 h-4 text-gray-500" />
-                <span>{lang === 'en' ? 'Load' : '导入'}</span>
-                <ChevronDown className="w-4 h-4 ml-1 opacity-50" />
-                <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 hidden group-hover/load:block">
-                  <button onClick={handleImportJSON} className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                     <FileJson className="w-4 h-4 mr-2" /> {lang === 'en' ? 'Load JSON' : '导入 JSON'}
-                  </button>
-                  <button onClick={handleImportCSV} className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                     <Upload className="w-4 h-4 mr-2" /> {lang === 'en' ? 'Load CSV' : '导入 CSV'}
-                  </button>
-                </div>
+             <div 
+               className="flex items-center justify-center space-x-1.5 px-3 h-8 rounded-md transition-colors font-medium border border-gray-200 hover:bg-gray-50 cursor-pointer"
+               onClick={handleNewProject}
+             >
+               <Plus className="w-4 h-4 text-gray-500" />
+               <span>{lang === 'en' ? 'New Project' : '新建工程'}</span>
              </div>
 
-             <div className="relative group/share flex items-center space-x-1.5 px-3 py-1.5 rounded-md transition-colors font-medium border border-gray-200 cursor-pointer hover:bg-gray-50">
-                <Share2 className="w-4 h-4 text-gray-500" />
-                <span>{lang === 'en' ? 'Share' : '分享'}</span>
-                <ChevronDown className="w-4 h-4 ml-1 opacity-50" />
-                <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 hidden group-hover/share:block text-gray-800">
-                  <button onClick={handleExportJSON} className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                     <FileJson className="w-4 h-4 mr-2" /> {lang === 'en' ? 'Export JSON' : '导出 JSON'}
-                  </button>
-                  <button onClick={handleExportCSV} className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                     <Download className="w-4 h-4 mr-2" /> {lang === 'en' ? 'Export CSV' : '导出 CSV'}
-                  </button>
+             <div 
+               className="flex items-center justify-center space-x-1.5 px-3 h-8 rounded-md transition-colors font-medium border border-gray-200 hover:bg-gray-50 cursor-pointer"
+               onClick={handleOpenProject}
+             >
+               <FolderOpen className="w-4 h-4 text-gray-500" />
+               <span>{lang === 'en' ? 'Open Project' : '打开工程'}</span>
+             </div>
+
+             <div className="relative">
+                <div 
+                  className="flex items-center justify-center space-x-1.5 px-3 h-8 rounded-md transition-colors font-medium border border-gray-200 hover:bg-gray-50 cursor-pointer"
+                  onClick={() => { setShowLoadMenu(!showLoadMenu); setShowShareMenu(false); setShowSaveMenu(false); }}
+                >
+                  <Upload className="w-4 h-4 text-gray-500" />
+                  <span>{lang === 'en' ? 'Import' : '导入'}</span>
+                  <ChevronDown className="w-4 h-4 ml-1 opacity-50" />
                 </div>
+                {showLoadMenu && (
+                  <div className="absolute top-full right-0 pt-1 w-48 z-50">
+                    <div className="fixed inset-0 z-40" onClick={() => setShowLoadMenu(false)}></div>
+                    <div className="bg-white border border-gray-200 rounded-lg shadow-lg py-1 relative z-50">
+                      <button onClick={() => { handleImportJSON(); setShowLoadMenu(false); }} className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                         <FileJson className="w-4 h-4 mr-2" /> {lang === 'en' ? 'Import JSON' : '导入 JSON'}
+                      </button>
+                      <button onClick={() => { handleImportCSV(); setShowLoadMenu(false); }} className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                         <Upload className="w-4 h-4 mr-2" /> {lang === 'en' ? 'Import CSV' : '导入 CSV'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+             </div>
+
+             <div className="flex items-stretch relative h-8">
+                 <div 
+                   className="flex items-center justify-center space-x-1.5 px-3 h-full rounded-l-md transition-colors font-medium border border-gray-200 hover:bg-gray-50 cursor-pointer text-blue-600 bg-blue-50/50"
+                   onClick={() => saveProjectToDisk(false)}
+                 >
+                   <Save className="w-4 h-4 text-blue-600" />
+                   <span>{lang === 'en' ? 'Save' : '保存'}</span>
+                 </div>
+                 <div 
+                   className="flex items-center justify-center px-2 h-full rounded-r-md transition-colors font-medium border-t border-b border-r border-gray-200 hover:bg-gray-50 cursor-pointer text-blue-600 bg-blue-50/50 -ml-px"
+                   onClick={() => { setShowSaveMenu(!showSaveMenu); setShowLoadMenu(false); setShowShareMenu(false); }}
+                 >
+                   <ChevronDown className="w-4 h-4" />
+                 </div>
+                 {showSaveMenu && (
+                   <div className="absolute top-full right-0 pt-1 w-48 z-50 text-gray-800">
+                     <div className="fixed inset-0 z-40" onClick={() => setShowSaveMenu(false)}></div>
+                     <div className="bg-white border border-gray-200 rounded-lg shadow-lg py-1 relative z-50">
+                       <button onClick={() => { saveProjectToDisk(true); setShowSaveMenu(false); }} className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                         <Save className="w-4 h-4 mr-2" /> {lang === 'en' ? 'Save As...' : '另存为...'}
+                       </button>
+                     </div>
+                   </div>
+                 )}
+             </div>
+
+             <div className="relative">
+                <div 
+                  className="flex items-center justify-center space-x-1.5 px-3 h-8 rounded-md transition-colors font-medium border border-gray-200 hover:bg-gray-50 cursor-pointer"
+                  onClick={() => { setShowShareMenu(!showShareMenu); setShowLoadMenu(false); setShowSaveMenu(false); }}
+                >
+                  <Share2 className="w-4 h-4 text-gray-500" />
+                  <span>{lang === 'en' ? 'Share' : '分享'}</span>
+                  <ChevronDown className="w-4 h-4 ml-1 opacity-50" />
+                </div>
+                {showShareMenu && (
+                  <div className="absolute top-full right-0 pt-1 w-48 z-50 text-gray-800">
+                    <div className="fixed inset-0 z-40" onClick={() => setShowShareMenu(false)}></div>
+                    <div className="bg-white border border-gray-200 rounded-lg shadow-lg py-1 relative z-50">
+                      <button onClick={() => { handleExportJSON(); setShowShareMenu(false); }} className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                       <FileJson className="w-4 h-4 mr-2" /> {lang === 'en' ? 'Export JSON' : '导出 JSON'}
+                    </button>
+                    <button onClick={() => { handleExportCSV(); setShowShareMenu(false); }} className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                       <Download className="w-4 h-4 mr-2" /> {lang === 'en' ? 'Export CSV' : '导出 CSV'}
+                    </button>
+                  </div>
+                </div>
+                )}
              </div>
           </div>
         </header>
@@ -734,6 +1395,7 @@ export default function App() {
             rowHeight={rowHeight}
             onUpdateRecord={handleUpdateRecord}
             onAddRecord={handleAddRecord}
+            onDeleteRecords={handleDeleteRecords}
             onAddField={handleAddField}
             onDeleteField={handleDeleteField}
             onRenameField={handleRenameField}
@@ -768,78 +1430,225 @@ export default function App() {
 
       {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-semibold">AI Settings</h2>
               <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-gray-800"><X className="w-5 h-5"/></button>
             </div>
             
-            <div className="space-y-4">
-               <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Active Model</label>
-                  <select 
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                    value={modelSettings.activeModel}
-                    onChange={e => setModelSettings(prev => ({ ...prev, activeModel: e.target.value }))}
-                  >
-                     <option value="gemini">Gemini (Google AI Studio)</option>
-                     <option value="openai">OpenAI Compatible</option>
-                  </select>
-               </div>
-               
-               {modelSettings.activeModel === 'gemini' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
-                    <input 
-                      type="password" 
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                      placeholder="AIzaSy..."
-                      value={modelSettings.geminiKey}
-                      onChange={e => setModelSettings(prev => ({ ...prev, geminiKey: e.target.value }))}
-                    />
-                  </div>
-               )}
-
-               {modelSettings.activeModel === 'openai' && (
-                  <>
+            <div className="grid grid-cols-2 gap-6">
+              {/* Text Model Settings */}
+              <div className="space-y-4">
+                <h3 className="font-semibold text-gray-700 pb-2 border-b">Text AI Model (LLM)</h3>
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      value={modelSettings.text?.provider || 'openai'}
+                      onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, provider: e.target.value } }))}
+                    >
+                       <option value="gemini">Gemini (Google AI Studio)</option>
+                       <option value="openai">OpenAI Compatible</option>
+                    </select>
+                 </div>
+                 
+                 {modelSettings.text?.provider === 'gemini' && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">API Endpoint</label>
-                      <input 
-                        type="url" 
-                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                        placeholder="https://api.openai.com/v1"
-                        value={modelSettings.openaiEndpoint}
-                        onChange={e => setModelSettings(prev => ({ ...prev, openaiEndpoint: e.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
-                      <input 
-                        type="text" 
-                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                        placeholder="gpt-3.5-turbo"
-                        value={modelSettings.openaiModel}
-                        onChange={e => setModelSettings(prev => ({ ...prev, openaiModel: e.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
                       <input 
                         type="password" 
                         className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                        placeholder="sk-..."
-                        value={modelSettings.openaiKey}
-                        onChange={e => setModelSettings(prev => ({ ...prev, openaiKey: e.target.value }))}
+                        placeholder="AIzaSy..."
+                        value={modelSettings.text?.key || ''}
+                        onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, key: e.target.value } }))}
                       />
                     </div>
-                  </>
-               )}
+                 )}
+
+                 {modelSettings.text?.provider === 'openai' && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">API Endpoint</label>
+                        <input 
+                          type="url" 
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                          placeholder="https://api.openai.com/v1"
+                          value={modelSettings.text?.endpoint || ''}
+                          onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, endpoint: e.target.value } }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+                        <input 
+                          type="text" 
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                          placeholder="gpt-3.5-turbo"
+                          value={modelSettings.text?.modelName || ''}
+                          onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, modelName: e.target.value } }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                        <input 
+                          type="password" 
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                          placeholder="sk-..."
+                          value={modelSettings.text?.key || ''}
+                          onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, key: e.target.value } }))}
+                        />
+                      </div>
+                    </>
+                 )}
+              </div>
+
+              {/* Image Model Settings */}
+              <div className="space-y-4">
+                <h3 className="font-semibold text-gray-700 pb-2 border-b">Image AI Model</h3>
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      value={modelSettings.image?.provider || 'openai'}
+                      onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, provider: e.target.value } }))}
+                    >
+                       <option value="gemini">Gemini (Google AI Studio)</option>
+                       <option value="gemini-custom">Gemini (Compatible Endpoint)</option>
+                       <option value="openai">OpenAI Compatible</option>
+                    </select>
+                 </div>
+                 
+                 {(modelSettings.image?.provider === 'gemini' || modelSettings.image?.provider === 'gemini-custom') && (
+                    <>
+                      {modelSettings.image?.provider === 'gemini-custom' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">API Endpoint</label>
+                            <input 
+                              type="url" 
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                              placeholder="https://api.example.com/v1beta/models/..."
+                              value={modelSettings.image?.endpoint || ''}
+                              onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, endpoint: e.target.value } }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Model Name (Use ',' for multiple models)</label>
+                            <input 
+                              type="text" 
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                              placeholder="gemini-3.1-flash-image-preview, gemini-3-pro-image-preview"
+                              value={modelSettings.image?.modelName || ''}
+                              onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, modelName: e.target.value } }))}
+                            />
+                          </div>
+                        </>
+                      )}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
+                        <input 
+                          type="password" 
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                          placeholder="AIzaSy..."
+                          value={modelSettings.image?.key || ''}
+                          onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, key: e.target.value } }))}
+                        />
+                      </div>
+                    </>
+                 )}
+
+                 {modelSettings.image?.provider === 'openai' && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">API Endpoint</label>
+                        <input 
+                          type="url" 
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                          placeholder="https://api.openai.com/v1"
+                          value={modelSettings.image?.endpoint || ''}
+                          onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, endpoint: e.target.value } }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+                        <input 
+                          type="text" 
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                          placeholder="dall-e-3"
+                          value={modelSettings.image?.modelName || ''}
+                          onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, modelName: e.target.value } }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                        <input 
+                          type="password" 
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                          placeholder="sk-..."
+                          value={modelSettings.image?.key || ''}
+                          onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, key: e.target.value } }))}
+                        />
+                      </div>
+                    </>
+                 )}
+              </div>
+            </div>
+
+            <hr className="my-6 border-gray-200" />
+            
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold">Auto-Save Backup</h2>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="flex items-center space-x-2">
+                <input 
+                  type="checkbox" 
+                  id="autosave-toggle"
+                  checked={autoSaveSettings.enabled}
+                  onChange={async (e) => {
+                    const checked = e.target.checked;
+                    if (checked) {
+                      try {
+                        const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+                        dirHandleRef.current = handle;
+                        setAutoSaveSettings(prev => ({ ...prev, enabled: true }));
+                      } catch (err) {
+                        console.error('Failed to get directory', err);
+                        setAutoSaveSettings(prev => ({ ...prev, enabled: false }));
+                      }
+                    } else {
+                      dirHandleRef.current = null;
+                      setAutoSaveSettings(prev => ({ ...prev, enabled: false }));
+                    }
+                  }}
+                  className="w-4 h-4 text-blue-600 rounded border-gray-300"
+                />
+                <label htmlFor="autosave-toggle" className="text-sm font-medium text-gray-700">Enable local JSON auto-save (prompts for folder)</label>
+              </div>
+              
+              {autoSaveSettings.enabled && (
+                 <div>
+                   <label className="block text-sm font-medium text-gray-700 mb-1">Save Interval (Minutes)</label>
+                   <input 
+                     type="number"
+                     min="1"
+                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                     value={autoSaveSettings.interval}
+                     onChange={e => setAutoSaveSettings(prev => ({ ...prev, interval: parseInt(e.target.value) || 5 }))}
+                   />
+                 </div>
+              )}
             </div>
 
             <div className="mt-6 flex justify-end">
                <button onClick={() => setShowSettings(false)} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium text-sm hover:bg-blue-700">Done</button>
             </div>
           </div>
+        </div>
+      )}
+      {toastMessage && (
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-[100] px-4 py-2 bg-gray-800 text-white rounded shadow-lg text-sm transition-opacity duration-300 pointer-events-none">
+          {toastMessage}
         </div>
       )}
       </div>

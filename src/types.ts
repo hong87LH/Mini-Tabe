@@ -1,4 +1,4 @@
-export type FieldType = 'text' | 'number' | 'singleSelect' | 'multiSelect' | 'date' | 'checkbox' | 'person' | 'url' | 'attachment' | 'aiText';
+export type FieldType = 'text' | 'number' | 'singleSelect' | 'multiSelect' | 'date' | 'checkbox' | 'person' | 'url' | 'attachment' | 'aiText' | 'formula' | 'aiImage';
 
 export interface SelectOption {
   id: string;
@@ -18,8 +18,19 @@ export interface Field {
   type: FieldType;
   options?: SelectOption[];
   width?: number;
-  prompt?: string; // For aiText
-  refFields?: string[]; // For aiText
+  prompt?: string; // For aiText and formula
+  refFields?: string[]; // For aiText, formula, aiImage
+  aiImageConfig?: {
+    count?: number;
+    size?: string;
+    folderPath?: string;
+    resolution?: string;
+    ratio?: string;
+    filenameTemplate?: string;
+    modelTemplate?: string;
+    sourceImageTemplate?: string;
+    sourceImageFields?: string[]; // Legacy
+  };
 }
 
 export interface BaseRecord {
