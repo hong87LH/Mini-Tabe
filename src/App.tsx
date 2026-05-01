@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { initialGridData } from './initialData';
 import { Grid } from './components/Grid';
 import { FieldType, Attachment, GridData } from './types';
-import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy } from 'lucide-react';
+import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy } from 'lucide-react';
 import Papa from 'papaparse';
 import { Parser } from 'expr-eval';
 
@@ -78,7 +78,8 @@ const TABLE_ICONS = [
   '💻','📱','🔋','🔌','⌨️','🌐',
   '📷','🖼️','🎨','🌅','📸','🌆',
   '🎬','🎥','📺','🎞️','▶️','📹',
-  '📄','📚','📖','📋','🧾','📕'
+  '📄','📚','📖','📋','🧾','📕',
+  '📗','📘','📙','🖋️','📓'
 ];
 
 function TableNavItem({ 
@@ -433,8 +434,42 @@ export default function App() {
   const data = tables[activeTableIndex]?.data || initialGridData;
   const activeTableName = tables[activeTableIndex]?.name || 'Master Table';
 
-  const [sortConfig, setSortConfig] = useState<{ fieldId: string, direction: 'asc'|'desc' } | null>(null);
-  const [filterConfig, setFilterConfig] = useState<Record<string, string>>({});
+  const [sortConfigs, setSortConfigs] = useState<Record<string, { fieldId: string, direction: 'asc'|'desc' }>>({});
+  const [filterConfigs, setFilterConfigs] = useState<Record<string, Record<string, string>>>({});
+  const [groupConfigs, setGroupConfigs] = useState<Record<string, { fieldId: string, direction: 'asc'|'desc' }[]>>({});
+
+  const sortConfig = sortConfigs[activeTableId] || null;
+  const setSortConfig = (conf: { fieldId: string, direction: 'asc'|'desc' } | null) => {
+    setSortConfigs(prev => {
+        const next = { ...prev };
+        if (conf) next[activeTableId] = conf;
+        else delete next[activeTableId];
+        return next;
+    });
+  };
+
+  const filterConfig = filterConfigs[activeTableId] || {};
+  const setFilterConfig = (conf: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) => {
+    setFilterConfigs(prev => {
+        const next = { ...prev };
+        if (typeof conf === 'function') {
+            next[activeTableId] = conf(prev[activeTableId] || {});
+        } else {
+            next[activeTableId] = conf;
+        }
+        return next;
+    });
+  };
+
+  const groupConfig = groupConfigs[activeTableId] || [];
+  const setGroupConfig = (conf: { fieldId: string, direction: 'asc'|'desc' }[]) => {
+    setGroupConfigs(prev => ({ ...prev, [activeTableId]: conf }));
+  };
+
+  const [showGlobalFilterMenu, setShowGlobalFilterMenu] = useState(false);
+  const [showHideFieldsMenu, setShowHideFieldsMenu] = useState(false);
+  const [showGlobalSortMenu, setShowGlobalSortMenu] = useState(false);
+  const [showGroupMenu, setShowGroupMenu] = useState(false);
 
   const setData = (update: any) => {
     setTables(prev => {
@@ -467,7 +502,6 @@ export default function App() {
       }
     }]);
     setActiveTableId(newId);
-    setSortConfig(null);
   };
 
   const handleRenameTable = (id: string, newName: string) => {
@@ -611,6 +645,15 @@ export default function App() {
     }));
   };
 
+  const handleInsertRecords = (index: number, count: number) => {
+    setData(prev => {
+      const newRecords = Array.from({ length: count }, (_, i) => ({ id: `rec_${Date.now()}_${i}` }));
+      const records = [...prev.records];
+      records.splice(index, 0, ...newRecords);
+      return { ...prev, records };
+    });
+  };
+
   const handleDeleteRecords = (recordIds: string[]) => {
     setData(prev => ({
       ...prev,
@@ -625,6 +668,27 @@ export default function App() {
         ...prev.fields,
         { id: `fld_${Date.now()}`, name: 'New Field', type: 'text', width: 150 }
       ]
+    }));
+  };
+
+  const handleInsertField = (index: number, count: number = 1) => {
+    setData((prev: any) => {
+      const newFields = Array.from({ length: count }).map((_, i) => ({ 
+        id: `fld_${Date.now()}_${i}`, 
+        name: count > 1 ? `New Field ${i + 1}` : 'New Field', 
+        type: 'text', 
+        width: 150 
+      }));
+      const fields = [...prev.fields];
+      fields.splice(index, 0, ...newFields);
+      return { ...prev, fields };
+    });
+  };
+
+  const handleFreezeColumn = (fieldId: string | null) => {
+    setData((prev: any) => ({
+      ...prev,
+      frozenColId: fieldId
     }));
   };
 
@@ -740,16 +804,20 @@ export default function App() {
     });
   };
   
-  const handleReorderFields = (sourceId: string, targetId: string) => {
+  const handleReorderFields = (sourceId: string | string[], targetId: string) => {
     setData(prev => {
-      const sourceIndex = prev.fields.findIndex(f => f.id === sourceId);
-      const targetIndex = prev.fields.findIndex(f => f.id === targetId);
-      if (sourceIndex === -1 || targetIndex === -1 || sourceIndex === targetIndex) return prev;
+      const sourceIds = Array.isArray(sourceId) ? sourceId : [sourceId];
+      if (sourceIds.includes(targetId)) return prev;
+
+      const fieldsMap = new Map(prev.fields.map(f => [f.id, f]));
+      const sourceFields = sourceIds.map(id => fieldsMap.get(id)!).filter(Boolean);
       
-      const newFields = [...prev.fields];
-      const [movedItem] = newFields.splice(sourceIndex, 1);
-      newFields.splice(targetIndex, 0, movedItem);
+      let newFields = prev.fields.filter(f => !sourceIds.includes(f.id));
+      const targetIndex = newFields.findIndex(f => f.id === targetId);
       
+      if (targetIndex === -1) return prev;
+      
+      newFields.splice(targetIndex, 0, ...sourceFields);
       return { ...prev, fields: newFields };
     });
   };
@@ -1044,6 +1112,25 @@ export default function App() {
     }
   }
 
+  if (groupConfig.length > 0) {
+      displayRecords.sort((a, b) => {
+          for (const grp of groupConfig) {
+              let vA = a[grp.fieldId];
+              let vB = b[grp.fieldId];
+              
+              if (vA == null) vA = '';
+              if (vB == null) vB = '';
+              
+              let strA = typeof vA === 'object' ? JSON.stringify(vA) : String(vA);
+              let strB = typeof vB === 'object' ? JSON.stringify(vB) : String(vB);
+
+              if (strA < strB) return grp.direction === 'asc' ? -1 : 1;
+              if (strA > strB) return grp.direction === 'asc' ? 1 : -1;
+          }
+          return 0; 
+      });
+  }
+
   const displayData = { ...data, records: displayRecords };
 
   return (
@@ -1081,7 +1168,7 @@ export default function App() {
                       key={tbl.id}
                       tbl={tbl}
                       isActive={tbl.id === activeTableId}
-                      onClick={() => { setActiveTableId(tbl.id); setSortConfig(null); setFilterConfig({}); }}
+                      onClick={() => { setActiveTableId(tbl.id); }}
                       onRename={(name) => handleRenameTable(tbl.id, name)}
                       onDelete={() => handleDeleteTable(tbl.id)}
                       onDuplicate={() => handleDuplicateTable(tbl.id)}
@@ -1351,10 +1438,210 @@ export default function App() {
           <div className="flex items-center space-x-1 text-sm text-gray-600">
              <ToolbarButton icon={<GridIcon className="w-4 h-4 text-blue-600"/>} label={lang === 'en' ? "Main Grid" : "默认视图"} active />
              <div className="w-px h-3.5 bg-gray-300 mx-1.5" />
-             <ToolbarButton icon={<EyeOff className="w-4 h-4"/>} label={lang === 'en' ? "Hide fields" : "隐藏字段"} />
-             <ToolbarButton icon={<Filter className="w-4 h-4"/>} label={lang === 'en' ? "Filter" : "筛选"} />
-             <ToolbarButton icon={<LayoutTemplate className="w-4 h-4"/>} label={lang === 'en' ? "Group" : "分组"} />
-             <ToolbarButton icon={<ArrowDownUp className="w-4 h-4"/>} label={lang === 'en' ? "Sort" : "排序"} />
+             <div className="relative">
+               <ToolbarButton 
+                 icon={<EyeOff className="w-4 h-4"/>} 
+                 label={lang === 'en' ? "Hide fields" : "隐藏字段"} 
+                 onClick={() => setShowHideFieldsMenu(!showHideFieldsMenu)} 
+               />
+               {showHideFieldsMenu && (
+                 <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 max-h-96 overflow-y-auto">
+                    <div className="fixed inset-0 z-40" onClick={() => setShowHideFieldsMenu(false)}></div>
+                    <div className="relative z-50 py-1">
+                      {data.fields.map((field: any) => (
+                         <div 
+                           key={field.id} 
+                           className="flex items-center justify-between px-4 py-2 hover:bg-gray-50 cursor-pointer"
+                           onClick={() => {
+                             handleUpdateField(field.id, { hidden: !field.hidden });
+                           }}
+                         >
+                           <span className="text-sm text-gray-700">{field.name}</span>
+                           <div className="text-gray-400 hover:text-gray-600 transition-colors">
+                              {field.hidden ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                           </div>
+                         </div>
+                      ))}
+                    </div>
+                 </div>
+               )}
+             </div>
+             <div className="relative">
+               <button 
+                 className={`flex items-center space-x-1 hover:bg-gray-100 px-2 py-1.5 rounded transition-colors ${Object.keys(filterConfig).length > 0 ? 'bg-blue-50 text-blue-700' : ''}`}
+                 onClick={() => setShowGlobalFilterMenu(!showGlobalFilterMenu)}
+               >
+                 <Filter className={`w-4 h-4 ${Object.keys(filterConfig).length > 0 ? 'text-blue-600' : 'text-gray-500'}`} />
+                 <span>{lang === 'en' ? "Filter" : "筛选"}</span>
+               </button>
+               {showGlobalFilterMenu && (
+                 <div className="absolute top-full left-0 mt-1 w-[320px] bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
+                    <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setShowGlobalFilterMenu(false); }}></div>
+                    <div className="relative z-50">
+                    <div className="px-3 py-2 text-sm font-medium border-b border-gray-100">{lang === 'en' ? 'Filter conditions' : '筛选条件'}</div>
+                    <div className="p-2 space-y-2">
+                       {Object.entries(filterConfig).map(([fieldId, keyword], i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <select 
+                              className="w-1/2 text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                              value={fieldId}
+                              onChange={(e) => {
+                                const newConf = { ...filterConfig };
+                                delete newConf[fieldId];
+                                newConf[e.target.value] = keyword;
+                                setFilterConfig(newConf);
+                              }}
+                            >
+                              {data.fields.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                            </select>
+                            <input
+                              className="w-1/2 text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder={lang === 'en' ? "Contains keyword..." : "包含关键字..."}
+                              value={keyword}
+                              onChange={(e) => {
+                                setFilterConfig({ ...filterConfig, [fieldId]: e.target.value });
+                              }}
+                            />
+                            <button className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-red-500 shrink-0" onClick={() => {
+                              const newConf = { ...filterConfig };
+                              delete newConf[fieldId];
+                              setFilterConfig(newConf);
+                            }}>
+                              <Trash2 className="w-4 h-4"/>
+                            </button>
+                          </div>
+                       ))}
+                       <button 
+                         className="text-sm px-2 py-1 text-blue-600 hover:bg-blue-50 flex items-center rounded w-full"
+                         onClick={() => {
+                             const unassigned = data.fields.find((f: any) => filterConfig[f.id] === undefined);
+                             if (unassigned) {
+                                 setFilterConfig({ ...filterConfig, [unassigned.id]: '' });
+                             }
+                         }}
+                       >
+                         <Plus className="w-4 h-4 mr-1" /> {lang === 'en' ? 'Add filter' : '添加筛选'}
+                       </button>
+                    </div>
+                    </div>
+                 </div>
+               )}
+             </div>
+             <div className="relative">
+               <button 
+                 className={`flex items-center space-x-1 hover:bg-gray-100 px-2 py-1.5 rounded transition-colors ${groupConfig.length > 0 ? 'bg-blue-50 text-blue-700' : ''}`}
+                 onClick={() => setShowGroupMenu(!showGroupMenu)}
+               >
+                 <LayoutTemplate className={`w-4 h-4 ${groupConfig.length > 0 ? 'text-blue-600' : 'text-gray-500'}`} />
+                 <span>{lang === 'en' ? "Group" : "分组"}</span>
+               </button>
+               {showGroupMenu && (
+                 <div className="absolute top-full left-0 mt-1 w-[320px] bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
+                    <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setShowGroupMenu(false); }}></div>
+                    <div className="relative z-50">
+                    <div className="px-3 py-2 text-sm font-medium border-b border-gray-100">{lang === 'en' ? 'Group by fields' : '分组条件'}</div>
+                    <div className="p-2 space-y-2">
+                       {groupConfig.map((grp, i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <select 
+                              className="flex-1 text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                              value={grp.fieldId}
+                              onChange={(e) => {
+                                const newConf = [...groupConfig];
+                                newConf[i].fieldId = e.target.value;
+                                setGroupConfig(newConf);
+                              }}
+                            >
+                              {data.fields.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                            </select>
+                            <select 
+                              className="text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                              value={grp.direction}
+                              onChange={(e) => {
+                                const newConf = [...groupConfig];
+                                newConf[i].direction = e.target.value as 'asc'|'desc';
+                                setGroupConfig(newConf);
+                              }}
+                            >
+                              <option value="asc">{lang === 'en' ? 'Ascending' : '升序'}</option>
+                              <option value="desc">{lang === 'en' ? 'Descending' : '降序'}</option>
+                            </select>
+                            <button className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-red-500" onClick={() => {
+                              setGroupConfig(groupConfig.filter((_, idx) => idx !== i));
+                            }}>
+                              <Trash2 className="w-4 h-4"/>
+                            </button>
+                          </div>
+                       ))}
+                       {groupConfig.length < data.fields.length && (
+                         <button 
+                           className="text-sm px-2 py-1 text-blue-600 hover:bg-blue-50 flex items-center rounded w-full"
+                           onClick={() => setGroupConfig([...groupConfig, { fieldId: data.fields[0].id, direction: 'asc' }])}
+                         >
+                           <Plus className="w-4 h-4 mr-1" /> {lang === 'en' ? 'Add group' : '添加分组'}
+                         </button>
+                       )}
+                    </div>
+                    </div>
+                 </div>
+               )}
+             </div>
+             <div className="relative">
+               <button 
+                 className={`flex items-center space-x-1 hover:bg-gray-100 px-2 py-1.5 rounded transition-colors ${sortConfig ? 'bg-blue-50 text-blue-700' : ''}`}
+                 onClick={() => setShowGlobalSortMenu(!showGlobalSortMenu)}
+               >
+                 <ArrowDownUp className={`w-4 h-4 ${sortConfig ? 'text-blue-600' : 'text-gray-500'}`} />
+                 <span>{lang === 'en' ? "Sort" : "排序"}</span>
+               </button>
+               {showGlobalSortMenu && (
+                 <div className="absolute top-full left-0 mt-1 w-[320px] bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
+                    <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setShowGlobalSortMenu(false); }}></div>
+                    <div className="relative z-50">
+                    <div className="px-3 py-2 text-sm font-medium border-b border-gray-100">{lang === 'en' ? 'Sort' : '排序'}</div>
+                    <div className="p-2 space-y-2">
+                       {sortConfig ? (
+                          <div className="flex items-center gap-2">
+                            <select 
+                              className="flex-1 text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                              value={sortConfig.fieldId}
+                              onChange={(e) => {
+                                setSortConfig({ ...sortConfig, fieldId: e.target.value });
+                              }}
+                            >
+                              {data.fields.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                            </select>
+                            <select 
+                              className="text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                              value={sortConfig.direction}
+                              onChange={(e) => {
+                                setSortConfig({ ...sortConfig, direction: e.target.value as 'asc'|'desc' });
+                              }}
+                            >
+                              <option value="asc">{lang === 'en' ? 'Ascending' : '升序'}</option>
+                              <option value="desc">{lang === 'en' ? 'Descending' : '降序'}</option>
+                            </select>
+                            <button className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-red-500" onClick={() => {
+                              setSortConfig(null);
+                            }}>
+                              <Trash2 className="w-4 h-4"/>
+                            </button>
+                          </div>
+                       ) : (
+                         <button 
+                           className="text-sm px-2 py-1 text-blue-600 hover:bg-blue-50 flex items-center rounded w-full"
+                           onClick={() => {
+                               setSortConfig({ fieldId: data.fields[0].id, direction: 'asc' });
+                           }}
+                         >
+                           <Plus className="w-4 h-4 mr-1" /> {lang === 'en' ? 'Add sort' : '添加排序'}
+                         </button>
+                       )}
+                    </div>
+                    </div>
+                 </div>
+               )}
+             </div>
              <div className="relative">
                <button 
                  className="flex items-center space-x-1 hover:bg-gray-100 px-2 py-1.5 rounded transition-colors"
@@ -1393,10 +1680,14 @@ export default function App() {
             lang={lang}
             data={displayData}
             rowHeight={rowHeight}
+            groupConfig={groupConfig}
             onUpdateRecord={handleUpdateRecord}
             onAddRecord={handleAddRecord}
+            onInsertRecords={handleInsertRecords}
             onDeleteRecords={handleDeleteRecords}
             onAddField={handleAddField}
+            onInsertField={handleInsertField}
+            onFreezeColumn={handleFreezeColumn}
             onDeleteField={handleDeleteField}
             onRenameField={handleRenameField}
             onChangeFieldType={handleChangeFieldType}
@@ -1656,9 +1947,9 @@ export default function App() {
   );
 }
 
-function ToolbarButton({ icon, label, active = false }: { icon: React.ReactNode, label: string, active?: boolean }) {
+function ToolbarButton({ icon, label, active = false, onClick }: { icon: React.ReactNode, label: string, active?: boolean, onClick?: () => void }) {
   return (
-    <button className={`flex items-center space-x-1.5 px-2 py-1 rounded hover:bg-gray-100 transition-colors ${active ? 'bg-gray-100' : ''}`}>
+    <button className={`flex items-center space-x-1.5 px-2 py-1 rounded hover:bg-gray-100 transition-colors ${active ? 'bg-gray-100' : ''}`} onClick={onClick}>
       {icon}
       <span>{label}</span>
       {active && <ChevronDown className="w-3.5 h-3.5 opacity-60 ml-0.5" />}

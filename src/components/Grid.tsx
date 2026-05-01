@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn } from '../lib/utils';
-import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 
@@ -188,11 +188,14 @@ interface GridProps {
   onUpdateRecord: (recordId: string, fieldId: string, value: any) => void;
   onDeleteRecords?: (recordIds: string[]) => void;
   onAddRecord: () => void;
+  onInsertRecords?: (index: number, count: number) => void;
   onAddField: () => void;
+  onInsertField?: (index: number, count?: number) => void;
+  onFreezeColumn?: (fieldId: string | null) => void;
   onDeleteField?: (fieldId: string) => void;
   onRenameField: (fieldId: string, name: string) => void;
   onChangeFieldType: (fieldId: string, type: FieldType) => void;
-  onReorderFields: (sourceId: string, targetId: string) => void;
+  onReorderFields: (sourceId: string | string[], targetId: string) => void;
   onReorderRecords: (sourceId: string, targetId: string) => void;
   onResizeCol: (fieldId: string, width: number) => void;
   onUpdateField: (fieldId: string, updates: Partial<Field>) => void;
@@ -200,6 +203,7 @@ interface GridProps {
   onFilterField?: (fieldId: string, keyword: string) => void;
   sortConfig?: { fieldId: string, direction: 'asc'|'desc' } | null;
   filterConfig?: Record<string, string>;
+  groupConfig?: { fieldId: string, direction: 'asc'|'desc' }[];
   rowHeight: 'short'|'medium'|'tall'|'extra';
   modelSettings: any;
   lang?: 'en' | 'zh';
@@ -383,11 +387,16 @@ const triggerDownload = async (url: string, filename: string, folderPath?: strin
   return undefined;
 };
 
-export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAddField, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, rowHeight, modelSettings, lang = 'zh' }: GridProps) {
+export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh' }: GridProps) {
+  const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const [activeCell, setActiveCell] = useState<{ recordId: string; fieldId: string } | null>(null);
   const [forceEdit, setForceEdit] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+  const [selectedColIds, setSelectedColIds] = useState<Set<string>>(new Set());
   const [contextMenuState, setContextMenuState] = useState<{ x: number, y: number, recordId?: string } | null>(null);
+  const [colContextMenuState, setColContextMenuState] = useState<{ x: number, y: number, fieldId?: string } | null>(null);
+  const [insertRowCount, setInsertRowCount] = useState(1);
+  const [insertColCount, setInsertColCount] = useState(1);
   const [cutBox, setCutBox] = useState<{ minR: number, maxR: number, minC: number, maxC: number } | null>(null);
   
   const [draggedColId, setDraggedColId] = useState<string | null>(null);
@@ -480,7 +489,7 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
           for (let c = minC; c <= maxC; c++) {
               if (allSelectedCells.has(`${r},${c}`)) {
                   const record = data.records[r];
-                  const field = data.fields[c];
+                  const field = visibleFields[c];
                   let val = record[field.id];
                   if (field.type === 'attachment') {
                      if (Array.isArray(val)) {
@@ -544,7 +553,7 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
              if (rIdx >= data.records.length) break;
              for (let j = 0; j < rows[0].length; j++) {
                 const cIdx = minC + j;
-                if (cIdx >= data.fields.length) break;
+                if (cIdx >= visibleFields.length) break;
                 pasteCells.push({ rIdx, cIdx, val: rows[i][j] });
              }
           }
@@ -552,7 +561,7 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
 
       for (const { rIdx, cIdx, val: rawVal } of pasteCells) {
           const record = data.records[rIdx];
-          const field = data.fields[cIdx];
+          const field = visibleFields[cIdx];
           let val = rawVal;
           
           if (field.type === 'attachment' || field.type === 'aiImage') {
@@ -584,7 +593,7 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
            for (let c = cutBox.minC; c <= cutBox.maxC; c++) {
               // skip updating if the cut cell was just overwritten by the paste (optimisation)
               // but for safety, clear it.
-              const field = data.fields[c];
+              const field = visibleFields[c];
               onUpdateRecord(data.records[r].id, field.id, field.type === 'multiSelect' ? [] : '');
            }
          }
@@ -596,10 +605,15 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
          if (!selectionBox && extraSelectedCells.length === 0) return;
-         if (selectionBox && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1 && selectionBox.minC === selectionBox.maxC && extraSelectedCells.length === 0) {
-             const fieldId = data.fields[selectionBox.minC].id;
+         if (selectionBox && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1 && extraSelectedCells.length === 0) {
+             const fieldIds = [];
+             for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+                 fieldIds.push(visibleFields[c].id);
+             }
              if (onDeleteField) {
-                 onDeleteField(fieldId);
+                 fieldIds.forEach(id => onDeleteField(id));
+                 setSelectionStart(null);
+                 setSelectionEnd(null);
                  return;
              }
          }
@@ -607,13 +621,13 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
          if (selectionBox) {
            for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
              for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
-                const field = data.fields[c];
+                const field = visibleFields[c];
                 onUpdateRecord(data.records[r].id, field.id, field.type === 'multiSelect' ? [] : '');
              }
            }
          }
          extraSelectedCells.forEach(cell => {
-             const field = data.fields[cell.c];
+             const field = visibleFields[cell.c];
              if (field) {
                onUpdateRecord(data.records[cell.r].id, field.id, field.type === 'multiSelect' ? [] : '');
              }
@@ -630,7 +644,7 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
          const colVals: string[] = [];
          const record = data.records[r];
          for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
-            const field = data.fields[c];
+            const field = visibleFields[c];
             let val = record[field.id];
             if (field.type === 'attachment') {
                if (Array.isArray(val)) {
@@ -681,9 +695,23 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
   }[rowHeight];
 
   const handleDragStartCol = (e: React.DragEvent, id: string) => {
-    setDraggedColId(id);
+    let idsToDrag = [id];
+    if (selectionBox && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1) {
+      const selectedIds = [];
+      let isIdInSelection = false;
+      for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+        const fieldId = visibleFields[c].id;
+        selectedIds.push(fieldId);
+        if (fieldId === id) isIdInSelection = true;
+      }
+      if (isIdInSelection && selectedIds.length > 1) {
+        idsToDrag = selectedIds;
+      }
+    }
+    
+    setDraggedColId(idsToDrag.join(','));
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', `col:${id}`); // Dummy data
+    e.dataTransfer.setData('text/plain', `col:${idsToDrag.join(',')}`); 
   };
 
   const handleDragStartRow = (e: React.DragEvent, id: string) => {
@@ -963,16 +991,28 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
     }
   };
   
-  const totalTableWidth = data.fields.reduce((acc, f) => acc + (f.width || 150), 0) + 64; // 64 for row corner
+  const totalTableWidth = visibleFields.reduce((acc, f) => acc + (f.width || 150), 0) + 64; // 64 for row corner
+
+  let frozenColIndex = -1;
+  if (data.frozenColId) {
+    frozenColIndex = visibleFields.findIndex(f => f.id === data.frozenColId);
+  }
+
+  const frozenLeftOffsets: number[] = [];
+  let currentLeft = 64; // Starting after the 64px row corner
+  for (let i = 0; i <= frozenColIndex; i++) {
+    frozenLeftOffsets.push(currentLeft);
+    currentLeft += visibleFields[i].width || 150;
+  }
 
   return (
     <div className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate' }}>
-      <table className="min-w-full text-left border-collapse" style={{ tableLayout: 'fixed', width: totalTableWidth }}>
-        <thead className="sticky top-0 z-20 bg-gray-50 text-sm border-b border-gray-200">
+      <table className="min-w-full text-left" style={{ tableLayout: 'fixed', width: totalTableWidth, borderCollapse: 'separate', borderSpacing: 0 }}>
+        <thead className="sticky top-0 z-40 bg-gray-50 text-sm">
           <tr>
-            <th className="sticky left-0 w-16 bg-gray-50 border-r border-gray-200 z-30 p-0">
+            <th className="sticky top-0 left-0 w-16 bg-gray-50 border-r border-b border-gray-200 z-[45] p-0">
               <div 
-                 className="w-full justify-center flex items-center h-8 text-gray-400 border-b border-t border-transparent cursor-pointer"
+                 className="w-full justify-center flex items-center h-8 text-gray-400 border-t border-transparent cursor-pointer"
                  onClick={() => {
                    if (selectedRecordIds.size === data.records.length && data.records.length > 0) {
                      setSelectedRecordIds(new Set());
@@ -996,9 +1036,11 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
                   ) : null}
               </div>
             </th>
-            {data.fields.map((field, colIdx) => (
+            {visibleFields.map((field, colIdx) => (
               <HeaderCell 
                 key={field.id} 
+                colIdx={colIdx}
+                totalCols={visibleFields.length}
                 lang={lang}
                 field={field} 
                 onRename={(name) => onRenameField(field.id, name)} 
@@ -1009,19 +1051,27 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
                 onDeleteField={() => onDeleteField?.(field.id)}
                 onSortField={(dir) => onSortField?.(field.id, dir)}
                 onFilterField={(keyword) => onFilterField?.(field.id, keyword)}
+                frozenLeftOffset={colIdx <= frozenColIndex ? frozenLeftOffsets[colIdx] : undefined}
+                isFrozenLast={colIdx === frozenColIndex}
+                isSelected={selectionBox ? colIdx >= selectionBox.minC && colIdx <= selectionBox.maxC && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1 : false}
                 sortDirection={sortConfig?.fieldId === field.id ? sortConfig.direction : undefined}
                 filterValue={filterConfig?.[field.id]}
-                onSelectCol={() => {
-                   setSelectionStart({ r: 0, c: colIdx });
-                   setSelectionEnd({ r: data.records.length - 1, c: colIdx });
+                onSelectCol={(e) => {
+                   if (e.shiftKey && selectionStart) {
+                      setSelectionEnd({ r: data.records.length - 1, c: colIdx });
+                      setSelectionStart({ r: 0, c: selectionStart.c }); 
+                   } else {
+                      setSelectionStart({ r: 0, c: colIdx });
+                      setSelectionEnd({ r: data.records.length - 1, c: colIdx });
+                   }
                    setIsSelecting(false);
                 }}
                 allFields={data.fields}
-                isDragged={draggedColId === field.id}
+                isDragged={draggedColId ? draggedColId.split(',').includes(field.id) : false}
                 isDragOver={dragOverColId === field.id}
                 onDragStart={(e) => handleDragStartCol(e, field.id)}
                 onDragOver={(e) => {
-                  if (draggedColId) {
+                  if (draggedColId && !draggedColId.split(',').includes(field.id)) {
                     e.preventDefault();
                     if (dragOverColId !== field.id) setDragOverColId(field.id);
                   }
@@ -1032,17 +1082,22 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
                 onDrop={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  if (draggedColId && draggedColId !== field.id) {
-                    onReorderFields(draggedColId, field.id);
+                  if (draggedColId && !draggedColId.split(',').includes(field.id)) {
+                    const sourceIds = draggedColId.split(',');
+                    onReorderFields(sourceIds.length > 1 ? sourceIds : sourceIds[0], field.id);
                   }
                   setDraggedColId(null);
                   setDragOverColId(null);
                 }}
                 onDragEnd={() => { setDraggedColId(null); setDragOverColId(null); }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setColContextMenuState({ x: e.clientX, y: e.clientY, fieldId: field.id });
+                }}
                 modelSettings={modelSettings}
               />
             ))}
-            <th className="bg-gray-50 border-r border-transparent font-normal group cursor-pointer hover:bg-gray-100" style={{ width: 100 }} onClick={onAddField}>
+            <th className="bg-gray-50 border-r border-b border-gray-200 font-normal group cursor-pointer hover:bg-gray-100" style={{ width: 100 }} onClick={onAddField}>
               <div className="flex items-center px-3 h-8 text-gray-500">
                 <Plus className="w-4 h-4 mr-1" />
               </div>
@@ -1050,11 +1105,40 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
           </tr>
         </thead>
         <tbody className="text-[13px]">
-          {data.records.map((record, index) => (
-            <tr 
-              key={record.id} 
-              className={cn(
-                "group hover:bg-blue-50/30 transition-colors",
+          {data.records.map((record, index) => {
+             const groupHeadersToRender: any[] = [];
+             if (groupConfig && groupConfig.length > 0) {
+                 let changedLevel = -1;
+                 for (let level = 0; level < groupConfig.length; level++) {
+                     const fieldId = groupConfig[level].fieldId;
+                     const prevRecord = index > 0 ? data.records[index - 1] : null;
+                     let val1 = prevRecord ? JSON.stringify(prevRecord[fieldId]) : null;
+                     let val2 = JSON.stringify(record[fieldId]);
+                     
+                     if (changedLevel !== -1 || val1 !== val2) {
+                         if (changedLevel === -1) changedLevel = level;
+                         const field = data.fields.find(f => f.id === fieldId);
+                         groupHeadersToRender.push({ level, field, value: record[fieldId] });
+                     }
+                 }
+             }
+
+             return (
+              <React.Fragment key={record.id}>
+                 {groupHeadersToRender.map((gh) => (
+                   <tr key={`gh-${record.id}-${gh.level}`} className="bg-gray-50 border-b border-t border-gray-200">
+                     <td colSpan={visibleFields.length + 2} className="p-0">
+                       <div className="sticky left-0 flex items-center py-2 text-[13px] font-medium text-gray-800 w-fit" style={{ paddingLeft: `${gh.level * 24 + 16}px` }}>
+                         <ChevronDown className="w-4 h-4 mr-1.5 opacity-50 text-gray-500"/>
+                         <span className="text-gray-500 mr-1.5">{gh.field?.name}:</span>
+                         <span>{gh.value == null || gh.value === '' ? (lang === 'en' ? '(Empty)' : '(空)') : String(gh.value)}</span>
+                       </div>
+                     </td>
+                   </tr>
+                 ))}
+                 <tr 
+                   className={cn(
+                     "group transition-colors",
                 draggedRowId === record.id ? "opacity-50 bg-gray-100" : "",
                 dragOverRowId === record.id ? "border-t-2 border-t-blue-500" : ""
               )}
@@ -1077,7 +1161,7 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
               }}
             >
               <td 
-                className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 w-16 z-10 transition-colors p-0 select-none cursor-grab active:cursor-grabbing relative"
+                className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 w-16 z-30 transition-colors p-0 select-none cursor-grab active:cursor-grabbing relative"
                 draggable
                 onDragStart={(e) => handleDragStartRow(e, record.id)}
                 onDragEnd={() => { setDraggedRowId(null); setDragOverRowId(null); }}
@@ -1100,7 +1184,8 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
                          sel = new Set([record.id]);
                          setSelectedRecordIds(sel);
                       }
-                      setContextMenuState({ x: e.clientX, y: e.clientY });
+                      setContextMenuState({ x: e.clientX, y: e.clientY, recordId: record.id });
+                      setInsertRowCount(Math.max(sel.size, 1));
                     }}
                   >
                     <span className={cn("group-hover:hidden", selectedRecordIds.has(record.id) ? 'hidden' : '')}>{index + 1}</span>
@@ -1116,7 +1201,7 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
                   </div>
                 </div>
               </td>
-              {data.fields.map((field, colIdx) => {
+              {visibleFields.map((field, colIdx) => {
                 const isSelectedBox = (selectionBox 
                     ? index >= selectionBox.minR && index <= selectionBox.maxR && colIdx >= selectionBox.minC && colIdx <= selectionBox.maxC 
                     : false) || extraSelectedCells.some(c => c.r === index && c.c === colIdx);
@@ -1133,6 +1218,8 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
                     isActive={activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
                     forceEdit={forceEdit && activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
                     isGeneratingCol={generatingCell?.recordId === record.id && generatingCell?.fieldId === field.id}
+                    frozenLeftOffset={colIdx <= frozenColIndex ? frozenLeftOffsets[colIdx] : undefined}
+                    isFrozenLast={colIdx === frozenColIndex}
                     onActivate={() => { setActiveCell({ recordId: record.id, fieldId: field.id }); setForceEdit(false); }}
                     onChange={(val) => onUpdateRecord(record.id, field.id, val)}
                     onBlur={() => { setActiveCell(null); setForceEdit(false); }}
@@ -1200,13 +1287,15 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
               })}
               <td className="border-b border-gray-200"></td>
             </tr>
-          ))}
+            </React.Fragment>
+            );
+          })}
           {/* Add New Row Button */}
           <tr>
-            <td className="sticky left-0 bg-white border-r border-b border-gray-100 text-center text-gray-400 w-16 z-10 p-0 select-none">
+            <td className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 w-16 z-30 p-0 select-none transition-colors">
               <div className={cn("flex items-center justify-center font-bold text-lg", heightClass)}>+</div>
             </td>
-            <td colSpan={data.fields.length + 1} className="border-b border-transparent bg-white hover:bg-gray-50 cursor-pointer transition-colors p-0" onClick={onAddRecord}>
+            <td colSpan={visibleFields.length + 1} className="border-b border-gray-200 bg-white hover:bg-gray-50 cursor-pointer transition-colors p-0" onClick={onAddRecord}>
               <div className={cn("flex items-center px-4 text-gray-500 hover:text-gray-700", heightClass)}>
                  {lang === 'en' ? "Tap to add a new record" : "点击添加新记录"}
               </div>
@@ -1228,19 +1317,198 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
         <>
           <div className="fixed inset-0 z-40" onClick={() => setContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenuState(null); }}></div>
           <div 
-             className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[150px] text-sm"
+             className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[150px] text-sm text-gray-700"
              style={{ left: contextMenuState.x, top: contextMenuState.y }}
           >
              <button 
+                className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
+                onClick={() => {
+                   if (contextMenuState.recordId && onInsertRecords) {
+                      const idx = data.records.findIndex(r => r.id === contextMenuState.recordId);
+                      if (idx >= 0) onInsertRecords(idx, insertRowCount);
+                   }
+                   setContextMenuState(null);
+                }}
+             >
+                <div className="flex items-center">
+                   <span className="mr-2 text-lg leading-none">↑</span>
+                   {lang === 'en' ? 'Insert above' : '向上插入'}
+                </div>
+                <div className="flex items-center ml-4" onClick={(e) => e.stopPropagation()}>
+                   <input 
+                      type="number" min="1" 
+                      className="w-12 text-center border border-gray-300 rounded mx-2 py-0.5" 
+                      value={insertRowCount}
+                      onChange={(e) => setInsertRowCount(Math.max(1, parseInt(e.target.value) || 1))}
+                   />
+                   {lang === 'en' ? 'row(s)' : '行'}
+                </div>
+             </button>
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
+                onClick={() => {
+                   if (contextMenuState.recordId && onInsertRecords) {
+                      const idx = data.records.findIndex(r => r.id === contextMenuState.recordId);
+                      if (idx >= 0) onInsertRecords(idx + 1, insertRowCount);
+                   }
+                   setContextMenuState(null);
+                }}
+             >
+                <div className="flex items-center">
+                   <span className="mr-2 text-lg leading-none">↓</span>
+                   {lang === 'en' ? 'Insert below' : '向下插入'}
+                </div>
+                <div className="flex items-center ml-4" onClick={(e) => e.stopPropagation()}>
+                   <input 
+                      type="number" min="1" 
+                      className="w-12 text-center border border-gray-300 rounded mx-2 py-0.5" 
+                      value={insertRowCount}
+                      onChange={(e) => setInsertRowCount(Math.max(1, parseInt(e.target.value) || 1))}
+                   />
+                   {lang === 'en' ? 'row(s)' : '行'}
+                </div>
+             </button>
+             <div className="border-t border-gray-100 my-1"></div>
+             <button 
                 className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 transition-colors flex items-center"
                 onClick={() => {
-                   onDeleteRecords?.(Array.from(selectedRecordIds));
+                   onDeleteRecords?.(Array.from(selectedRecordIds).length > 0 ? Array.from(selectedRecordIds) : [contextMenuState.recordId!]);
                    setSelectedRecordIds(new Set());
                    setContextMenuState(null);
                 }}
              >
                 <Trash2 className="w-4 h-4 mr-2" /> 
-                {lang === 'en' ? `Delete ${selectedRecordIds.size} row(s)` : `删除 ${selectedRecordIds.size} 行`}
+                {lang === 'en' ? `Delete ${Math.max(selectedRecordIds.size, 1)} row(s)` : `删除 ${Math.max(selectedRecordIds.size, 1)} 行`}
+             </button>
+          </div>
+        </>
+      )}
+
+      {colContextMenuState && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setColContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setColContextMenuState(null); }}></div>
+          <div 
+             className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[150px] text-sm text-gray-700"
+             style={{ left: colContextMenuState.x, top: colContextMenuState.y }}
+          >
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
+                onClick={() => {
+                   if (colContextMenuState.fieldId && onInsertField) {
+                      const idx = data.fields.findIndex(f => f.id === colContextMenuState.fieldId);
+                      if (idx >= 0) onInsertField(idx, insertColCount);
+                   }
+                   setColContextMenuState(null);
+                }}
+             >
+                <div className="flex items-center">
+                   <span className="mr-2 text-lg leading-none">←</span>
+                   {lang === 'en' ? 'Insert left' : '向左插入'}
+                </div>
+                <div className="flex items-center ml-4" onClick={(e) => e.stopPropagation()}>
+                   <input 
+                      type="number" min="1" 
+                      className="w-12 text-center border border-gray-300 rounded mx-2 py-0.5" 
+                      value={insertColCount}
+                      onChange={(e) => setInsertColCount(Math.max(1, parseInt(e.target.value) || 1))}
+                   />
+                   {lang === 'en' ? 'col(s)' : '列'}
+                </div>
+             </button>
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
+                onClick={() => {
+                   if (colContextMenuState.fieldId && onInsertField) {
+                      const idx = data.fields.findIndex(f => f.id === colContextMenuState.fieldId);
+                      if (idx >= 0) onInsertField(idx + 1, insertColCount);
+                   }
+                   setColContextMenuState(null);
+                }}
+             >
+                <div className="flex items-center">
+                   <span className="mr-2 text-lg leading-none">→</span>
+                   {lang === 'en' ? 'Insert right' : '向右插入'}
+                </div>
+                <div className="flex items-center ml-4" onClick={(e) => e.stopPropagation()}>
+                   <input 
+                      type="number" min="1" 
+                      className="w-12 text-center border border-gray-300 rounded mx-2 py-0.5" 
+                      value={insertColCount}
+                      onChange={(e) => setInsertColCount(Math.max(1, parseInt(e.target.value) || 1))}
+                   />
+                   {lang === 'en' ? 'col(s)' : '列'}
+                </div>
+             </button>
+             {onFreezeColumn && (
+                <button 
+                   className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center"
+                   onClick={() => {
+                      if (data.frozenColId === colContextMenuState.fieldId) {
+                         onFreezeColumn(null); // Unfreeze
+                      } else {
+                         onFreezeColumn(colContextMenuState.fieldId || null);
+                      }
+                      setColContextMenuState(null);
+                   }}
+                >
+                   {data.frozenColId === colContextMenuState.fieldId 
+                     ? (lang === 'en' ? 'Unfreeze column' : '取消冻结') 
+                     : (lang === 'en' ? 'Freeze up to this column' : '冻结至此列')
+                   }
+                </button>
+             )}
+             <div className="border-t border-gray-100 my-1"></div>
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center"
+                onClick={() => {
+                   if (colContextMenuState.fieldId && onUpdateField) {
+                      let idsToHide = [colContextMenuState.fieldId];
+                      if (selectionBox && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1) {
+                         const selectedIds = [];
+                         let isIdInSelection = false;
+                         for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+                            const fieldId = visibleFields[c].id;
+                            selectedIds.push(fieldId);
+                            if (fieldId === colContextMenuState.fieldId) isIdInSelection = true;
+                         }
+                         if (isIdInSelection && selectedIds.length > 1) {
+                            idsToHide = selectedIds;
+                         }
+                      }
+                      idsToHide.forEach(id => onUpdateField(id, { hidden: true }));
+                   }
+                   setColContextMenuState(null);
+                }}
+             >
+                <EyeOff className="w-4 h-4 mr-2" />
+                {lang === 'en' ? 'Hide field' : '隐藏字段'}
+             </button>
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 transition-colors flex items-center"
+                onClick={() => {
+                   if (colContextMenuState.fieldId && onDeleteField) {
+                      let idsToDelete = [colContextMenuState.fieldId];
+                      if (selectionBox && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1) {
+                         const selectedIds = [];
+                         let isIdInSelection = false;
+                         for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+                            const fieldId = visibleFields[c].id;
+                            selectedIds.push(fieldId);
+                            if (fieldId === colContextMenuState.fieldId) isIdInSelection = true;
+                         }
+                         if (isIdInSelection && selectedIds.length > 1) {
+                            idsToDelete = selectedIds;
+                         }
+                      }
+                      idsToDelete.forEach(id => onDeleteField(id));
+                      setSelectionStart(null);
+                      setSelectionEnd(null);
+                   }
+                   setColContextMenuState(null);
+                }}
+             >
+                <Trash2 className="w-4 h-4 mr-2" /> 
+                {lang === 'en' ? 'Delete column' : '删除列'}
              </button>
           </div>
         </>
@@ -1252,6 +1520,8 @@ export function Grid({ data, onUpdateRecord, onDeleteRecords, onAddRecord, onAdd
 interface HeaderCellProps {
   key?: React.Key;
   field: Field;
+  colIdx: number;
+  totalCols: number;
   onRename: (name: string) => void;
   onChangeType: (type: FieldType) => void;
   onResize: (width: number) => void;
@@ -1262,7 +1532,7 @@ interface HeaderCellProps {
   onFilterField: (keyword: string) => void;
   sortDirection?: 'asc' | 'desc';
   filterValue?: string;
-  onSelectCol: () => void;
+  onSelectCol: (e: React.MouseEvent) => void;
   allFields: Field[];
   isDragged: boolean;
   isDragOver: boolean;
@@ -1271,6 +1541,10 @@ interface HeaderCellProps {
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent) => void;
   onDragEnd: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
+  frozenLeftOffset?: number;
+  isFrozenLast?: boolean;
+  isSelected?: boolean;
   modelSettings: any;
   lang?: 'en' | 'zh';
 }
@@ -1291,8 +1565,8 @@ const FIELD_TYPES: { type: FieldType, label: string, labelZh: string }[] = [
 ];
 
 function HeaderCell({ 
-  field, onRename, onChangeType, onResize, onUpdateField, onGenerateColumn, onDeleteField, onSortField, onFilterField, sortDirection, filterValue, onSelectCol, allFields,
-  isDragged, isDragOver, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, modelSettings, lang = 'zh'
+  field, colIdx, totalCols, onRename, onChangeType, onResize, onUpdateField, onGenerateColumn, onDeleteField, onSortField, onFilterField, sortDirection, filterValue, onSelectCol, allFields,
+  isDragged, isDragOver, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, onContextMenu, frozenLeftOffset, isFrozenLast, isSelected, modelSettings, lang = 'zh'
 }: HeaderCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -1345,16 +1619,20 @@ function HeaderCell({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       onDragEnd={onDragEnd}
+      onContextMenu={onContextMenu}
       className={cn(
-        "font-normal text-gray-700 bg-gray-50 border-r border-gray-200 relative group select-none hover:bg-gray-100 transition-colors",
+        "font-normal border-r border-b border-gray-200 relative group select-none hover:bg-gray-100 transition-colors z-40",
+        isSelected ? "bg-blue-100 text-blue-900" : "bg-gray-50 text-gray-700",
         isDragged ? "opacity-50 bg-gray-200" : "",
-        isDragOver ? "border-l-2 border-l-blue-500" : ""
+        isDragOver ? "border-l-2 border-l-blue-500" : "",
+        frozenLeftOffset !== undefined ? "sticky z-[41]" : "",
+        isFrozenLast && frozenLeftOffset !== undefined ? "shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" : ""
       )}
-      style={{ width: field.width || 150 }}
+      style={{ width: field.width || 150, left: frozenLeftOffset }}
     >
       <div 
         className="flex items-center px-2 h-8 cursor-pointer"
-        onClick={onSelectCol}
+        onClick={(e) => onSelectCol(e)}
         onDoubleClick={() => setIsEditing(true)}
       >
         <div className="flex items-center justify-center cursor-pointer hover:bg-gray-200 p-0.5 rounded mr-1" onClick={(e) => { e.stopPropagation(); setShowMenu(true); }}>
@@ -1394,7 +1672,7 @@ function HeaderCell({
       </div>
 
       {showActionMenu && (
-        <div ref={actionMenuRef} className="absolute top-full right-0 mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1" onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
+        <div ref={actionMenuRef} className={cn("absolute top-full mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1", colIdx < totalCols / 2 ? "left-0" : "right-0")} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
            <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">{lang === 'en' ? 'Filter' : '筛选'}</div>
            <div className="px-3 pb-2">
              <input type="text" className="w-full border border-gray-300 rounded px-2 py-1 text-sm outline-none focus:border-blue-500" placeholder={lang === 'en' ? "Filter by keyword..." : "输入关键词筛选..."} value={filterValue || ''} onChange={(e) => onFilterField(e.target.value)} />
@@ -1757,10 +2035,12 @@ interface CellProps {
   onMouseEnter: () => void;
   onActivateNextRow: () => void;
   onBatchAIGenerate?: () => void;
+  frozenLeftOffset?: number;
+  isFrozenLast?: boolean;
   lang?: 'en' | 'zh';
 }
 
-function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onBatchAIGenerate, lang = 'zh' }: CellProps) {
+function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh' }: CellProps) {
   const value = record[field.id];
   
   const [isEditingMode, setIsEditingMode] = useState(false);
@@ -2401,12 +2681,15 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, onActivate,
          if (!isEditingMode) setIsEditingMode(true);
       }}
       className={cn(
-        "border-b border-r border-gray-200 relative p-0 bg-white transition-colors cursor-cell group-hover:bg-blue-50/10",
+        "border-b border-r border-gray-200 relative p-0 transition-colors cursor-cell group-hover:bg-gray-50",
         heightClass,
-        isSelectedBox && !isEditingMode && "bg-blue-100/50 group-hover:bg-blue-100/70",
+        isSelectedBox && !isEditingMode ? "bg-[#ebf4ff] group-hover:bg-[#e1effe]" : "bg-white",
         isCutBox && !isEditingMode && "opacity-50 ring-1 ring-dashed ring-gray-400 ring-inset",
-        isActive && !isEditingMode && "ring-[1.5px] ring-blue-500 ring-inset z-20 outline-none"
+        isActive && !isEditingMode && "ring-[1.5px] ring-blue-500 ring-inset z-20 outline-none",
+        frozenLeftOffset !== undefined ? (isActive ? "sticky z-20" : "sticky z-10") : "",
+        isFrozenLast && frozenLeftOffset !== undefined ? "shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" : ""
       )}
+      style={{ left: frozenLeftOffset }}
     >
       {renderContent()}
     </td>

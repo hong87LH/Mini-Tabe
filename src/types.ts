@@ -17,7 +17,8 @@ export interface Field {
   name: string;
   type: FieldType;
   options?: SelectOption[];
-  width?: number;
+  width?: number; // width in pixels
+  hidden?: boolean;
   prompt?: string; // For aiText and formula
   refFields?: string[]; // For aiText, formula, aiImage
   aiImageConfig?: {
@@ -41,5 +42,6 @@ export interface BaseRecord {
 export interface GridData {
   fields: Field[];
   records: BaseRecord[];
+  frozenColId?: string | null;
 }
 
