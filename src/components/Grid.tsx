@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
-import { cn } from '../lib/utils';
-import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff } from 'lucide-react';
+import { cn, getStringColor } from '../lib/utils';
+import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 
@@ -29,27 +29,219 @@ export const copyImageToClipboardMagic = (path: string) => {
    navigator.clipboard.writeText(`IMG_COPY_MAGIC:${path}`);
 };
 
-const ZoomableImage = ({ src, onPrev, onNext, onClose }: { src: string, onPrev: (e: React.MouseEvent) => void, onNext: (e: React.MouseEvent) => void, onClose: () => void }) => {
+const ZoomableImage = ({ 
+  item, 
+  onPrev, 
+  onNext, 
+  onClose,
+  onUpdateItem,
+  username,
+  lang = 'zh'
+}: { 
+  item: any, 
+  onPrev: (e: React.MouseEvent) => void, 
+  onNext: (e: React.MouseEvent) => void, 
+  onClose: () => void,
+  onUpdateItem?: (newItem: any) => void,
+  username?: string,
+  lang?: 'en' | 'zh'
+}) => {
+  const src = item.mappedUrl;
+  const refUrls: string[] = item.refUrls || [];
   const [scale, setScale] = useState(1);
   const [pos, setPos] = useState({ x: 0, y: 0 });
+  
+  const [refScales, setRefScales] = useState<number[]>([1, 1]);
+  const [refPos, setRefPos] = useState<{x: number, y: number}[]>([{x: 0, y: 0}, {x: 0, y: 0}]);
+  const [activeRefIndex, setActiveRefIndex] = useState<number | null>(null);
+  
+  const [refIsDragging, setRefIsDragging] = useState(false);
+  const [refDragStart, setRefDragStart] = useState({ x: 0, y: 0 });
+
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [draggedAnnId, setDraggedAnnId] = useState<string | null>(null);
+  const [annotationViewState, setAnnotationViewState] = useState<0 | 1 | 2>(2); // 0: hidden, 1: visible, 2: visible with capsules
+  
+  const [annotations, setAnnotations] = useState<any[]>(item.annotations || []);
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
+  const [newComment, setNewComment] = useState("");
+  
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    setAnnotations(item.annotations || []);
+  }, [item.annotations]);
+
+  useEffect(() => {
+    setActiveAnnotationId(null);
+  }, [item.url, item.mappedUrl]);
+
+  const saveAnnotations = (newAnnotations: any[]) => {
+    setAnnotations(newAnnotations);
+    if (onUpdateItem) {
+       onUpdateItem({ ...item, annotations: newAnnotations });
+    }
+  };
+
+  const updateRating = (rating: number) => {
+    if (onUpdateItem) {
+       onUpdateItem({ ...item, rating });
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'SELECT') return;
+      if (['0','1','2','3','4','5'].includes(e.key)) {
+         updateRating(parseInt(e.key, 10));
+      } else if (e.key === 'ArrowRight') {
+         onNext(e as any);
+      } else if (e.key === 'ArrowLeft') {
+         onPrev(e as any);
+      } else if (e.key === 'Escape') {
+         onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [item, onNext, onPrev, onClose, onUpdateItem]);
+
+  const handleImageClick = (e: React.MouseEvent) => {
+    if (isDragging) return;
+    if (!username || !username.trim()) {
+      alert("Please set your Username in Settings first to add annotations.");
+      return;
+    }
+    
+    if (!imgRef.current) return;
+    const rect = imgRef.current.getBoundingClientRect();
+    
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    
+    const newId = Math.random().toString(36).substr(2, 9);
+    const newAnnotation = {
+       id: newId,
+       x, 
+       y,
+       status: 'pending',
+       threads: []
+    };
+    
+    saveAnnotations([...annotations, newAnnotation]);
+    setActiveAnnotationId(newId);
+  };
+
+  const addThread = (annId: string, content: string, newStatus?: string) => {
+    if (!username || !username.trim()) return;
+    if (!content.trim() && !newStatus) return;
+    
+    const updated = annotations.map(a => {
+       if (a.id === annId) {
+          const threads = [...a.threads];
+          if (content.trim()) {
+            threads.push({
+               id: Math.random().toString(36).substr(2, 9),
+               user: username.trim(),
+               timestamp: Date.now(),
+               content: content.trim()
+            });
+          }
+          return { ...a, threads, status: newStatus || a.status };
+       }
+       return a;
+    });
+    saveAnnotations(updated);
+  };
 
   return (
     <div 
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 cursor-move outline-none"
-      onWheel={(e) => {
-        e.preventDefault();
-        setScale(s => Math.min(Math.max(0.5, s - e.deltaY * 0.01), 10));
+      className="fixed inset-0 z-[100] flex bg-black/90 outline-none"
+      onClick={(e) => {
+         if ((e.target as HTMLElement).closest('.annotation-popup')) return;
+         if ((e.target as HTMLElement).closest('.annotation-marker')) return;
+         if (e.target === e.currentTarget) onClose();
       }}
-      onMouseDown={e => { setIsDragging(true); setDragStart({ x: e.clientX - pos.x, y: e.clientY - pos.y }); e.stopPropagation(); }}
-      onMouseMove={e => { if (isDragging) { setPos({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }); } }}
-      onMouseUp={() => setIsDragging(false)}
-      onMouseLeave={() => setIsDragging(false)}
-      onClick={onClose}
     >
-      <div className="absolute top-4 right-4 flex items-center gap-4 z-50">
-         <button onClick={(e) => { e.stopPropagation(); setScale(1); setPos({x: 0, y: 0}); }} title="Reset Zoom" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
+      {refUrls.length > 0 && (
+         <div className="flex-1 max-w-[35%] border-r border-gray-700 flex flex-col relative bg-black/50 overflow-hidden">
+            {refUrls.map((rUrl, i) => (
+                <div 
+                    key={i} 
+                    className={`flex-1 w-full flex items-center justify-center relative overflow-hidden cursor-move ${i > 0 ? 'border-t border-gray-700' : ''}`}
+                    onWheel={(e) => {
+                        e.preventDefault();
+                        const newScales = [...refScales];
+                        newScales[i] = Math.min(Math.max(0.5, refScales[i] - e.deltaY * 0.01), 10);
+                        setRefScales(newScales);
+                    }}
+                    onMouseDown={(e) => {
+                        setRefIsDragging(true);
+                        setActiveRefIndex(i);
+                        setRefDragStart({ x: e.clientX - refPos[i].x, y: e.clientY - refPos[i].y });
+                        e.stopPropagation();
+                    }}
+                    onMouseMove={(e) => {
+                        if (refIsDragging && activeRefIndex === i) {
+                            const newPos = [...refPos];
+                            newPos[i] = { ...refPos[i], x: e.clientX - refDragStart.x, y: e.clientY - refDragStart.y };
+                            setRefPos(newPos);
+                        }
+                    }}
+                    onMouseUp={() => setRefIsDragging(false)}
+                    onMouseLeave={() => setRefIsDragging(false)}
+                >
+                    <img 
+                        src={rUrl} 
+                        className="object-contain max-w-[90%] max-h-[90%] pointer-events-none" 
+                        draggable={false}
+                        style={{ transform: `translate(${refPos[i].x}px, ${refPos[i].y}px) scale(${refScales[i]})`, transition: refIsDragging && activeRefIndex === i ? 'none' : 'transform 0.1s' }}
+                    />
+                </div>
+            ))}
+         </div>
+      )}
+      
+      <div 
+        className="flex-1 relative flex items-center justify-center overflow-hidden"
+        onWheel={(e) => {
+          e.preventDefault();
+          setScale(s => Math.min(Math.max(0.5, s - e.deltaY * 0.01), 10));
+        }}
+        onClick={(e) => {
+           if ((e.target as HTMLElement).closest('.annotation-popup')) return;
+           if ((e.target as HTMLElement).closest('.annotation-marker')) return;
+           if (e.target === e.currentTarget) onClose();
+        }}
+      >
+        <div className="absolute top-4 right-4 flex items-center gap-4 z-50">
+         {annotations.length > 0 && (
+           <div className="relative group/clear-ann">
+             <button title="Clear Reviews" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+             </button>
+             <div className="absolute top-full right-0 mt-2 bg-white rounded shadow-lg overflow-hidden flex flex-col py-1 opacity-0 group-hover/clear-ann:opacity-100 pointer-events-none group-hover/clear-ann:pointer-events-auto transition-opacity min-w-[200px]">
+                <button 
+                  className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left"
+                  onClick={(e) => { e.stopPropagation(); saveAnnotations(annotations.filter(a => a.status !== 'approved')); }}
+                >
+                   {lang === 'en' ? 'Clear Approved' : '清除已通过'}
+                </button>
+                <button 
+                  className="px-4 py-2 text-sm text-red-600 hover:bg-red-50 text-left border-t border-gray-100"
+                  onClick={(e) => { e.stopPropagation(); saveAnnotations([]); }}
+                >
+                   {lang === 'en' ? 'Clear All Reviews' : '清除所有批注'}
+                </button>
+             </div>
+           </div>
+         )}
+         <button onClick={(e) => { e.stopPropagation(); setAnnotationViewState(prev => (prev + 1) % 3 as any); }} title={lang === 'en' ? "Toggle Annotations View" : "切换批注视图"} className={`p-2 rounded-full transition-colors flex items-center justify-center relative ${annotationViewState > 0 ? 'bg-blue-600 text-white' : 'bg-black/50 text-white/70 hover:text-white'}`}>
+            {annotationViewState === 2 ? <MessageSquareText className="w-5 h-5" /> : <MessageSquare className="w-5 h-5" />}
+            {annotationViewState === 0 && <span className="absolute rotate-45 w-6 h-[2px] bg-red-400"></span>}
+         </button>
+         <button onClick={(e) => { e.stopPropagation(); setScale(1); setPos({x: 0, y: 0}); setRefScales([1, 1]); setRefPos([{x: 0, y: 0}, {x: 0, y: 0}]); }} title="Reset Zoom" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
          </button>
          <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(src); }} title="Copy Image" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
@@ -63,10 +255,188 @@ const ZoomableImage = ({ src, onPrev, onNext, onClose }: { src: string, onPrev: 
       <button onClick={onPrev} className="absolute left-8 top-1/2 -translate-y-1/2 text-white/50 hover:text-white z-10 p-4">
          <ChevronLeft className="w-12 h-12" />
       </button>
-      <img src={src} style={{ transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`, transition: isDragging ? 'none' : 'transform 0.1s' }} className="max-w-[90%] max-h-[90%] object-contain" draggable={false} onClick={e => e.stopPropagation()} />
+
+      <div 
+        className="relative flex items-center justify-center cursor-move"
+        style={{ transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`, transition: isDragging || draggedAnnId ? 'none' : 'transform 0.1s' }}
+        onMouseDown={e => { 
+           if ((e.target as HTMLElement).closest('.annotation-popup') || (e.target as HTMLElement).closest('.annotation-marker')) return;
+           setIsDragging(true); 
+           setDragStart({ x: e.clientX - pos.x, y: e.clientY - pos.y }); 
+           e.stopPropagation(); 
+        }}
+        onMouseMove={e => { 
+           if (draggedAnnId && imgRef.current) {
+              const rect = imgRef.current.getBoundingClientRect();
+              const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+              const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+              setAnnotations(annotations.map(a => a.id === draggedAnnId ? { ...a, x, y } : a));
+           } else if (isDragging) { 
+              setPos({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }); 
+           } 
+        }}
+        onMouseUp={() => {
+           if (draggedAnnId) {
+             saveAnnotations(annotations);
+             setDraggedAnnId(null);
+           }
+           setIsDragging(false);
+        }}
+        onMouseLeave={() => {
+           if (draggedAnnId) {
+             saveAnnotations(annotations);
+             setDraggedAnnId(null);
+           }
+           setIsDragging(false);
+        }}
+      >
+        <img 
+          ref={imgRef}
+          src={src} 
+          className="max-w-[90vw] max-h-[90vh] object-contain pointer-events-auto" 
+          draggable={false} 
+          onDoubleClick={(e) => {
+             e.stopPropagation();
+             handleImageClick(e);
+          }} 
+        />
+        
+        {/* Render annotations */}
+        {annotationViewState > 0 && annotations.map(ann => {
+           let indicatorColor = 'bg-red-500';
+           if (ann.status === 'resolved') indicatorColor = 'bg-yellow-500';
+           else if (ann.status === 'approved') indicatorColor = 'bg-green-500';
+           
+           const firstUser = ann.threads[0]?.user || '?';
+           const lastThread = ann.threads[ann.threads.length - 1];
+           const snippet = lastThread ? (lastThread.content.length > 10 ? lastThread.content.substring(0, 10) + '...' : lastThread.content) : '';
+           const lastUser = lastThread?.user || '?';
+           const lastUserInitial = lastUser.charAt(0).toUpperCase();
+
+           return (
+             <div 
+               key={ann.id} 
+               className="absolute annotation-marker"
+               style={{ left: `${ann.x}%`, top: `${ann.y}%`, transform: `translate(-50%, -50%) scale(${1/scale})`, zIndex: activeAnnotationId === ann.id ? 51 : 50 }}
+               onClick={(e) => { e.stopPropagation(); setActiveAnnotationId(ann.id); }}
+               onMouseDown={(e) => { e.stopPropagation(); setDraggedAnnId(ann.id); }}
+               onContextMenu={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  saveAnnotations(annotations.filter(a => a.id !== ann.id));
+               }}
+             >
+                <div className={`relative cursor-pointer group flex items-center gap-1.5 transition-all outline-none ${annotationViewState === 2 && snippet ? 'bg-black/60 shadow-lg border border-white/20 rounded-full pr-3 pl-1 py-1 backdrop-blur-md' : ''}`}>
+                   <div 
+                     className="w-8 h-8 rounded-full flex shrink-0 items-center justify-center text-white text-xs font-bold shadow-lg border-2 border-white transition-transform group-hover:scale-110"
+                     style={{ backgroundColor: firstUser === '?' ? '#9CA3AF' : getStringColor(firstUser) }}
+                   >
+                     {firstUser.charAt(0).toUpperCase()}
+                   </div>
+                   {annotationViewState === 2 && snippet && (
+                     <span className="text-xs text-white whitespace-nowrap font-medium pointer-events-none">{snippet}</span>
+                   )}
+                   <div className={`absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] rounded-full border border-white ${indicatorColor} flex items-center justify-center`}>
+                     <span className="text-[9px] text-white font-bold leading-none select-none px-[2px]">{lastUserInitial}</span>
+                   </div>
+                </div>
+                
+                {activeAnnotationId === ann.id && (
+                   <div 
+                     className="annotation-popup absolute top-full left-1/2 -translate-x-1/2 mt-3 w-72 bg-white rounded-lg shadow-xl border border-gray-200 p-3 z-50 flex flex-col gap-3 cursor-auto"
+                     onClick={e => e.stopPropagation()}
+                     onMouseDown={e => e.stopPropagation()}
+                   >
+                      <div className="flex justify-between items-center border-b pb-2">
+                         <div className="flex gap-2">
+                            <select 
+                              className={`text-xs border border-gray-200 rounded px-1 py-0.5 outline-none font-medium ${ann.status === 'pending' ? 'text-red-500' : (ann.status === 'resolved' ? 'text-yellow-600' : 'text-green-600')}`}
+                              value={ann.status}
+                              onChange={e => addThread(ann.id, "", e.target.value)}
+                            >
+                               <option value="pending">🔴 {lang === 'en' ? 'Pending' : '待处理'}</option>
+                               <option value="resolved">🟡 {lang === 'en' ? 'Resolved' : '已处理'}</option>
+                               <option value="approved">🟢 {lang === 'en' ? 'Approved' : '审核通过'}</option>
+                            </select>
+                         </div>
+                         <button onClick={() => setActiveAnnotationId(null)} className="text-gray-400 hover:text-gray-600">
+                           <X className="w-4 h-4" />
+                         </button>
+                      </div>
+                      
+                      <div className="flex flex-col gap-3 max-h-48 overflow-y-auto pr-1">
+                         {ann.threads.length === 0 && <div className="text-gray-400 text-xs italic text-center py-2">{lang === 'en' ? 'No comments yet' : '暂无评论'}</div>}
+                         {ann.threads.map((t: any) => (
+                            <div key={t.id} className="flex gap-2">
+                               <div 
+                                 className="w-6 h-6 rounded-full flex shrink-0 items-center justify-center text-white text-[10px] font-bold"
+                                 style={{ backgroundColor: t.user === '?' ? '#9CA3AF' : getStringColor(t.user) }}
+                               >
+                                 {t.user.charAt(0).toUpperCase()}
+                               </div>
+                               <div className="flex flex-col">
+                                  <div className="flex items-baseline gap-2">
+                                     <span className="text-xs font-semibold text-gray-700">{t.user}</span>
+                                     <span className="text-[10px] text-gray-400">{new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                  </div>
+                                  <p className="text-sm text-gray-800 break-words whitespace-pre-wrap leading-tight mt-0.5">{t.content}</p>
+                               </div>
+                            </div>
+                         ))}
+                      </div>
+                      
+                      <div className="flex gap-2 mt-1">
+                         <input 
+                           type="text" 
+                           placeholder={lang === 'en' ? "Reply..." : "回复..."}
+                           className="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500"
+                           value={newComment}
+                           onChange={e => setNewComment(e.target.value)}
+                           onKeyDown={e => {
+                              if (e.key === 'Enter' && newComment.trim()) {
+                                 addThread(ann.id, newComment);
+                                 setNewComment("");
+                              }
+                           }}
+                         />
+                         <button 
+                           className="bg-blue-600 text-white rounded px-2.5 hover:bg-blue-700 flex items-center justify-center"
+                           onClick={() => {
+                              if (newComment.trim()) {
+                                 addThread(ann.id, newComment);
+                                 setNewComment("");
+                              }
+                           }}
+                         >
+                           <Send className="w-3.5 h-3.5" />
+                         </button>
+                      </div>
+                   </div>
+                )}
+             </div>
+           );
+        })}
+      </div>
+
       <button onClick={onNext} className="absolute right-8 top-1/2 -translate-y-1/2 text-white/50 hover:text-white z-10 p-4">
          <ChevronRight className="w-12 h-12" />
       </button>
+
+      {/* Stars UI */}
+      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-1.5 z-50 bg-black/40 px-4 py-2 rounded-full backdrop-blur-md border border-white/10">
+        {[1, 2, 3, 4, 5].map(v => (
+          <button 
+            key={v}
+            onClick={(e) => { e.stopPropagation(); updateRating(v === item.rating ? 0 : v); }}
+            className={`transition-colors p-1 group/star ${item.rating >= v ? 'text-yellow-400' : 'text-gray-500 hover:text-gray-300'}`}
+          >
+            <Star className={`w-5 h-5 ${item.rating >= v ? 'fill-yellow-400' : 'group-hover/star:fill-gray-300'}`} />
+          </button>
+        ))}
+        {item.rating > 0 && <span className="ml-2 text-white/70 font-mono text-lg font-medium">{item.rating}</span>}
+      </div>
+      
+      </div>
     </div>
   );
 };
@@ -203,10 +573,13 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
 };
 
 interface GridProps {
+  tableId?: string;
+  viewMode?: 'grid' | 'gallery';
   data: GridData;
   searchQuery?: string;
   searchMatches?: { recordId: string, fieldId: string }[];
   activeSearchMatch?: { recordId: string, fieldId: string, recordIndex: number, fieldIndex: number } | null;
+  onUpdateGlobalAttachment?: (url: string, updatedProps: any) => void;
   onUpdateRecord: (recordId: string, fieldId: string, value: any) => void;
   onDeleteRecords?: (recordIds: string[]) => void;
   onAddRecord: () => void;
@@ -229,15 +602,15 @@ interface GridProps {
   rowHeight: 'short'|'medium'|'tall'|'extra';
   modelSettings: any;
   lang?: 'en' | 'zh';
+  username?: string;
 }
 
 const resolveFieldValueForAI = (val: any, refField: Field) => {
   if (!val) return val;
-  if (refField.type === 'singleSelect') {
-    return refField.options?.find(o => o.id === val)?.name || val;
-  }
-  if (refField.type === 'multiSelect' && Array.isArray(val)) {
-    return val.map((id: string) => refField.options?.find(o => o.id === id)?.name || id).join(', ');
+  if (refField.type === 'singleSelect' || refField.type === 'multiSelect') {
+    const valArray = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',').map(s=>s.trim()) : [val]);
+    const mapped = valArray.map(v => refField.options?.find(o => o.id === v)?.name || v);
+    return mapped.length === 1 && !Array.isArray(val) && refField.type === 'singleSelect' ? mapped[0] : mapped.join(', ');
   }
   return val;
 };
@@ -409,7 +782,247 @@ const triggerDownload = async (url: string, filename: string, folderPath?: strin
   return undefined;
 };
 
-export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh' }: GridProps) {
+const gallerySettingsCache = new Map<string, any>();
+
+function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage }: { tableId?: string, data: any, lang: string, onPreviewImage: (url: string, items: any[]) => void }) {
+    const defaultSettings = gallerySettingsCache.get(tableId) || {
+        statusFilter: 'all',
+        ratingFilter: 'all',
+        columnFilter: 'all',
+        showRating: true,
+        displayFieldIds: data.fields.length > 0 ? [data.fields[0].id] : [],
+        refFieldIds: []
+    };
+
+    const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'resolved' | 'approved' | 'unannotated'>(defaultSettings.statusFilter);
+    const [ratingFilter, setRatingFilter] = useState<'all' | '5' | '4' | '3' | '2' | '1' | '0'>(defaultSettings.ratingFilter);
+    const [columnFilter, setColumnFilter] = useState<string>(defaultSettings.columnFilter);
+    
+    const [showRating, setShowRating] = useState(defaultSettings.showRating);
+    const [displayFieldIds, setDisplayFieldIds] = useState<string[]>(defaultSettings.displayFieldIds);
+    const [showDisplayFieldsMenu, setShowDisplayFieldsMenu] = useState(false);
+
+    const [refFieldIds, setRefFieldIds] = useState<string[]>(defaultSettings.refFieldIds || []);
+    const [showRefFieldsMenu, setShowRefFieldsMenu] = useState(false);
+
+    useEffect(() => {
+        gallerySettingsCache.set(tableId, { statusFilter, ratingFilter, columnFilter, showRating, displayFieldIds, refFieldIds });
+    }, [tableId, statusFilter, ratingFilter, columnFilter, showRating, displayFieldIds, refFieldIds]);
+
+    const imageFields = data.fields.filter((f: any) => f.type === 'attachment' || f.type === 'aiImage');
+
+    const imagesMap = new Map();
+    data.records.forEach((rec: any) => {
+        data.fields.forEach((f: any) => {
+            if (f.type === 'attachment' || f.type === 'aiImage') {
+                const val = rec[f.id];
+                if (val) {
+                    let items: any[] = [];
+                    if (Array.isArray(val)) items = val;
+                    else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
+                    else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
+
+                    items.forEach(item => {
+                        const url = typeof item === 'string' ? item : item.url;
+                        if (!url) return;
+                        if (!imagesMap.has(url)) {
+                            imagesMap.set(url, { url, item: typeof item === 'string' ? { url } : item, fieldId: f.id, record: rec });
+                        } else {
+                            const existing = imagesMap.get(url);
+                            if (typeof item !== 'string' && item.annotations && (!existing.item.annotations || existing.item.annotations.length < item.annotations.length)) {
+                                existing.item = item;
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    const allImages = Array.from(imagesMap.values());
+
+    const enrichedImages = allImages.map(img => {
+        const anns = img.item.annotations || [];
+        let status = 'unannotated';
+        if (anns.length > 0) {
+            if (anns.some((a: any) => a.status === 'pending')) status = 'pending';
+            else if (anns.some((a: any) => a.status === 'resolved')) status = 'resolved';
+            else status = 'approved';
+        }
+        const rating = img.item.rating || 0;
+        return { ...img, status, rating };
+    });
+
+    const displayImages = enrichedImages.filter(img => {
+        if (statusFilter !== 'all' && img.status !== statusFilter) return false;
+        if (ratingFilter !== 'all' && String(img.rating) !== ratingFilter) return false;
+        if (columnFilter !== 'all' && img.fieldId !== columnFilter) return false;
+        return true;
+    });
+
+    return (
+        <div className="flex flex-col h-full w-full bg-gray-50 overflow-hidden outline-none">
+             <div className="flex flex-col p-4 border-b border-gray-200 bg-white gap-3 shrink-0 shadow-sm z-10 w-full">
+                 <div className="flex items-center gap-4 flex-wrap">
+                     <span className="text-sm font-medium text-gray-700">{lang === 'en' ? 'Filter:' : '筛选:'}</span>
+                     <select className="border border-gray-300 rounded px-2 py-1 text-sm outline-none" value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)}>
+                         <option value="all">{lang === 'en' ? 'All Status' : '所有状态'}</option>
+                         <option value="pending">{lang === 'en' ? 'Pending' : '待处理'}</option>
+                         <option value="resolved">{lang === 'en' ? 'Resolved' : '已处理'}</option>
+                         <option value="approved">{lang === 'en' ? 'Approved' : '审核通过'}</option>
+                         <option value="unannotated">{lang === 'en' ? 'Unannotated' : '未批注'}</option>
+                     </select>
+                     <select className="border border-gray-300 rounded px-2 py-1 text-sm outline-none" value={ratingFilter} onChange={e => setRatingFilter(e.target.value as any)}>
+                         <option value="all">{lang === 'en' ? 'All Ratings' : '所有评分'}</option>
+                         <option value="5">5 {lang === 'en' ? 'Stars' : '星'}</option>
+                         <option value="4">4 {lang === 'en' ? 'Stars' : '星'}</option>
+                         <option value="3">3 {lang === 'en' ? 'Stars' : '星'}</option>
+                         <option value="2">2 {lang === 'en' ? 'Stars' : '星'}</option>
+                         <option value="1">1 {lang === 'en' ? 'Star' : '星'}</option>
+                         <option value="0">{lang === 'en' ? 'Unrated' : '未评分'}</option>
+                     </select>
+                     <select className="border border-gray-300 rounded px-2 py-1 text-sm outline-none max-w-[150px] truncate" value={columnFilter} onChange={e => setColumnFilter(e.target.value)}>
+                         <option value="all">{lang === 'en' ? 'All Columns' : '所有列'}</option>
+                         {imageFields.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                     </select>
+                     
+                     <div className="w-px h-5 bg-gray-300 mx-2"></div>
+                     
+                     <span className="text-sm font-medium text-gray-700">{lang === 'en' ? 'Display:' : '显示:'}</span>
+                     <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer">
+                        <input type="checkbox" checked={showRating} onChange={(e) => setShowRating(e.target.checked)} className="rounded border-gray-300 cursor-pointer" />
+                        {lang === 'en' ? 'Rating' : '评分'}
+                     </label>
+                     <div className="relative">
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); setShowDisplayFieldsMenu(!showDisplayFieldsMenu); }} 
+                            className="border border-gray-300 rounded px-2 py-1 text-sm outline-none bg-white min-w-[140px] text-left flex justify-between items-center"
+                        >
+                            {displayFieldIds.length === 0 ? (lang === 'en' ? 'No text' : '不显示文本') : `${displayFieldIds.length} ${lang === 'en' ? 'columns selected' : '列已选择'}`}
+                            <ChevronDown className="w-3 h-3 ml-2 opacity-50" />
+                        </button>
+                        {showDisplayFieldsMenu && (
+                            <>
+                            <div className="fixed inset-0 z-40" onClick={() => setShowDisplayFieldsMenu(false)}></div>
+                            <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 shadow-lg rounded py-1 z-50 w-56 max-h-64 overflow-y-auto">
+                                {data.fields.map((f: any) => (
+                                    <label key={f.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm text-gray-700">
+                                        <input type="checkbox" className="rounded border-gray-300" checked={displayFieldIds.includes(f.id)} onChange={(e) => {
+                                            if (e.target.checked) setDisplayFieldIds([...displayFieldIds, f.id]);
+                                            else setDisplayFieldIds(displayFieldIds.filter(id => id !== f.id));
+                                        }} />
+                                        <span className="truncate">{f.name}</span>
+                                    </label>
+                                ))}
+                            </div>
+                            </>
+                        )}
+                     </div>
+
+                     <div className="w-px h-5 bg-gray-300 mx-2"></div>
+
+                     <span className="text-sm font-medium text-gray-700">{lang === 'en' ? 'Reference:' : '参考图:'}</span>
+                     <div className="relative">
+                         <button 
+                             onClick={(e) => { e.stopPropagation(); setShowRefFieldsMenu(!showRefFieldsMenu); }} 
+                             className="border border-gray-300 rounded px-2 py-1 text-sm outline-none bg-white min-w-[140px] text-left flex justify-between items-center"
+                         >
+                             {refFieldIds.length === 0 ? (lang === 'en' ? 'None' : '无') : `${refFieldIds.length} ${lang === 'en' ? 'columns selected' : '列已选择'}`}
+                             <ChevronDown className="w-3 h-3 ml-2 opacity-50" />
+                         </button>
+                         {showRefFieldsMenu && (
+                             <>
+                             <div className="fixed inset-0 z-40" onClick={() => setShowRefFieldsMenu(false)}></div>
+                             <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 shadow-lg rounded py-1 z-50 w-56 max-h-64 overflow-y-auto">
+                                 {imageFields.map((f: any) => (
+                                     <label key={f.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm text-gray-700">
+                                         <input type="checkbox" className="rounded border-gray-300" checked={refFieldIds.includes(f.id)} onChange={(e) => {
+                                             if (e.target.checked) {
+                                                 if (refFieldIds.length < 2) setRefFieldIds([...refFieldIds, f.id]);
+                                                 else alert(lang === 'en' ? 'Max 2 reference columns' : '最多选择2列参考图');
+                                             } else setRefFieldIds(refFieldIds.filter(id => id !== f.id));
+                                         }} />
+                                         <span className="truncate">{f.name}</span>
+                                     </label>
+                                 ))}
+                             </div>
+                             </>
+                         )}
+                     </div>
+                     
+                     <span className="text-sm text-gray-500 ml-auto">{displayImages.length} {lang === 'en' ? 'images' : '张图片'}</span>
+                 </div>
+             </div>
+             <div className="flex-1 overflow-y-auto p-4 content-start">
+                 <div className="flex flex-wrap gap-4">
+                     {displayImages.map((img, idx) => {
+                         const path = img.url;
+                         let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
+                         const infoTexts = displayFieldIds.map(id => {
+                             const f = data.fields.find((f: any) => f.id === id);
+                             const val = img.record[id];
+                             return { id, name: f?.name, text: val != null ? String(val) : '' };
+                         }).filter(t => t.text);
+                         const hasInfo = showRating || infoTexts.length > 0;
+                         return (
+                             <div key={idx} className="relative group w-[200px] h-auto flex flex-col bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex-shrink-0 cursor-pointer hover:shadow-md transition-shadow" onClick={() => {
+                                 const fileItemsForPreview = displayImages.map(d => {
+                                     const refUrls: string[] = [];
+                                     refFieldIds.forEach(id => {
+                                         const val = d.record[id];
+                                         if (val) {
+                                             let items: any[] = [];
+                                             if (Array.isArray(val)) items = val;
+                                             else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
+                                             else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
+
+                                             if (items.length > 0) {
+                                                 const u = typeof items[0] === 'string' ? items[0] : items[0].url;
+                                                 if (u) {
+                                                     const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) ? `file://${u}` : u);
+                                                     refUrls.push(mappedU);
+                                                 }
+                                             }
+                                         }
+                                     });
+                                     return { ...d.item, refUrls };
+                                 });
+                                 onPreviewImage(path, fileItemsForPreview);
+                             }}>
+                                 <div className="w-full h-[180px] shrink-0 relative border-b border-gray-100">
+                                     <ThumbnailImage path={path} alt={path} className="w-full h-full object-cover" />
+                                     {img.status !== 'unannotated' && (
+                                         <div className={`absolute top-1 right-1 px-1.5 py-0.5 rounded text-[10px] text-white font-bold shadow-sm ${img.status === 'pending' ? 'bg-red-500' : img.status === 'resolved' ? 'bg-yellow-500' : 'bg-green-500'}`}>
+                                             {img.status === 'pending' ? '待处理' : img.status === 'resolved' ? '已处理' : '通过'}
+                                         </div>
+                                     )}
+                                 </div>
+                                 {hasInfo && (
+                                     <div className="p-2 h-auto flex flex-col justify-center bg-white shrink-0">
+                                         {showRating && img.rating > 0 && (
+                                             <div className="flex items-center gap-0.5 mb-1">
+                                                 {Array.from({length: 5}).map((_, i) => (
+                                                    <Star key={i} className={`w-3.5 h-3.5 ${i < img.rating ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`} />
+                                                 ))}
+                                             </div>
+                                         )}
+                                         {infoTexts.map(info => (
+                                             <div key={info.id} className="text-xs text-gray-600 truncate" title={`${info.name}: ${info.text}`}>
+                                                {info.text}
+                                             </div>
+                                         ))}
+                                     </div>
+                                 )}
+                             </div>
+                         );
+                     })}
+                 </div>
+             </div>
+        </div>
+    );
+}
+
+export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const [activeCell, setActiveCell] = useState<{ recordId: string; fieldId: string } | null>(null);
@@ -418,6 +1031,7 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
   const [selectedColIds, setSelectedColIds] = useState<Set<string>>(new Set());
   const [contextMenuState, setContextMenuState] = useState<{ x: number, y: number, recordId?: string } | null>(null);
   const [colContextMenuState, setColContextMenuState] = useState<{ x: number, y: number, fieldId?: string } | null>(null);
+  const [cellContextMenuState, setCellContextMenuState] = useState<{ x: number, y: number } | null>(null);
   const [insertRowCount, setInsertRowCount] = useState(1);
   const [insertColCount, setInsertColCount] = useState(1);
   const [cutBox, setCutBox] = useState<{ minR: number, maxR: number, minC: number, maxC: number } | null>(null);
@@ -428,23 +1042,24 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
   const [draggedRowId, setDraggedRowId] = useState<string | null>(null);
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
 
-  const [previewImageState, setPreviewImageState] = useState<{ images: string[], currentIndex: number } | null>(null);
+  const [previewImageState, setPreviewImageState] = useState<{ items: any[], currentIndex: number, onUpdate?: (newItems: any[]) => void } | null>(null);
 
-  const setPreviewImage = (path: string | null, allPaths: string[] = []) => {
+  const setPreviewImage = (path: string | null, allItems: any[] = [], onUpdate?: (newItems: any[]) => void) => {
       if (!path) { setPreviewImageState(null); return; }
-      if (allPaths.length === 0) allPaths = [path];
-      const currentIndex = allPaths.indexOf(path);
-      setPreviewImageState({ images: allPaths, currentIndex: currentIndex === -1 ? 0 : currentIndex });
+      if (allItems.length === 0) allItems = [{ url: path }];
+      const parsedItems = allItems.map(it => typeof it === 'string' ? { url: it, mappedUrl: fullImageBlobCache.get(it) || (it.startsWith('/') || it.match(/^[a-zA-Z]:\\/) ? `file://${it}` : it) } : { ...it, mappedUrl: it.mappedUrl || fullImageBlobCache.get(it.url) || (it.url.startsWith('/') || it.url.match(/^[a-zA-Z]:\\/) ? `file://${it.url}` : it.url) });
+      const currentIndex = parsedItems.findIndex((it: any) => it.mappedUrl === path || it.url === path);
+      setPreviewImageState({ items: parsedItems, currentIndex: currentIndex === -1 ? 0 : currentIndex, onUpdate });
   };
 
   const handlePreviewPrev = () => {
       if (!previewImageState) return;
-      setPreviewImageState(prev => prev ? { ...prev, currentIndex: (prev.currentIndex - 1 + prev.images.length) % prev.images.length } : null);
+      setPreviewImageState(prev => prev ? { ...prev, currentIndex: (prev.currentIndex - 1 + prev.items.length) % prev.items.length } : null);
   };
 
   const handlePreviewNext = () => {
       if (!previewImageState) return;
-      setPreviewImageState(prev => prev ? { ...prev, currentIndex: (prev.currentIndex + 1) % prev.images.length } : null);
+      setPreviewImageState(prev => prev ? { ...prev, currentIndex: (prev.currentIndex + 1) % prev.items.length } : null);
   };
 
   useEffect(() => {
@@ -523,11 +1138,16 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
                   const record = data.records[r];
                   const field = visibleFields[c];
                   let val = record[field.id];
-                  if (field.type === 'attachment') {
+                  if (field.type === 'attachment' || field.type === 'aiImage') {
                      if (Array.isArray(val)) {
                        val = val.map((a: any) => a.url || a).join(',');
                      } else if (typeof val === 'string') val = val;
                      else val = '';
+                  } else if (field.type === 'singleSelect' || field.type === 'multiSelect') {
+                     if (val) {
+                       const valArray = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',').map(s=>s.trim()) : [val]);
+                       val = valArray.map(v => field.options?.find((o:any) => o.id === v)?.name || v).join(', ');
+                     }
                   } else if (typeof val === 'object' && val !== null) {
                      val = JSON.stringify(val);
                   }
@@ -601,11 +1221,11 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
                if (pathToAdd.startsWith('IMG_COPY_MAGIC:')) {
                   pathToAdd = pathToAdd.substring('IMG_COPY_MAGIC:'.length);
                   const existing = record[field.id] || [];
-                  const existingArr = Array.isArray(existing) ? existing : (typeof existing === 'string' && existing ? existing.split(',') : []);
+                  const existingArr = Array.isArray(existing) ? existing : (typeof existing === 'string' && existing ? existing.split(',').map(s=>({url: s.trim()})) : []);
                   if (pathToAdd) {
-                      val = [...existingArr, pathToAdd.trim()].filter(Boolean).join(',');
+                      val = [...existingArr, {url: pathToAdd.trim()}];
                   } else {
-                      val = existingArr.join(',');
+                      val = existingArr;
                   }
                } else {
                   val = pathToAdd;
@@ -678,13 +1298,18 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
          for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
             const field = visibleFields[c];
             let val = record[field.id];
-            if (field.type === 'attachment') {
+            if (field.type === 'attachment' || field.type === 'aiImage') {
                if (Array.isArray(val)) {
                  val = val.map((a: any) => a.url || a).join(',');
                } else if (typeof val === 'string') {
                  val = val;
                } else {
                  val = '';
+               }
+            } else if (field.type === 'singleSelect' || field.type === 'multiSelect') {
+               if (val) {
+                 const valArray = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',').map(s=>s.trim()) : [val]);
+                 val = valArray.map(v => field.options?.find((o:any) => o.id === v)?.name || v).join(', ');
                }
             } else if (typeof val === 'object' && val !== null) {
                val = JSON.stringify(val);
@@ -949,14 +1574,45 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
             resultParams = urls;
           }
         } else {
+          const cfg = field.aiTextConfig || {};
           const txtSet = modelSettings.text || {};
-          if (txtSet.provider === 'gemini') {
+          
+          let resolvedModel = (txtSet.modelName || 'gpt-3.5-turbo').split(',')[0].trim();
+          if (cfg.modelTemplate) {
+             let template = cfg.modelTemplate;
+             data.fields.forEach(f => {
+               template = template.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`, 'g'), String(record[f.id] || ''));
+             });
+             if (template.trim()) {
+               resolvedModel = template.trim();
+             }
+          }
+          if (txtSet.provider === 'gemini' && (!cfg.modelTemplate)) {
+            resolvedModel = 'gemini-1.5-flash';
+          }
+          
+          let textParts: any[] = [{ text: promptString }];
+          if (cfg.sourceImageTemplate) {
+             const { parts } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record);
+             textParts = [...parts, ...textParts];
+          }
+
+          if (txtSet.provider === 'gemini' || txtSet.provider === 'gemini-custom') {
             if (!txtSet.key) throw new Error("Gemini API Key is required");
-            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${txtSet.key}`, {
+            let endpoint = txtSet.provider === 'gemini' 
+              ? `https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`
+              : txtSet.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`;
+            
+            if (txtSet.provider === 'gemini-custom' && endpoint.endsWith('/')) endpoint = endpoint.slice(0, -1);
+            if (txtSet.provider === 'gemini-custom' && !endpoint.includes(':generateContent')) {
+               endpoint = `${endpoint}/models/${resolvedModel}:generateContent`;
+            }
+              
+            const res = await fetch(`${endpoint}?key=${txtSet.key}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                 contents: [{ parts: [{ text: promptString }] }]
+                 contents: [{ parts: textParts, role: 'user' }]
               })
             });
             const resData = await res.json();
@@ -964,6 +1620,19 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
             resultParams = resData.candidates?.[0]?.content?.parts?.[0]?.text || '';
           } else {
             if (!txtSet.key) throw new Error("OpenAI API Key is required");
+            
+            let messageContent: any = promptString;
+            if (textParts.length > 1) {
+              messageContent = textParts.map(p => {
+                if (p.inlineData) {
+                  return { type: 'image_url', image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } };
+                } else if (p.text) {
+                  return { type: 'text', text: p.text };
+                }
+                return p;
+              });
+            }
+
             const res = await fetch(`${txtSet.endpoint || 'https://api.openai.com/v1'}/chat/completions`, {
               method: 'POST',
               headers: {
@@ -971,12 +1640,13 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
                 'Authorization': `Bearer ${txtSet.key}`
               },
               body: JSON.stringify({
-                model: txtSet.modelName || 'gpt-3.5-turbo',
-                messages: [{ role: 'user', content: promptString }]
+                model: resolvedModel,
+                messages: [{ role: 'user', content: messageContent }]
               })
             });
             const json = await res.json();
             if (json.error) throw new Error(json.error.message);
+            if (!json.choices || !json.choices.length) throw new Error("Invalid response from text API");
             resultParams = json.choices[0].message.content;
           }
         }
@@ -1039,6 +1709,9 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
 
   return (
     <div className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate' }}>
+      {viewMode === 'gallery' ? (
+        <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} />
+      ) : (
       <table className="min-w-full text-left" style={{ tableLayout: 'fixed', width: totalTableWidth, borderCollapse: 'separate', borderSpacing: 0 }}>
         <thead className="sticky top-0 z-40 bg-gray-50 text-sm">
           <tr>
@@ -1311,6 +1984,13 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
                           setSelectionEnd({ r: index, c: colIdx });
                        }
                     }}
+                    onContextMenu={(e: React.MouseEvent) => {
+                       // Only allow context menu if it's within a selection.
+                       if (isSelectedBox && (selectionBox !== null || extraSelectedCells.length > 0)) {
+                           e.preventDefault();
+                           setCellContextMenuState({ x: e.clientX, y: e.clientY });
+                       }
+                    }}
                     onActivateNextRow={() => {
                        if (index < data.records.length - 1) {
                           setActiveCell({ recordId: data.records[index + 1].id, fieldId: field.id });
@@ -1338,13 +2018,30 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
           </tr>
         </tbody>
       </table>
+      )}
 
-      {previewImageState && previewImageState.images.length > 0 && (
+      {previewImageState && previewImageState.items.length > 0 && (
           <ZoomableImage 
-             src={previewImageState.images[previewImageState.currentIndex]}
+             item={previewImageState.items[previewImageState.currentIndex]}
              onPrev={(e) => { e.stopPropagation(); handlePreviewPrev(); }}
              onNext={(e) => { e.stopPropagation(); handlePreviewNext(); }}
              onClose={() => setPreviewImageState(null)}
+             username={username}
+             lang={lang}
+             onUpdateItem={(newItem) => {
+                const newItems = [...previewImageState.items];
+                newItems[previewImageState.currentIndex] = newItem;
+                setPreviewImageState({ ...previewImageState, items: newItems });
+                if (previewImageState.onUpdate) {
+                   previewImageState.onUpdate(newItems);
+                }
+                if (onUpdateGlobalAttachment) {
+                   const { url, mappedUrl, ...updatedProps } = newItem;
+                   if (url) {
+                       onUpdateGlobalAttachment(url, updatedProps);
+                   }
+                }
+             }}
           />
       )}
 
@@ -1548,6 +2245,62 @@ export function Grid({ data, searchQuery, searchMatches, activeSearchMatch, onUp
           </div>
         </>
       )}
+
+      {cellContextMenuState && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setCellContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setCellContextMenuState(null); }}></div>
+          <div 
+             className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[200px] text-sm text-gray-700"
+             style={{ left: cellContextMenuState.x, top: cellContextMenuState.y }}
+          >
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-red-50 transition-colors flex items-center justify-between pointer-events-auto text-red-600 hover:text-red-700"
+                onClick={() => {
+                   const allSelectedCells = new Set<string>();
+                   if (selectionBox) {
+                      for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+                         for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+                            allSelectedCells.add(`${r},${c}`);
+                         }
+                      }
+                   }
+                   extraSelectedCells.forEach(cell => allSelectedCells.add(`${cell.r},${cell.c}`));
+                   const selectedArr = Array.from(allSelectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
+                   
+                   selectedArr.forEach(({r, c}) => {
+                      const record = data.records[r];
+                      const field = visibleFields[c];
+                      if (!record || !field) return;
+                      const val = record[field.id];
+                      
+                      if ((field.type === 'aiImage' || field.type === 'attachment') && val) {
+                         let items: any[] = [];
+                         if (Array.isArray(val)) items = val;
+                         else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map(s => ({ url: s.trim() }));
+                         else if (typeof val === 'object' && val !== null) items = [val];
+                         
+                         if (items.length > 0) {
+                            const updatedItems = items.map((i: any) => {
+                               const newItem = typeof i === 'string' ? { url: i } : { ...i };
+                               if (newItem.annotations) delete newItem.annotations;
+                               return newItem;
+                            });
+                            onUpdateRecord(record.id, field.id, updatedItems);
+                         }
+                      }
+                   });
+                   
+                   setCellContextMenuState(null);
+                }}
+             >
+                <div className="flex items-center">
+                   <Trash2 className="w-4 h-4 mr-2" />
+                   {lang === 'en' ? 'Clear Revisions' : '清除全部标注'}
+                </div>
+             </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1610,6 +2363,7 @@ function HeaderCell({
   const [draftPrompt, setDraftPrompt] = useState(field.prompt || '');
   const [draftRefs, setDraftRefs] = useState<string[]>(field.refFields || []);
   const [draftAiImageConfig, setDraftAiImageConfig] = useState(field.aiImageConfig || { count: 1, size: '1024x1024' });
+  const [draftAiTextConfig, setDraftAiTextConfig] = useState(field.aiTextConfig || {});
   const [showPromptRefs, setShowPromptRefs] = useState(false);
 
   useEffect(() => {
@@ -2003,6 +2757,67 @@ function HeaderCell({
                        </div>
                      </div>
                    )}
+                   {field.type === 'aiText' && (
+                     <div className="mt-2 space-y-2">
+                       <div>
+                         <label className="block text-[10px] text-gray-500 mb-1">参考图片 (引用字段)</label>
+                         <div className="relative">
+                           <textarea
+                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none"
+                             value={draftAiTextConfig.sourceImageTemplate || ''}
+                             placeholder="{Image 1} {Image 2}"
+                             onChange={e => setDraftAiTextConfig(prev => ({ ...prev, sourceImageTemplate: e.target.value }))}
+                             onMouseDown={e => e.stopPropagation()}
+                           />
+                           <select 
+                             className="absolute bottom-1 right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px]"
+                             value=""
+                             onChange={e => {
+                               if (!e.target.value) return;
+                               const curTpl = draftAiTextConfig.sourceImageTemplate || '';
+                               setDraftAiTextConfig(prev => ({ ...prev, sourceImageTemplate: curTpl + `{${e.target.value}}` }));
+                             }}
+                           >
+                             <option value="">+ 引用</option>
+                             {allFields.filter(f => f.id !== field.id && (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'url')).map(f => (
+                               <option key={f.id} value={f.name}>{f.name}</option>
+                             ))}
+                           </select>
+                         </div>
+                       </div>
+                       <div className="relative">
+                          <label className="block text-[10px] text-gray-500 mb-1">文本生成模型 (可引用字段，覆盖默认)</label>
+                          <input 
+                            type="text" 
+                            list={`txt-model-suggestions-${field.id}`}
+                            className="w-full text-xs border border-gray-300 rounded p-1 outline-none placeholder:text-gray-300"
+                            placeholder="例如: {Model} 或 gpt-4o"
+                            value={draftAiTextConfig.modelTemplate || ''}
+                            onChange={e => setDraftAiTextConfig(prev => ({ ...prev, modelTemplate: e.target.value }))}
+                            onMouseDown={e => e.stopPropagation()}
+                          />
+                          <datalist id={`txt-model-suggestions-${field.id}`}>
+                            {modelSettings?.text?.modelName?.split(',').map((m: string) => m.trim()).filter(Boolean).map((m: string) => (
+                               <option key={m} value={m} />
+                            ))}
+                          </datalist>
+                          <select 
+                             className="absolute bottom-1 right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px]"
+                             value=""
+                             onChange={e => {
+                               if (!e.target.value) return;
+                               const curTpl = draftAiTextConfig.modelTemplate || '';
+                               setDraftAiTextConfig(prev => ({ ...prev, modelTemplate: curTpl + `{${e.target.value}}` }));
+                             }}
+                           >
+                             <option value="">+ 引用</option>
+                             {allFields.filter(f => f.id !== field.id).map(f => (
+                               <option key={f.id} value={f.name}>{f.name}</option>
+                             ))}
+                          </select>
+                       </div>
+                     </div>
+                   )}
 
                    <div className="mt-3 flex justify-between items-center">
                      <button
@@ -2017,7 +2832,7 @@ function HeaderCell({
                      <button 
                        className="text-xs bg-blue-600 text-white px-3 flex items-center h-7 rounded hover:bg-blue-700 transition-colors shadow-sm"
                        onClick={() => {
-                         onUpdateField({ prompt: draftPrompt, refFields: draftRefs, aiImageConfig: draftAiImageConfig });
+                         onUpdateField({ prompt: draftPrompt, refFields: draftRefs, aiImageConfig: draftAiImageConfig, aiTextConfig: draftAiTextConfig });
                          setShowMenu(false);
                        }}
                      >
@@ -2062,7 +2877,7 @@ interface CellProps {
   onActivate: () => void;
   onChange: (value: any) => void;
   onBlur: () => void;
-  onPreviewImage: (url: string, images?: string[]) => void;
+  onPreviewImage: (url: string, items?: any[], onUpdate?: (newItems: any[]) => void) => void;
   allFields: Field[];
   modelSettings: any;
   heightClass: string;
@@ -2072,13 +2887,14 @@ interface CellProps {
   onMouseDown: (e: React.MouseEvent) => void;
   onMouseEnter: () => void;
   onActivateNextRow: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
   onBatchAIGenerate?: () => void;
   frozenLeftOffset?: number;
   isFrozenLast?: boolean;
   lang?: 'en' | 'zh';
 }
 
-function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh' }: CellProps) {
+function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh' }: CellProps) {
   const value = record[field.id];
   
   const [isEditingMode, setIsEditingMode] = useState(false);
@@ -2355,11 +3171,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
     // Read only view
     switch (field.type) {
       case 'attachment': {
-        let filePaths: string[] = [];
+        let fileItems: any[] = [];
         if (Array.isArray(value)) {
-          filePaths = value.map((v: any) => typeof v === 'string' ? v : v.url || v.name || '');
+          fileItems = value.map((v: any) => typeof v === 'string' ? { url: v } : (v.url ? v : { url: v.name || '' }));
         } else if (typeof value === 'string' && value.trim() !== '') {
-          filePaths = value.split(',').map(s => s.trim());
+          fileItems = value.split(',').map(s => ({ url: s.trim() }));
         }
         
         let imgSizeClass = 'h-[24px] w-[24px]';
@@ -2371,15 +3187,20 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
 
         return (
           <div 
-             className="px-1 h-full flex items-center cursor-pointer flex-wrap gap-1 py-1"
+             className="px-1 h-full flex items-center cursor-pointer flex-wrap gap-1 py-1 relative"
              onClick={(e) => { e.stopPropagation(); onActivate(); if (isActive) setIsEditingMode(true); }}
           >
-             {filePaths.length === 0 ? (
+             {fileItems.length === 0 ? (
                <div className="text-gray-300 w-full text-center">+</div>
              ) : (
                <div className={`flex items-center gap-1 overflow-hidden w-full ${containerHeightClass}`}>
-                  {filePaths.map((path, i) => {
+                  {fileItems.map((item, i) => {
+                    const path = item.url;
                     let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
+                    const pendingCount = item.annotations?.filter((a: any) => a.status === 'pending').length || 0;
+                    const resolvedCount = item.annotations?.filter((a: any) => a.status === 'resolved').length || 0;
+                    const approvedCount = item.annotations?.filter((a: any) => a.status === 'approved').length || 0;
+                    
                     return (
                       <div key={i} className="relative group/img-item shrink-0">
                         <ThumbnailImage 
@@ -2387,8 +3208,18 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           alt={path.split('/').pop()?.split('\\').pop() || 'image'} 
                           className={`${imgSizeClass} object-cover rounded border border-gray-200 bg-gray-100 cursor-pointer`} 
                           title={path}
-                          onClick={(e) => { e.stopPropagation(); onPreviewImage(fullUrl, filePaths.map(p => fullImageBlobCache.get(p) || (p.startsWith('/') || p.match(/^[a-zA-Z]:\\/) ? `file://${p}` : p))); }}
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems)); 
+                          }}
                         />
+                        {(pendingCount > 0 || resolvedCount > 0 || approvedCount > 0) && (
+                          <div className="absolute -top-1 -right-1 flex gap-0.5 z-10 pointer-events-none drop-shadow-md">
+                             {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
+                             {resolvedCount > 0 && <span className="bg-yellow-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
+                             {approvedCount > 0 && <span className="bg-green-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
+                          </div>
+                        )}
                         <div className="absolute top-0.5 right-0.5 bg-white/80 text-gray-700 rounded p-0.5 opacity-0 group-hover/img-item:opacity-100 flex items-center gap-1 shadow-sm z-10 transition-opacity">
                           <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
                              <Copy className="w-3.5 h-3.5 hover:text-blue-500" />
@@ -2396,7 +3227,8 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              onChange(filePaths.filter((_, idx) => idx !== i).join(','));
+                              const updated = fileItems.filter((_, idx) => idx !== i);
+                              onChange(updated.length > 0 ? updated : '');
                             }}
                             title="Delete"
                           >
@@ -2412,11 +3244,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
         );
       }
       case 'aiImage': {
-        let filePaths: string[] = [];
+        let fileItems: any[] = [];
         if (Array.isArray(value)) {
-          filePaths = value.map((v: any) => typeof v === 'string' ? v : v.url || v.name || '');
+          fileItems = value.map((v: any) => typeof v === 'string' ? { url: v } : (v.url ? v : { url: v.name || '' }));
         } else if (typeof value === 'string' && value.trim() !== '') {
-          filePaths = value.split(',').map(s => s.trim());
+          fileItems = value.split(',').map(s => ({ url: s.trim() }));
         }
         
         let imgSizeClass = 'h-[24px] w-[24px]';
@@ -2433,10 +3265,15 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                  <Sparkles className="w-3.5 h-3.5 animate-pulse" />
                  <span>Generating...</span>
                </div>
-             ) : filePaths.length > 0 ? (
+             ) : fileItems.length > 0 ? (
                <div className={`flex items-center gap-1 overflow-hidden w-full ${containerHeightClass}`}>
-                  {filePaths.map((path, i) => {
+                  {fileItems.map((item, i) => {
+                    const path = item.url;
                     let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
+                    const pendingCount = item.annotations?.filter((a: any) => a.status === 'pending').length || 0;
+                    const resolvedCount = item.annotations?.filter((a: any) => a.status === 'resolved').length || 0;
+                    const approvedCount = item.annotations?.filter((a: any) => a.status === 'approved').length || 0;
+
                     return (
                       <div key={i} className="relative group/img-item shrink-0">
                         <ThumbnailImage 
@@ -2444,8 +3281,18 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           alt="ai-generated" 
                           className={`${imgSizeClass} object-cover rounded border border-gray-200 bg-gray-100 cursor-pointer`} 
                           title={path}
-                          onClick={(e) => { e.stopPropagation(); onPreviewImage(fullUrl, filePaths.map(p => fullImageBlobCache.get(p) || (p.startsWith('/') || p.match(/^[a-zA-Z]:\\/) ? `file://${p}` : p))); }}
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems)); 
+                          }}
                         />
+                        {(pendingCount > 0 || resolvedCount > 0 || approvedCount > 0) && (
+                          <div className="absolute -top-1 -right-1 flex gap-0.5 z-10 pointer-events-none drop-shadow-md">
+                             {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
+                             {resolvedCount > 0 && <span className="bg-yellow-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
+                             {approvedCount > 0 && <span className="bg-green-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
+                          </div>
+                        )}
                         <div className="absolute top-0.5 right-0.5 bg-white/80 text-gray-700 rounded p-0.5 opacity-0 group-hover/img-item:opacity-100 flex items-center gap-1 shadow-sm z-10 transition-opacity">
                           <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
                              <Copy className="w-3.5 h-3.5 hover:text-blue-500" />
@@ -2453,7 +3300,8 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              onChange(filePaths.filter((_, idx) => idx !== i).join(','));
+                              const updated = fileItems.filter((_, idx) => idx !== i);
+                              onChange(updated.length > 0 ? updated : '');
                             }}
                             title="Delete"
                           >
@@ -2588,10 +3436,12 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                 if (refField) {
                   const rawVal = record[refId];
                   let valToUse = rawVal;
-                  if (refField.type === 'singleSelect') {
-                    valToUse = refField.options?.find((o: any) => o.id === rawVal)?.name || rawVal;
-                  } else if (refField.type === 'multiSelect' && Array.isArray(rawVal)) {
-                    valToUse = rawVal.map((id: string) => refField.options?.find((o: any) => o.id === id)?.name || id).join(', ');
+                  if (refField.type === 'singleSelect' || refField.type === 'multiSelect') {
+                    if (rawVal) {
+                      const valArray = Array.isArray(rawVal) ? rawVal : (typeof rawVal === 'string' ? rawVal.split(',').map(s=>s.trim()) : [rawVal]);
+                      const mapped = valArray.map(v => refField.options?.find((o:any) => o.id === v)?.name || v);
+                      valToUse = mapped.length === 1 && !Array.isArray(rawVal) && refField.type === 'singleSelect' ? mapped[0] : mapped.join(', ');
+                    }
                   }
 
                   const varName = 'VAR_' + refId.replace(/[^a-zA-Z0-9]/g, '_');
@@ -2642,9 +3492,36 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
 
         if (displayValue == null) displayValue = '';
         
+        if (isActive && isEditingMode) {
+          return (
+            <div className="flex h-full w-full relative">
+              <textarea
+                readOnly
+                autoFocus
+                onFocus={(e) => {
+                  const len = e.target.value.length;
+                  e.target.setSelectionRange(len, len);
+                }}
+                className="flex-1 w-full px-2 py-1.5 outline-none bg-white resize-none overflow-y-auto ring-[1.5px] ring-blue-500 ring-inset cursor-text"
+                value={String(displayValue)}
+                onBlur={() => {
+                  setIsEditingMode(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' || (!e.shiftKey && e.key === 'Enter')) {
+                     setIsEditingMode(false);
+                     e.stopPropagation();
+                  }
+                }}
+                style={{ position: 'absolute', zIndex: 30, left: -1, right: -1, top: -1, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }}
+              />
+            </div>
+          );
+        }
+
         return (
-          <div className="px-2 h-full flex flex-col justify-center w-full overflow-hidden select-text bg-gray-50/50">
-            <span className="truncate text-sm leading-tight text-gray-700 italic font-medium"><HighlightedText text={String(displayValue)} query={searchQuery} /></span>
+          <div className="px-2 py-1 h-full flex flex-col justify-center relative w-full overflow-hidden select-none cursor-pointer text-gray-700 italic" onClick={() => { onActivate(); if (isActive) setIsEditingMode(true); }} title="Double click to expand">
+            <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full font-medium" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}><HighlightedText text={String(displayValue)} query={searchQuery} /></span>
           </div>
         );
       }
@@ -2683,23 +3560,23 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
              const files = Array.from(e.dataTransfer.files).filter((f: any) => f.type.startsWith('image/'));
              if (files.length > 0) {
-               let existingPaths: string[] = [];
+               let existingItems: any[] = [];
                if (Array.isArray(value)) {
-                 existingPaths = value.map((v: any) => typeof v === 'string' ? v : v.url || v.name || '');
+                 existingItems = [...value];
                } else if (typeof value === 'string' && value.trim() !== '') {
-                 existingPaths = value.split(',').map(s => s.trim());
+                 existingItems = value.split(',').map(s => ({ url: s.trim() }));
                }
 
-               const pathMatches = files.map((file: any) => {
+               const fileObjects = files.map((file: any) => {
                  const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
                  getOrGenerateThumbnail(pathStr, file);
                  if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/)) {
                    fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
                  }
-                 return pathStr;
+                 return { url: pathStr };
                });
 
-               const newValue = [...existingPaths, ...pathMatches].join(',');
+               const newValue = [...existingItems, ...fileObjects];
                onChange(newValue);
              }
            }
@@ -2715,6 +3592,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
       onMouseEnter={() => {
          if (!isEditingMode) onMouseEnter();
       }}
+      onContextMenu={onContextMenu}
       onClick={(e) => {
         if (!isActive) {
            onActivate();
@@ -2944,12 +3822,12 @@ function SelectCellEditor({ field, ids, isMulti, onChange, onClose, onUpdateFiel
   );
 }
 
-function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: any, onChange: (v: any) => void, onClose: () => void, onPreview: (url: string, allUrls?: string[]) => void }) {
-  let filePaths: string[] = [];
+function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: any, onChange: (v: any) => void, onClose: () => void, onPreview: (url: string, allUrls?: {url: string, annotations?: any[]}[], onUpdate?: (items: any[]) => void) => void }) {
+  let fileItems: any[] = [];
   if (Array.isArray(value)) {
-    filePaths = value.map((v: any) => typeof v === 'string' ? v : v.url || v.name || '');
+    fileItems = value.map((v: any) => typeof v === 'string' ? { url: v } : (v.url ? v : { url: v.name || '' }));
   } else if (typeof value === 'string' && value.trim() !== '') {
-    filePaths = value.split(',').map(s => s.trim());
+    fileItems = value.split(',').map(s => ({ url: s.trim() }));
   }
 
   const ref = useClickOutside(onClose);
@@ -2961,20 +3839,21 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const files = Array.from(e.target.files as FileList);
-      const pathMatches = files.map((file: any) => {
+      const newItems = files.map((file: any) => {
         const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
         getOrGenerateThumbnail(pathStr, file);
         if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/)) {
           fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
         }
-        return pathStr;
+        return { url: pathStr };
       });
-      onChange([...filePaths, ...pathMatches].join(','));
+      onChange([...fileItems, ...newItems]);
     }
   };
 
   const handleRemove = (index: number) => {
-    onChange(filePaths.filter((_, idx) => idx !== index).join(','));
+    const updated = fileItems.filter((_, idx) => idx !== index);
+    onChange(updated.length > 0 ? updated : '');
   };
 
   const handleDrop = (e: React.DragEvent, targetIndex?: number) => {
@@ -2989,10 +3868,10 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
         return;
       }
 
-      const newArr = [...filePaths];
+      const newArr = [...fileItems];
       const [moved] = newArr.splice(draggedImgIndex, 1);
       newArr.splice(targetIndex, 0, moved);
-      onChange(newArr.join(','));
+      onChange(newArr);
       
       setDraggedImgIndex(null);
       setDragOverImgIndex(null);
@@ -3002,16 +3881,16 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const files = Array.from(e.dataTransfer.files).filter((f: any) => f.type.startsWith('image/'));
       if (files.length > 0) {
-        const pathMatches = files.map((file: any) => {
+        const newItems = files.map((file: any) => {
           // Add support for window.electronAPI.getPathForFile if exposed in preload
           const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
           getOrGenerateThumbnail(pathStr, file);
           if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/)) {
             fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
           }
-          return pathStr;
+          return { url: pathStr };
         });
-        onChange([...filePaths, ...pathMatches].join(','));
+        onChange([...fileItems, ...newItems]);
         setDragOverImgIndex(null);
         return;
       }
@@ -3032,7 +3911,8 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
         </button>
       </div>
       <div className="flex flex-wrap gap-2 w-[340px]">
-        {filePaths.map((path, index) => {
+        {fileItems.map((item, index) => {
+           let path = item.url;
            let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
            
            return (
@@ -3057,7 +3937,10 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
                }}
                onDrop={(e) => handleDrop(e, index)}
                onDragEnd={() => { setDraggedImgIndex(null); setDragOverImgIndex(null); }}
-               onClick={() => onPreview(fullUrl, filePaths.map(p => fullImageBlobCache.get(p) || (p.startsWith('/') || p.match(/^[a-zA-Z]:\\/) ? `file://${p}` : p)))}
+               onClick={() => onPreview(fullUrl, fileItems.map(p => {
+                 const mappedUrl = fullImageBlobCache.get(p.url) || (p.url.startsWith('/') || p.url.match(/^[a-zA-Z]:\\/) ? `file://${p.url}` : p.url);
+                 return { ...p, mappedUrl };
+               }), (newItems) => onChange(newItems))}
              >
                <ThumbnailImage path={path} className="w-full h-full object-cover cursor-pointer" alt="attachment" />
                <div 

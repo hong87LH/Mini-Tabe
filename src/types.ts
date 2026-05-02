@@ -21,6 +21,10 @@ export interface Field {
   hidden?: boolean;
   prompt?: string; // For aiText and formula
   refFields?: string[]; // For aiText, formula, aiImage
+  aiTextConfig?: {
+    modelTemplate?: string;
+    sourceImageTemplate?: string;
+  };
   aiImageConfig?: {
     count?: number;
     size?: string;

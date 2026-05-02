@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import { initialGridData } from './initialData';
 import { Grid } from './components/Grid';
 import { FieldType, Attachment, GridData } from './types';
-import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy } from 'lucide-react';
+import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy, Image as ImageIcon } from 'lucide-react';
 import Papa from 'papaparse';
 import { Parser } from 'expr-eval';
+import { getStringColor } from './lib/utils';
 
 export const computeFormulaValue = (field: any, record: any, fields: any[]) => {
   if (!field.prompt) return '';
@@ -23,10 +24,12 @@ export const computeFormulaValue = (field: any, record: any, fields: any[]) => {
         // for expr-eval fallback
         const rawVal = record[refId];
         let valToUse = rawVal;
-        if (refField.type === 'singleSelect') {
-          valToUse = refField.options?.find((o: any) => o.id === rawVal)?.name || rawVal;
-        } else if (refField.type === 'multiSelect' && Array.isArray(rawVal)) {
-          valToUse = rawVal.map((id: string) => refField.options?.find((o: any) => o.id === id)?.name || id).join(', ');
+        if (refField.type === 'singleSelect' || refField.type === 'multiSelect') {
+          if (rawVal) {
+            const valArray = Array.isArray(rawVal) ? rawVal : (typeof rawVal === 'string' ? rawVal.split(',').map(s=>s.trim()) : [rawVal]);
+            const mapped = valArray.map(v => refField.options?.find((o:any) => o.id === v)?.name || v);
+            valToUse = mapped.length === 1 && !Array.isArray(rawVal) && refField.type === 'singleSelect' ? mapped[0] : mapped.join(', ');
+          }
         }
         
         const numVal = parseFloat(valToUse as string);
@@ -282,68 +285,86 @@ export default function App() {
       }
   };
 
+  const [showNewProjectConfirm, setShowNewProjectConfirm] = useState(false);
+
   const handleNewProject = () => {
-     if (window.confirm(lang === 'en' ? 'Create a new project? Unsaved changes will be lost if not saved.' : '确定要新建工程吗？如果未保存为文件，当前的更改可能会丢失。')) {
-        setTablesInternal([{ id: 'table_1', name: 'Master Table', data: initialGridData }]);
-        setActiveTableIdState('table_1');
-        activeTableIdRef.current = 'table_1';
-        setProjectName('Untitled Project');
-        setHistory([]);
-        setFuture([]);
-     }
+     setShowNewProjectConfirm(true);
+  };
+
+  const confirmNewProject = () => {
+     setTablesInternal([{ id: 'table_1', name: 'Master Table', data: initialGridData }]);
+     setActiveTableIdState('table_1');
+     activeTableIdRef.current = 'table_1';
+     setProjectName('Untitled Project');
+     setHistory([]);
+     setFuture([]);
+     setShowNewProjectConfirm(false);
+  };
+
+  const executeFileInputFallback = () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.aistudio.json,.json';
+      input.onchange = (e) => {
+         const file = (e.target as HTMLInputElement).files?.[0];
+         if (!file) return;
+         const reader = new FileReader();
+         reader.onload = (ev) => {
+            try {
+                const parsed = JSON.parse(ev.target?.result as string);
+                if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].data) {
+                    setTablesInternal(parsed);
+                    setActiveTableId(parsed[0].id);
+                    setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+                    setHistory([]);
+                    setFuture([]);
+                } else {
+                    alert("Invalid project file.");
+                }
+            } catch (e) { alert("Invalid JSON file"); }
+         };
+         reader.readAsText(file);
+      };
+      input.click();
   };
 
   const handleOpenProject = async () => {
+     let fileHandle;
      try {
         if ((window as any).showOpenFilePicker) {
-            const [fileHandle] = await (window as any).showOpenFilePicker({
+            const handles = await (window as any).showOpenFilePicker({
                 types: [{
                     description: 'AI Studio Project',
                     accept: {'application/json': ['.aistudio.json', '.json']}
                 }],
                 multiple: false
             });
-            const file = await fileHandle.getFile();
-            const text = await file.text();
-            const parsed = JSON.parse(text);
-            if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].data) {
-                setTablesInternal(parsed);
-                setActiveTableId(parsed[0].id);
-                setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
-                setHistory([]);
-                setFuture([]);
-                (window as any).activeProjectFileHandle = fileHandle;
-            } else {
-                alert("Invalid project file.");
-            }
-        } else {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.aistudio.json,.json';
-            input.onchange = (e) => {
-               const file = (e.target as HTMLInputElement).files?.[0];
-               if (!file) return;
-               const reader = new FileReader();
-               reader.onload = (ev) => {
-                  try {
-                      const parsed = JSON.parse(ev.target?.result as string);
-                      if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].data) {
-                          setTablesInternal(parsed);
-                          setActiveTableId(parsed[0].id);
-                          setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
-                          setHistory([]);
-                          setFuture([]);
-                      } else {
-                          alert("Invalid project file.");
-                      }
-                  } catch (e) { alert("Invalid JSON file"); }
-               };
-               reader.readAsText(file);
-            };
-            input.click();
+            fileHandle = handles[0];
         }
      } catch (err: any) {
-         if (err.name !== 'AbortError') alert("Failed to open: " + err.message);
+         if (err.name === 'AbortError') return;
+     }
+
+     if (fileHandle) {
+         try {
+             const file = await fileHandle.getFile();
+             const text = await file.text();
+             const parsed = JSON.parse(text);
+             if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].data) {
+                 setTablesInternal(parsed);
+                 setActiveTableId(parsed[0].id);
+                 setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+                 setHistory([]);
+                 setFuture([]);
+                 (window as any).activeProjectFileHandle = fileHandle;
+             } else {
+                 alert("Invalid project file.");
+             }
+         } catch (e: any) {
+             alert("Error reading file: " + e.message);
+         }
+     } else {
+         executeFileInputFallback();
      }
   };
 
@@ -404,6 +425,7 @@ export default function App() {
   };
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [activeViewMode, setActiveViewMode] = useState<'grid'|'gallery'>('grid');
   const [showTableMenu, setShowTableMenu] = useState(false);
   const [showLoadMenu, setShowLoadMenu] = useState(false);
   const [showSaveMenu, setShowSaveMenu] = useState(false);
@@ -589,6 +611,18 @@ export default function App() {
   const [rowHeight, setRowHeight] = useState<'short'|'medium'|'tall'|'extra'>('medium');
   const [showRowHeightMenu, setShowRowHeightMenu] = useState(false);
   
+  const [userSettings, setUserSettings] = useState(() => {
+    try {
+       const saved = localStorage.getItem('bitable_user_settings');
+       if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return { username: '' };
+  });
+  
+  useEffect(() => {
+    localStorage.setItem('bitable_user_settings', JSON.stringify(userSettings));
+  }, [userSettings]);
+
   // Model settings
   const [modelSettings, setModelSettings] = useState(() => {
     try {
@@ -1201,9 +1235,19 @@ export default function App() {
       {/* Sidebar Navigation */}
       <div className={`transition-all duration-300 ease-in-out flex flex-col shrink-0 flex-none overflow-hidden h-full z-10 bg-white border-r border-gray-200 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.05)] ${sidebarCollapsed ? 'w-14 items-center' : 'w-60'}`}>
         <div className="h-14 w-full flex items-center px-4 border-b border-gray-200 shrink-0 select-none">
-          <div className="w-8 h-8 rounded bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold shrink-0">
-             <Sparkles className="w-5 h-5" />
-          </div>
+          {userSettings.username ? (
+            <div 
+              className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-sm"
+              style={{ backgroundColor: getStringColor(userSettings.username) }}
+              title={userSettings.username}
+            >
+              {userSettings.username.charAt(0).toUpperCase()}
+            </div>
+          ) : (
+            <div className="w-8 h-8 rounded bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold shrink-0">
+               <Sparkles className="w-5 h-5" />
+            </div>
+          )}
           {!sidebarCollapsed && (
              <div className="ml-2 flex items-center group/proj overflow-hidden min-w-0 flex-1">
                  <input 
@@ -1499,7 +1543,23 @@ export default function App() {
         {/* Toolbar */}
         <div className="h-[46px] flex items-center justify-between px-4 border-b border-gray-200 shrink-0 bg-white">
           <div className="flex items-center space-x-1 text-sm text-gray-600">
-             <ToolbarButton icon={<GridIcon className="w-4 h-4 text-blue-600"/>} label={lang === 'en' ? "Main Grid" : "默认视图"} active />
+             <div className="relative group/viewmode">
+                <ToolbarButton 
+                   icon={activeViewMode === 'grid' ? <GridIcon className="w-4 h-4 text-blue-600"/> : <ImageIcon className="w-4 h-4 text-blue-600"/> } 
+                   label={activeViewMode === 'grid' ? (lang === 'en' ? "Main Grid" : "默认视图") : (lang === 'en' ? "Image Review" : "图片审阅")} 
+                   active 
+                />
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 opacity-0 pointer-events-none group-hover/viewmode:opacity-100 group-hover/viewmode:pointer-events-auto transition-opacity min-w-[140px]">
+                   <button className="w-full flex items-center px-4 py-2 text-sm hover:bg-gray-100" onClick={() => setActiveViewMode('grid')}>
+                      <GridIcon className="w-4 h-4 mr-2 text-gray-500" />
+                      {lang === 'en' ? 'Main Grid' : '默认视图'}
+                   </button>
+                   <button className="w-full flex items-center px-4 py-2 text-sm hover:bg-gray-100" onClick={() => setActiveViewMode('gallery')}>
+                      <ImageIcon className="w-4 h-4 mr-2 text-gray-500" />
+                      {lang === 'en' ? 'Image Review' : '图片审阅'}
+                   </button>
+                </div>
+             </div>
              <div className="w-px h-3.5 bg-gray-300 mx-1.5" />
              <div className="relative">
                <ToolbarButton 
@@ -1733,13 +1793,18 @@ export default function App() {
             >
               <Search className="w-4 h-4" />
             </button>
-            <button 
-              onClick={handleAddRecord}
-              className="flex items-center bg-blue-600 hover:bg-blue-700 text-white space-x-1 px-3 py-1.5 rounded-md transition-colors text-sm font-medium"
-            >
-              <Plus className="w-4 h-4" />
-              <span>{lang === 'en' ? "Add Row" : "添加行"}</span>
-            </button>
+            <div className="flex items-center space-x-2">
+               <button 
+                 onClick={handleAddRecord}
+                 className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors group relative"
+                 title={lang === 'en' ? "Add Row" : "添加行"}
+               >
+                 <Plus className="w-5 h-5" />
+                 <div className="absolute top-full mt-1 right-0 bg-gray-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+                    {lang === 'en' ? "Add Row" : "添加行"}
+                 </div>
+               </button>
+            </div>
           </div>
         </div>
 
@@ -1786,13 +1851,54 @@ export default function App() {
             </div>
           )}
           <Grid 
+            tableId={activeTableId}
+            viewMode={activeViewMode}
             lang={lang}
+            username={userSettings.username}
             data={displayData}
             searchQuery={showSearch ? searchQuery : ''}
             searchMatches={showSearch ? searchMatches : undefined}
             activeSearchMatch={showSearch && searchMatches.length > 0 ? searchMatches[currentSearchIndex] : null}
             rowHeight={rowHeight}
             groupConfig={groupConfig}
+            onUpdateGlobalAttachment={(url: string, updatedProps: any) => {
+               setData((prev: any) => ({
+                 ...prev,
+                 records: prev.records.map((rec: any) => {
+                     let changed = false;
+                     const newRec = { ...rec };
+                     prev.fields.forEach((f: any) => {
+                         if (f.type === 'attachment' || f.type === 'aiImage') {
+                             const val = rec[f.id];
+                             if (Array.isArray(val)) {
+                                 const newVal = val.map(v => {
+                                     const vUrl = typeof v === 'string' ? v : v.url;
+                                     if (vUrl === url) return typeof v === 'string' ? { url: vUrl, ...updatedProps } : { ...v, ...updatedProps };
+                                     return v;
+                                 });
+                                 if (JSON.stringify(newVal) !== JSON.stringify(val)) {
+                                     newRec[f.id] = newVal;
+                                     changed = true;
+                                 }
+                             } else if (typeof val === 'string' && val.trim() !== '') {
+                                 const parts = val.split(',').map(s => s.trim());
+                                 if (parts.includes(url)) {
+                                     const newVal = parts.map(p => p === url ? { url: p, ...updatedProps } : { url: p });
+                                     newRec[f.id] = newVal;
+                                     changed = true;
+                                 }
+                             } else if (val && typeof val === 'object' && !Array.isArray(val)) {
+                                 if (val.url === url) {
+                                     newRec[f.id] = { ...val, ...updatedProps };
+                                     changed = true;
+                                 }
+                             }
+                         }
+                     });
+                     return changed ? newRec : rec;
+                 })
+               }));
+            }}
             onUpdateRecord={handleUpdateRecord}
             onAddRecord={handleAddRecord}
             onInsertRecords={handleInsertRecords}
@@ -1831,18 +1937,53 @@ export default function App() {
           />
         </div>
 
+      {showNewProjectConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-xl font-semibold mb-4">{lang === 'en' ? 'New Project' : '新建工程'}</h2>
+            <p className="text-gray-600 mb-6">{lang === 'en' ? 'Create a new project? Unsaved changes will be lost if not saved.' : '确定要新建工程吗？如果未保存为文件，当前的更改可能会丢失。'}</p>
+            <div className="flex justify-end space-x-3">
+              <button 
+                onClick={() => setShowNewProjectConfirm(false)}
+                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                {lang === 'en' ? 'Cancel' : '取消'}
+              </button>
+              <button 
+                onClick={confirmNewProject}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+              >
+                {lang === 'en' ? 'Confirm' : '确定'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-semibold">AI Settings</h2>
+              <h2 className="text-xl font-semibold">{lang === 'en' ? 'Settings' : '设置'}</h2>
               <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-gray-800"><X className="w-5 h-5"/></button>
             </div>
             
+            <div className="mb-6 pb-6 border-b border-gray-100">
+               <h3 className="font-semibold text-gray-700 pb-2">{lang === 'en' ? 'Team Identity (Username)' : '团队身份 (用户名)'}</h3>
+               <p className="text-[10px] text-gray-500 mb-2">{lang === 'en' ? 'Used for annotations and reviewing. Simply enter your name.' : '用于本机的审阅和批注标记的身份标识，无需密码只需填写你的名字。'}</p>
+               <input 
+                  type="text" 
+                  className="w-full md:w-1/2 border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                  placeholder={lang === 'en' ? 'e.g. Alice' : '例如: 阿强'}
+                  value={userSettings.username || ''}
+                  onChange={e => setUserSettings({ ...userSettings, username: e.target.value })}
+               />
+            </div>
+
             <div className="grid grid-cols-2 gap-6">
               {/* Text Model Settings */}
               <div className="space-y-4">
-                <h3 className="font-semibold text-gray-700 pb-2 border-b">Text AI Model (LLM)</h3>
+                 <h3 className="font-semibold text-gray-700 pb-2 border-b">Text AI Model (LLM)</h3>
                  <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
                     <select 
@@ -1851,21 +1992,50 @@ export default function App() {
                       onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, provider: e.target.value } }))}
                     >
                        <option value="gemini">Gemini (Google AI Studio)</option>
+                       <option value="gemini-custom">Gemini (Compatible Endpoint)</option>
                        <option value="openai">OpenAI Compatible</option>
                     </select>
                  </div>
                  
-                 {modelSettings.text?.provider === 'gemini' && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
-                      <input 
-                        type="password" 
-                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                        placeholder="AIzaSy..."
-                        value={modelSettings.text?.key || ''}
-                        onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, key: e.target.value } }))}
-                      />
-                    </div>
+                 {(modelSettings.text?.provider === 'gemini' || modelSettings.text?.provider === 'gemini-custom') && (
+                    <>
+                      {modelSettings.text?.provider === 'gemini-custom' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">API Endpoint</label>
+                            <input 
+                              type="url" 
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                              placeholder="https://api.example.com/v1beta/models/..."
+                              value={modelSettings.text?.endpoint || ''}
+                              onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, endpoint: e.target.value } }))}
+                            />
+                          </div>
+                        </>
+                      )}
+                      {(modelSettings.text?.provider === 'gemini' || modelSettings.text?.provider === 'gemini-custom') && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Model Name (Use ',' for multiple models)</label>
+                          <input 
+                            type="text" 
+                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                            placeholder="gemini-1.5-pro, gemini-1.5-flash"
+                            value={modelSettings.text?.modelName || ''}
+                            onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, modelName: e.target.value } }))}
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
+                        <input 
+                          type="password" 
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
+                          placeholder="AIzaSy..."
+                          value={modelSettings.text?.key || ''}
+                          onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, key: e.target.value } }))}
+                        />
+                      </div>
+                    </>
                  )}
 
                  {modelSettings.text?.provider === 'openai' && (
@@ -1881,11 +2051,11 @@ export default function App() {
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Model Name (Use ',' for multiple models)</label>
                         <input 
                           type="text" 
                           className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                          placeholder="gpt-3.5-turbo"
+                          placeholder="gpt-3.5-turbo, gpt-4o"
                           value={modelSettings.text?.modelName || ''}
                           onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, modelName: e.target.value } }))}
                         />
@@ -1901,7 +2071,7 @@ export default function App() {
                         />
                       </div>
                     </>
-                 )}
+                  )}
               </div>
 
               {/* Image Model Settings */}
