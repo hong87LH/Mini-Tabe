@@ -49,7 +49,41 @@ If embedded within an Electron environment (such as `main.js` execution):
 
 ## 5. Deployment Details
 Since the primary logic exists on the client side, the project compiles to static assets (`dist` folder). 
-- **Build**: `npm run build` generates the required HTML/JS/CSS.
+- **Build Web Assets**: `npm run build` generates the required HTML/JS/CSS into the `dist/` folder.
 - **Preview**: `npm run preview` spins up an express/vite server locally.
 - **Hosting**: The contents of the `/dist` directory can be deployed to any static host (Cloudflare Pages, Vercel, Firebase Hosting, GitHub Pages) without needing a standard Node.js server. 
-- **Electron**: As implied by `main.js`, you can initialize an Electron window rendering `index.html` locally to compile this into a desktop `.exe` or `.dmg`.
+
+### 5.1 Electron Desktop Deployment
+As implied by `main.js` and `preload.js`, you can initialize an Electron window rendering the frontend statically to compile this into a standalone desktop application (`.exe`, `.dmg`, or `.AppImage`). 
+
+**Local Development (Electron):**
+You can run the web dev server and Electron simultaneously to test desktop features:
+1. Terminal 1: run `npm run dev` (starts on port 5173).
+2. Terminal 2: run `npx electron .`
+*(Your `main.js` must be configured to prioritize `http://localhost:5173` if in development mode, or fallback to `/dist/index.html`.)*
+
+**Packaging the Desktop Application:**
+To package the project into a standalone executable (no terminal required), we use **electron-builder** or **electron-packager**.
+
+1. Ensure the project is built: `npm run build`.
+2. Ensure you have electron dependencies installed as devDependencies (e.g., `npm install -D electron electron-builder`).
+3. Set your execution config in `package.json`:
+   ```json
+   "main": "main.js",
+   "scripts": {
+     "pack": "electron-builder --dir",
+     "dist": "electron-builder"
+   },
+   "build": {
+     "appId": "com.hong.tablestudio",
+     "productName": "Hong Table Studio",
+     "directories": { "output": "release" },
+     "files": ["dist/**/*", "main.js", "preload.js"],
+     "win": { "target": "nsis" },
+     "mac": { "target": "dmg" }
+   }
+   ```
+4. Run `npm run dist`.
+5. Check the newly created `release/` folder. It will contain your packaged setup file (e.g., `Hong Table Studio Setup 1.0.0.exe`).
+
+By distributing the app via Electron, users bypass web browser security hurdles (like clipboard restrictions or File System Access API prompts), natively leveraging the OS file pathways and achieving the utmost performance.

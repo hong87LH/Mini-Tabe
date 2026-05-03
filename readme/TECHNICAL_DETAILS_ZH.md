@@ -49,7 +49,41 @@ Hong's AI Table Studio 是一个响应式、纯前端渲染、运行在浏览器
 
 ## 5. 部署细节
 因为项目的主要逻辑处于客户端层面，代码将被编译构建为纯静态资源（存放于 `dist` 目录）。
-- **构建代码**: 运行 `npm run build` 生成生产所需的 HTML/JS/CSS 等静态数据。
-- **本地预览**: 运行 `npm run preview` 唤起本地 Express/Vite 服务查看静态构建版本。
+- **构建 Web 静态代码**: 运行 `npm run build` 生成生产所需的 HTML/JS/CSS 等静态数据至 `dist/`。
+- **本地 Web 预览**: 运行 `npm run preview` 唤起本地 Express/Vite 服务查看静态构建版本。
 - **项目托管**: `/dist` 中的构建资源可以被轻易且免费地部署至任意前端静态托管平台（Cloudflare Pages, Vercel, Firebase Hosting, GitHub Pages 等等），不需要传统 Node.js 后端服务器的存在。
-- **Electron 打包**: 鉴于已包含 `main.js`，可以使用 Electron 框架在本地壳内启动 `index.html`，轻松打包成桌面级别的 `.exe` 或 `.dmg` 程序。
+
+### 5.1 Electron 桌面端部署
+鉴于项目默认已包含了 `main.js` 和 `preload.js` 参数结构，您可以直接通过 Electron 框架去静态渲染前端产物，甚至将其打包成全平台适用的独立桌面程序 (`.exe`, `.dmg`, 或 `.AppImage`)。
+
+**本地开发与连调模式 (Electron):**
+您可以同时运行起 Web 热插拔服务与 Electron 容器来编写您的逻辑：
+1. 终端窗口 1: 运行 `npm run dev` (通常启动在 5173 端口)。
+2. 终端窗口 2: 运行 `npx electron .` 
+*(此时您的 `main.js` 会由于开发模式判定，优先挂载 `http://localhost:5173` 进行实时热更新展现)*
+
+**将项目全量打包为正式版应用程序:**
+为了生成一个您在桌面双击就可以直接运行的安装包 (无需再走命令行)，项目底层适配使用 **electron-builder** 或 **electron-packager**。
+
+1. 首先确保生产环境静态核心代码已构建完毕: `npm run build`.
+2. 检查开发依赖内是否已经拥有打包工具栈 (比如: `npm install -D electron electron-builder`).
+3. 在 `package.json` 内设定完整的桌面编译指令：
+   ```json
+   "main": "main.js",
+   "scripts": {
+     "pack": "electron-builder --dir",
+     "dist": "electron-builder"
+   },
+   "build": {
+     "appId": "com.hong.tablestudio",
+     "productName": "Hong Table Studio",
+     "directories": { "output": "release" },
+     "files": ["dist/**/*", "main.js", "preload.js"],
+     "win": { "target": "nsis" },
+     "mac": { "target": "dmg" }
+   }
+   ```
+4. 运行 `npm run dist`.
+5. 打包程序处理完毕后，找到项目内新生成的 `release/` 目录。您的安装包（比如：`Hong Table Studio Setup 1.0.0.exe`）将会静静地躺在里面等待使用。
+
+通过 Electron 发行该程序，您的终端用户将立刻规避和跨越 Web 浏览器层级那令人感到无比繁琐的强力安全策略（譬如强制剪切板交互拦截或者 File System Access API 那无尽的二次授权弹窗），原生地利用操作系统路径通道直接达到顶峰的 I/O 读写性能表现。
