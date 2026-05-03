@@ -27,6 +27,18 @@ If you create a **Formula** column, you can reference other columns by putting t
 - **Example (Excel Mode)**: Start your formula with an equal sign `=`. E.g., `={Inventory} - {Sold}`.
 If you rename a referenced column, make sure to update your formula so it points to the correct new name.
 
+### Image Review & Callout Annotations
+When viewing images within an attachment column or generative image field:
+- **View Fullscreen**: Click the image to open the immersive Zoom Viewer.
+- **Add Annotations**: **Double-Click** anywhere directly on the image to drop a "Review Marker" (Annotation Pin).
+- **Manage Feedback**: You can define the state of an annotation marker (e.g., "Pending", "Resolved", or "Approved"). 
+- **Discussion Threads**: Reply inside an annotation pin to leave notes for tracking iterative design changes or QA tracking.
+
+### Desktop-First Local File Routing
+If you are running this application comprehensively as a desktop-installed app:
+- **Do Not Upload, Just Link**: You do not have to manually click and upload images taking up memory. You can directly paste the physical path of the image sitting on your computer (e.g., `C:\Users\YourName\Pictures\design.png`).
+- The system will intelligently mount these system paths and read them instantly, keeping your local performance perfectly sharp and bridging the gap between web capabilities and your desktop environment.
+
 ### Drag and Drop
 - **Columns**: Click and hold a column header to drag it left or right, reordering the grid.
 - **Rows**: Use the grip handle located at the far left edge of any row to reorder the row structure vertically.

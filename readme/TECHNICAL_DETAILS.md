@@ -1,7 +1,7 @@
 # Hong's AI Table Studio - Technical Details
 
 ## 1. Project Overview
-Hong's AI Table Studio is a reactive, client-side, browser-based database/spreadsheet hybrid application (similar to Airtable or Bitable). It is designed to be highly responsive, localized in the browser, and capable of handling complex formula evaluations, data relations, and persistent local storage.
+Hong's AI Table Studio is a reactive, client-side, browser-based database/spreadsheet hybrid application (similar to Airtable or Bitable). It is designed to be highly responsive, localized in the browser, and capable of handling complex formula evaluations, data relations, persistent local storage, and iterative visual reviews.
 
 ## 2. Technology Stack
 - **Core Framework**: React 19 (Hooks, Context, Portals)
@@ -40,6 +40,12 @@ The engine dynamically computes fields whenever a record changes.
 
 ### 4.3 Animation & Splash Screen
 The initial splash screen uses SVG drawing animations (`stroke-dasharray/offset`) combined with CSS `fractalNoise` displacement filters to create a rough, hand-drawn paper look. React detects when the component mounts and dispatches `window.removeInitialSplash()` to unmount the CSS layer smoothly once the JS engine is fully initialized.
+
+### 4.4 Desktop & Electron Integration
+If embedded within an Electron environment (such as `main.js` execution):
+- **Local File System Parsing via Direct Paths**: The image processing engine effortlessly bridges the gap between web URLs and absolute system paths. Paste an absolute path (`C:\` / `/Users/`) and the UI renders it as a `file://` protocol dynamically without demanding traditional file blob uploads.
+- **IPC File Downloader**: Instead of relying on jarring HTML file-save dialogues, the system integrates seamlessly with `electronAPI.downloadFile` using IPC. This allows background downloading and continuous caching integrations without interrupting the user.
+- **Image Annotations & Reviews**: Features an independent overlay matrix tied to the `ZoomableImage` component, converting `X/Y` coordinate clicks into visual markers. These review threads map directly back into the dataset objects, binding design feedback physically to the active cell record.
 
 ## 5. Deployment Details
 Since the primary logic exists on the client side, the project compiles to static assets (`dist` folder). 
