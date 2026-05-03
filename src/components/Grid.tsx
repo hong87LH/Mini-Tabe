@@ -222,19 +222,21 @@ const ZoomableImage = ({
              <button title="Clear Reviews" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors flex items-center justify-center">
                 <Trash2 className="w-5 h-5" />
              </button>
-             <div className="absolute top-full right-0 mt-2 bg-white rounded shadow-lg overflow-hidden flex flex-col py-1 opacity-0 group-hover/clear-ann:opacity-100 pointer-events-none group-hover/clear-ann:pointer-events-auto transition-opacity min-w-[200px]">
-                <button 
-                  className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left"
-                  onClick={(e) => { e.stopPropagation(); saveAnnotations(annotations.filter(a => a.status !== 'approved')); }}
-                >
-                   {lang === 'en' ? 'Clear Approved' : '清除已通过'}
-                </button>
-                <button 
-                  className="px-4 py-2 text-sm text-red-600 hover:bg-red-50 text-left border-t border-gray-100"
-                  onClick={(e) => { e.stopPropagation(); saveAnnotations([]); }}
-                >
-                   {lang === 'en' ? 'Clear All Reviews' : '清除所有批注'}
-                </button>
+             <div className="absolute top-full right-0 pt-2 opacity-0 group-hover/clear-ann:opacity-100 pointer-events-none group-hover/clear-ann:pointer-events-auto transition-opacity min-w-[200px]">
+               <div className="bg-white rounded shadow-lg overflow-hidden flex flex-col py-1">
+                 <button 
+                   className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left"
+                   onClick={(e) => { e.stopPropagation(); saveAnnotations(annotations.filter(a => a.status !== 'approved')); }}
+                 >
+                    {lang === 'en' ? 'Clear Approved' : '清除已通过'}
+                 </button>
+                 <button 
+                   className="px-4 py-2 text-sm text-red-600 hover:bg-red-50 text-left border-t border-gray-100"
+                   onClick={(e) => { e.stopPropagation(); saveAnnotations([]); }}
+                 >
+                    {lang === 'en' ? 'Clear All Reviews' : '清除所有批注'}
+                 </button>
+               </div>
              </div>
            </div>
          )}
@@ -2080,6 +2082,8 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                         handleGenerateColumn(field, targetRecordIds);
                     }}
                     onMouseDown={(e: React.MouseEvent) => {
+                       if (e.button === 2) return; // Ignore right-clicks, handled by onContextMenu
+
                        if (e.shiftKey && selectionStart) {
                            setSelectionEnd({ r: index, c: colIdx });
                        } else if (e.ctrlKey || e.metaKey) {
@@ -2451,6 +2455,8 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
 
                    const selectedArr = Array.from(allSelectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
                    
+                   const uniqueImageUrls = new Set<string>();
+
                    selectedArr.forEach(({r, c}) => {
                       const record = data.records[r];
                       const field = visibleFields[c];
@@ -2463,16 +2469,19 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                          else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map(s => ({ url: s.trim() }));
                          else if (typeof val === 'object' && val !== null) items = [val];
                          
-                         if (items.length > 0) {
-                            const updatedItems = items.map((i: any) => {
-                               const newItem = typeof i === 'string' ? { url: i } : { ...i };
-                               if (newItem.annotations) delete newItem.annotations;
-                               return newItem;
-                            });
-                            onUpdateRecord(record.id, field.id, updatedItems);
-                         }
+                         items.forEach(i => {
+                             const u = typeof i === 'string' ? i : i.url;
+                             if (u) uniqueImageUrls.add(u);
+                         });
                       }
                    });
+                   
+                   if (onUpdateGlobalAttachment) {
+                        Array.from(uniqueImageUrls).forEach(url => {
+                            onUpdateGlobalAttachment(url, { annotations: undefined, status: 'unannotated', rating: 0 });
+                        });
+                   }
+
                    setShowClearAnnotationsConfirm(false);
                 }}
                 className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"

@@ -2245,8 +2245,15 @@ export default function App() {
                   onChange={async (e) => {
                     const checked = e.target.checked;
                     if (checked) {
+                      if (!(window as any).activeProjectFileHandle) {
+                          alert(lang === 'en' ? 'Please save the project first before enabling auto-backup.' : '请先保存工程后再开启自动备份。');
+                          return;
+                      }
                       try {
-                        const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+                        const handle = await (window as any).showDirectoryPicker({ 
+                            mode: 'readwrite',
+                            startIn: (window as any).activeProjectFileHandle
+                        });
                         dirHandleRef.current = handle;
                         await setHandle('autosave_dir', handle);
                         setAutoSaveSettings(prev => ({ ...prev, enabled: true, folderName: handle.name }));
@@ -2261,7 +2268,7 @@ export default function App() {
                   }}
                   className="w-4 h-4 text-blue-600 rounded border-gray-300"
                 />
-                <label htmlFor="autosave-toggle" className="text-sm font-medium text-gray-700">{lang === 'en' ? 'Enable project auto backup (saves as .backup in selected folder)' : '启用项目自动备份 (在选定文件夹中保存与原文件同名的 .backup 文件)'}</label>
+                <label htmlFor="autosave-toggle" className="text-sm font-medium text-gray-700">{lang === 'en' ? 'Enable project auto backup (saves as .backup in the project folder)' : '启用项目自动备份 (在当前工程所在文件夹中保存同名的 .backup 文件)'}</label>
               </div>
               
               {autoSaveSettings.enabled && (
@@ -2279,7 +2286,10 @@ export default function App() {
                       <button 
                         onClick={async () => {
                           try {
-                            const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+                            const handle = await (window as any).showDirectoryPicker({ 
+                                mode: 'readwrite',
+                                startIn: (window as any).activeProjectFileHandle || undefined
+                            });
                             dirHandleRef.current = handle;
                             await setHandle('autosave_dir', handle);
                             setAutoSaveSettings(prev => ({ ...prev, folderName: handle.name }));
