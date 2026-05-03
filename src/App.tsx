@@ -232,6 +232,16 @@ export default function App() {
   });
 
   useEffect(() => {
+     // 在本地启动 ele 时缓冲一下，等待 index.html 中的开屏动画播放完毕再移除
+     const timer = setTimeout(() => {
+        if (typeof window !== 'undefined' && (window as any).removeInitialSplash) {
+           (window as any).removeInitialSplash();
+        }
+     }, 3800); // 等待 3.8s 确保 3.6s 的 CSS 动画播放完整
+     return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
      localStorage.setItem('bitable_project_cache', JSON.stringify(tables));
   }, [tables]);
 
