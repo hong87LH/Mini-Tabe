@@ -235,6 +235,14 @@ export default function App() {
      localStorage.setItem('bitable_project_cache', JSON.stringify(tables));
   }, [tables]);
 
+  useEffect(() => {
+     getHandle('activeProjectFileHandle').then((handle) => {
+         if (handle) {
+             (window as any).activeProjectFileHandle = handle;
+         }
+     }).catch(e => console.error("Could not load file handle:", e));
+  }, []);
+
   const [projectName, setProjectName] = useState(() => {
      return localStorage.getItem('bitable_project_name') || 'Untitled Project';
   });
@@ -263,7 +271,19 @@ export default function App() {
                      }]
                  });
                  (window as any).activeProjectFileHandle = fileHandle;
+                 setHandle('activeProjectFileHandle', fileHandle).catch((err) => console.error(err));
                  setProjectName(fileHandle.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+             } else {
+                 // Verify permissions before writing
+                 if (typeof fileHandle.queryPermission === 'function') {
+                     const permission = await fileHandle.queryPermission({ mode: 'readwrite' });
+                     if (permission !== 'granted') {
+                         const newPermission = await fileHandle.requestPermission({ mode: 'readwrite' });
+                         if (newPermission !== 'granted') {
+                             throw new Error('Permission to write file denied by user.');
+                         }
+                     }
+                 }
              }
              const writable = await fileHandle.createWritable();
              await writable.write(json);
@@ -358,6 +378,7 @@ export default function App() {
                  setHistory([]);
                  setFuture([]);
                  (window as any).activeProjectFileHandle = fileHandle;
+                 setHandle('activeProjectFileHandle', fileHandle).catch((e: any) => console.error(e));
              } else {
                  alert("Invalid project file.");
              }
@@ -684,6 +705,8 @@ export default function App() {
   });
 
   const dirHandleRef = useRef<any>(null);
+  const permissionStateRef = useRef<string>('unknown');
+  const isRequestingPermissionRef = useRef<boolean>(false);
 
   useEffect(() => {
     localStorage.setItem('bitable_autosave_settings', JSON.stringify(autoSaveSettings));
@@ -694,16 +717,39 @@ export default function App() {
        getHandle('autosave_dir').then(async handle => {
            if (handle) {
                try {
-                   // Verify we still have permission. If not, prompt.
-                   // Wait, standard behavior is, we might need to call verifyPermission
-                   // But without user gesture, we cannot prompt!
-                   // We'll just request readwrite permission if needed when we try to save!
                    dirHandleRef.current = handle;
+                   permissionStateRef.current = await handle.queryPermission({ mode: 'readwrite' });
                } catch(e) {}
            }
        });
     }
   }, []);
+
+  useEffect(() => {
+     const handleUserGesture = () => {
+         if (!autoSaveSettings.enabled || !dirHandleRef.current) return;
+         if (permissionStateRef.current === 'granted' || permissionStateRef.current === 'denied') return;
+         
+         if (!isRequestingPermissionRef.current) {
+             isRequestingPermissionRef.current = true;
+             dirHandleRef.current.requestPermission({ mode: 'readwrite' }).then((state: string) => {
+                 permissionStateRef.current = state;
+                 isRequestingPermissionRef.current = false;
+             }).catch((e: any) => {
+                 console.error("Silent permission request failed:", e);
+                 isRequestingPermissionRef.current = false;
+             });
+         }
+     };
+
+     window.addEventListener('click', handleUserGesture, { capture: true, passive: true });
+     window.addEventListener('keydown', handleUserGesture, { capture: true, passive: true });
+
+     return () => {
+         window.removeEventListener('click', handleUserGesture, { capture: true });
+         window.removeEventListener('keydown', handleUserGesture, { capture: true });
+     };
+  }, [autoSaveSettings.enabled]);
 
   const verifyPermission = async (fileHandle: any, readWrite: boolean) => {
     const options: any = {};
@@ -764,6 +810,10 @@ export default function App() {
         }
 
         // Write to file (we can try verifyPermission first but normally it prompts correctly if needed upon createWritable, but browsers might block without user gesture. If it fails, that's fine, we log it)
+        if ((await dirHandleRef.current.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+           return;
+        }
+
         const fileHandle = await dirHandleRef.current.getFileHandle(backupFileName, { create: true });
         
         // We only write if permission is already granted, avoid blocking prompts in interval
@@ -2250,11 +2300,27 @@ export default function App() {
                           return;
                       }
                       try {
-                        const handle = await (window as any).showDirectoryPicker({ 
+                        let handle = await getHandle('autosave_dir');
+                        if (handle) {
+                            if ((await handle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+                                try {
+                                   await handle.requestPermission({ mode: 'readwrite' });
+                                } catch (err) {}
+                            }
+                            if ((await handle.queryPermission({ mode: 'readwrite' })) === 'granted') {
+                                dirHandleRef.current = handle;
+                                permissionStateRef.current = 'granted';
+                                setAutoSaveSettings(prev => ({ ...prev, enabled: true, folderName: handle.name }));
+                                return;
+                            }
+                        }
+                        
+                        handle = await (window as any).showDirectoryPicker({ 
                             mode: 'readwrite',
                             startIn: (window as any).activeProjectFileHandle
                         });
                         dirHandleRef.current = handle;
+                        permissionStateRef.current = 'granted';
                         await setHandle('autosave_dir', handle);
                         setAutoSaveSettings(prev => ({ ...prev, enabled: true, folderName: handle.name }));
                       } catch (err) {
@@ -2291,6 +2357,7 @@ export default function App() {
                                 startIn: (window as any).activeProjectFileHandle || undefined
                             });
                             dirHandleRef.current = handle;
+                            permissionStateRef.current = 'granted';
                             await setHandle('autosave_dir', handle);
                             setAutoSaveSettings(prev => ({ ...prev, folderName: handle.name }));
                           } catch (err) {
