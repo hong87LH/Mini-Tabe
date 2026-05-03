@@ -7,6 +7,7 @@ import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye,
 import Papa from 'papaparse';
 import { Parser } from 'expr-eval';
 import { getStringColor } from './lib/utils';
+import { getHandle, setHandle } from './lib/idb';
 
 export const computeFormulaValue = (field: any, record: any, fields: any[]) => {
   if (!field.prompt) return '';
@@ -219,7 +220,7 @@ function TableNavItem({
 }
 
 export default function App() {
-  const [tables, setTablesInternal] = useState<{ id: string, name: string, data: GridData }[]>(() => {
+  const [tables, setTablesInternal] = useState<any[]>(() => {
      try {
          const cached = localStorage.getItem('bitable_project_cache');
          if (cached) {
@@ -227,7 +228,7 @@ export default function App() {
             if (Array.isArray(parsed) && parsed.length > 0) return parsed;
          }
      } catch (e) {}
-     return [{ id: 'table_1', name: 'Master Table', data: initialGridData }];
+     return [{ id: 'table_1', name: 'Master Table', data: initialGridData, viewStates: {} }];
   });
 
   useEffect(() => {
@@ -425,7 +426,6 @@ export default function App() {
   };
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
-  const [activeViewMode, setActiveViewMode] = useState<'grid'|'gallery'>('grid');
   const [showTableMenu, setShowTableMenu] = useState(false);
   const [showLoadMenu, setShowLoadMenu] = useState(false);
   const [showSaveMenu, setShowSaveMenu] = useState(false);
@@ -456,37 +456,45 @@ export default function App() {
   const data = tables[activeTableIndex]?.data || initialGridData;
   const activeTableName = tables[activeTableIndex]?.name || 'Master Table';
 
-  const [sortConfigs, setSortConfigs] = useState<Record<string, { fieldId: string, direction: 'asc'|'desc' }>>({});
-  const [filterConfigs, setFilterConfigs] = useState<Record<string, Record<string, string>>>({});
-  const [groupConfigs, setGroupConfigs] = useState<Record<string, { fieldId: string, direction: 'asc'|'desc' }[]>>({});
-
-  const sortConfig = sortConfigs[activeTableId] || null;
-  const setSortConfig = (conf: { fieldId: string, direction: 'asc'|'desc' } | null) => {
-    setSortConfigs(prev => {
-        const next = { ...prev };
-        if (conf) next[activeTableId] = conf;
-        else delete next[activeTableId];
-        return next;
-    });
+  const activeTable = tables[activeTableIndex] || {};
+  const activeViewMode = activeTable.activeViewMode || 'grid';
+  const setActiveViewMode = (mode: 'grid'|'gallery') => {
+      setTables((prev: any[]) => prev.map(t => t.id === activeTableId ? { ...t, activeViewMode: mode } : t));
   };
 
-  const filterConfig = filterConfigs[activeTableId] || {};
-  const setFilterConfig = (conf: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) => {
-    setFilterConfigs(prev => {
-        const next = { ...prev };
-        if (typeof conf === 'function') {
-            next[activeTableId] = conf(prev[activeTableId] || {});
-        } else {
-            next[activeTableId] = conf;
+  const viewStates = activeTable.viewStates || {};
+  const currentViewState = viewStates[activeViewMode] || {};
+
+  const sortConfig = currentViewState.sortConfig || null;
+  const filterConfig = currentViewState.filterConfig || {};
+  const groupConfig = currentViewState.groupConfig || [];
+  const foldedGroups = currentViewState.foldedGroups || [];
+  const rowHeight = currentViewState.rowHeight || 'medium';
+  const gallerySettings = currentViewState.gallerySettings || null;
+
+  const updateViewState = (updates: any) => {
+     setTables((prev: any[]) => prev.map(t => {
+        if (t.id === activeTableId) {
+            const vStates = { ...(t.viewStates || {}) };
+            vStates[activeViewMode] = { ...(vStates[activeViewMode] || {}), ...updates };
+            return { ...t, viewStates: vStates };
         }
-        return next;
-    });
-  };
+        return t;
+     }));
+  }
 
-  const groupConfig = groupConfigs[activeTableId] || [];
-  const setGroupConfig = (conf: { fieldId: string, direction: 'asc'|'desc' }[]) => {
-    setGroupConfigs(prev => ({ ...prev, [activeTableId]: conf }));
+  const setSortConfig = (conf: any) => updateViewState({ sortConfig: conf });
+  const setFilterConfig = (conf: any) => {
+     if (typeof conf === 'function') {
+         updateViewState({ filterConfig: conf(filterConfig) });
+     } else {
+         updateViewState({ filterConfig: conf });
+     }
   };
+  const setGroupConfig = (conf: any) => updateViewState({ groupConfig: conf });
+  const setFoldedGroups = (conf: any) => updateViewState({ foldedGroups: conf });
+  const setRowHeight = (h: any) => updateViewState({ rowHeight: h });
+  const setGallerySettings = (s: any) => updateViewState({ gallerySettings: s });
 
   const [showGlobalFilterMenu, setShowGlobalFilterMenu] = useState(false);
   const [showHideFieldsMenu, setShowHideFieldsMenu] = useState(false);
@@ -608,7 +616,6 @@ export default function App() {
 
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [rowHeight, setRowHeight] = useState<'short'|'medium'|'tall'|'extra'>('medium');
   const [showRowHeightMenu, setShowRowHeightMenu] = useState(false);
   
   const [userSettings, setUserSettings] = useState(() => {
@@ -671,16 +678,51 @@ export default function App() {
   const [autoSaveSettings, setAutoSaveSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('bitable_autosave_settings');
-      if (saved) return { enabled: false, interval: 5, ...JSON.parse(saved) };
+      if (saved) return { enabled: false, interval: 5, folderName: '', ...JSON.parse(saved) };
     } catch (e) {}
-    return { enabled: false, interval: 5 };
+    return { enabled: false, interval: 5, folderName: '' };
   });
 
+  const dirHandleRef = useRef<any>(null);
+
   useEffect(() => {
-    localStorage.setItem('bitable_autosave_settings', JSON.stringify({ ...autoSaveSettings, enabled: false })); // Don't persist enabled state as dir handle is lost
+    localStorage.setItem('bitable_autosave_settings', JSON.stringify(autoSaveSettings));
   }, [autoSaveSettings]);
 
-  const dirHandleRef = useRef<any>(null);
+  useEffect(() => {
+    if (autoSaveSettings.enabled) {
+       getHandle('autosave_dir').then(async handle => {
+           if (handle) {
+               try {
+                   // Verify we still have permission. If not, prompt.
+                   // Wait, standard behavior is, we might need to call verifyPermission
+                   // But without user gesture, we cannot prompt!
+                   // We'll just request readwrite permission if needed when we try to save!
+                   dirHandleRef.current = handle;
+               } catch(e) {}
+           }
+       });
+    }
+  }, []);
+
+  const verifyPermission = async (fileHandle: any, readWrite: boolean) => {
+    const options: any = {};
+    if (readWrite) {
+      options.mode = 'readwrite';
+    }
+    if ((await fileHandle.queryPermission(options)) === 'granted') {
+      return true;
+    }
+    if ((await fileHandle.requestPermission(options)) === 'granted') {
+      return true;
+    }
+    return false;
+  };
+
+  const tablesRef = useRef(tables);
+  useEffect(() => {
+     tablesRef.current = tables;
+  }, [tables]);
 
   useEffect(() => {
     if (!autoSaveSettings.enabled) return;
@@ -689,39 +731,57 @@ export default function App() {
       try {
         if (!dirHandleRef.current) return;
         
-        // Prepare clean data
-        const currentData = tables.find(t => t.id === activeTableId)?.data || data;
-        const validFieldIds = new Set(['id', ...currentData.fields.map((f: any) => f.id)]);
-        const cleanRecords = currentData.records.map((r: any) => {
-           const cleanR: any = {};
-           for (const key in r) {
-             if (validFieldIds.has(key)) {
-               cleanR[key] = r[key];
-             }
-           }
-           currentData.fields.forEach((f: any) => {
-             if (f.type === 'formula') {
-               cleanR[f.id] = computeFormulaValue(f, r, currentData.fields);
-             }
+        // Prepare clean data for ENTIRE project
+        const projectData = tablesRef.current.map(tbl => {
+           const validFieldIds = new Set(['id', ...tbl.data.fields.map((f: any) => f.id)]);
+           const cleanRecords = tbl.data.records.map((r: any) => {
+              const cleanR: any = {};
+              for (const key in r) {
+                if (validFieldIds.has(key)) {
+                  cleanR[key] = r[key];
+                }
+              }
+              tbl.data.fields.forEach((f: any) => {
+                if (f.type === 'formula') {
+                  cleanR[f.id] = computeFormulaValue(f, r, tbl.data.fields);
+                }
+              });
+              return cleanR;
            });
-           return cleanR;
+           return { ...tbl, data: { ...tbl.data, records: cleanRecords } };
         });
-        const cleanData = { ...currentData, records: cleanRecords };
-        const jsonStr = JSON.stringify(cleanData, null, 2);
+        
+        const jsonStr = JSON.stringify(projectData, null, 2);
 
-        // Write to file
-        const fileHandle = await dirHandleRef.current.getFileHandle('bitable_backup.json', { create: true });
+        const currentHandle = (window as any).activeProjectFileHandle;
+        let backupFileName = 'bitable_backup.backup';
+        if (currentHandle && currentHandle.name) {
+           const baseName = currentHandle.name.replace(/\.[^/.]+$/, '');
+           backupFileName = `${baseName}.backup`;
+        } else {
+           const activeTableName = tablesRef.current[0]?.name || 'Untitled';
+           backupFileName = `${activeTableName}.backup`;
+        }
+
+        // Write to file (we can try verifyPermission first but normally it prompts correctly if needed upon createWritable, but browsers might block without user gesture. If it fails, that's fine, we log it)
+        const fileHandle = await dirHandleRef.current.getFileHandle(backupFileName, { create: true });
+        
+        // We only write if permission is already granted, avoid blocking prompts in interval
+        if ((await fileHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+           return;
+        }
+
         const writable = await fileHandle.createWritable();
         await writable.write(jsonStr);
         await writable.close();
-        console.log("Auto-saved to bitable_backup.json at", new Date().toLocaleTimeString());
+        console.log(`Auto-saved project backup to ${backupFileName} at`, new Date().toLocaleTimeString());
       } catch (err) {
         console.error("Auto-save failed:", err);
       }
     }, (autoSaveSettings.interval || 5) * 60 * 1000);
 
     return () => clearInterval(intervalId);
-  }, [autoSaveSettings.enabled, autoSaveSettings.interval, data, tables, activeTableId]);
+  }, [autoSaveSettings.enabled, autoSaveSettings.interval]);
 
   const handleUpdateRecord = (recordId: string, fieldId: string, value: any) => {
     setData(prev => ({
@@ -1861,6 +1921,12 @@ export default function App() {
             activeSearchMatch={showSearch && searchMatches.length > 0 ? searchMatches[currentSearchIndex] : null}
             rowHeight={rowHeight}
             groupConfig={groupConfig}
+            sortConfig={sortConfig}
+            filterConfig={filterConfig}
+            foldedGroups={foldedGroups}
+            onFoldedGroupsChange={setFoldedGroups}
+            gallerySettings={gallerySettings}
+            onGallerySettingsChange={setGallerySettings}
             onUpdateGlobalAttachment={(url: string, updatedProps: any) => {
                setData((prev: any) => ({
                  ...prev,
@@ -1931,8 +1997,6 @@ export default function App() {
                 return newConf;
               });
             }}
-            sortConfig={sortConfig}
-            filterConfig={filterConfig}
             modelSettings={modelSettings}
           />
         </div>
@@ -2169,13 +2233,13 @@ export default function App() {
             <hr className="my-6 border-gray-200" />
             
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold">Auto-Save Backup</h2>
+              <h2 className="text-xl font-semibold">{lang === 'en' ? 'Project Auto Backup' : '项目自动备份'}</h2>
             </div>
             
             <div className="space-y-4">
               <div className="flex items-center space-x-2">
                 <input 
-                  type="checkbox" 
+                  type="checkbox"
                   id="autosave-toggle"
                   checked={autoSaveSettings.enabled}
                   onChange={async (e) => {
@@ -2184,7 +2248,8 @@ export default function App() {
                       try {
                         const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
                         dirHandleRef.current = handle;
-                        setAutoSaveSettings(prev => ({ ...prev, enabled: true }));
+                        await setHandle('autosave_dir', handle);
+                        setAutoSaveSettings(prev => ({ ...prev, enabled: true, folderName: handle.name }));
                       } catch (err) {
                         console.error('Failed to get directory', err);
                         setAutoSaveSettings(prev => ({ ...prev, enabled: false }));
@@ -2196,20 +2261,49 @@ export default function App() {
                   }}
                   className="w-4 h-4 text-blue-600 rounded border-gray-300"
                 />
-                <label htmlFor="autosave-toggle" className="text-sm font-medium text-gray-700">Enable local JSON auto-save (prompts for folder)</label>
+                <label htmlFor="autosave-toggle" className="text-sm font-medium text-gray-700">{lang === 'en' ? 'Enable project auto backup (saves as .backup in selected folder)' : '启用项目自动备份 (在选定文件夹中保存与原文件同名的 .backup 文件)'}</label>
               </div>
               
               {autoSaveSettings.enabled && (
-                 <div>
-                   <label className="block text-sm font-medium text-gray-700 mb-1">Save Interval (Minutes)</label>
-                   <input 
-                     type="number"
-                     min="1"
-                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                     value={autoSaveSettings.interval}
-                     onChange={e => setAutoSaveSettings(prev => ({ ...prev, interval: parseInt(e.target.value) || 5 }))}
-                   />
-                 </div>
+                <div className="pl-6 space-y-4">
+                  <div className="flex flex-col space-y-1">
+                    <span className="text-sm font-medium text-gray-700">{lang === 'en' ? 'Backup Folder:' : '备份文件夹:'}</span>
+                    <div className="flex items-center space-x-2">
+                      <input 
+                        type="text" 
+                        readOnly 
+                        value={autoSaveSettings.folderName || ''} 
+                        className="px-2 py-1.5 text-sm border rounded bg-gray-50 flex-1 outline-none font-mono text-gray-600" 
+                        placeholder={lang === 'en' ? 'No folder selected' : '未选择文件夹'}
+                      />
+                      <button 
+                        onClick={async () => {
+                          try {
+                            const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+                            dirHandleRef.current = handle;
+                            await setHandle('autosave_dir', handle);
+                            setAutoSaveSettings(prev => ({ ...prev, folderName: handle.name }));
+                          } catch (err) {
+                            console.error('Failed to get directory', err);
+                          }
+                        }}
+                        className="px-3 py-1.5 text-sm bg-gray-100 border border-gray-200 hover:bg-gray-200 text-gray-700 rounded transition-colors"
+                      >
+                        {lang === 'en' ? 'Change Folder' : '更改文件夹'}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">{lang === 'en' ? 'Save Interval (Minutes)' : '保存间隔时长 (分钟)'}</label>
+                    <input 
+                      type="number"
+                      min="1"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      value={autoSaveSettings.interval}
+                      onChange={e => setAutoSaveSettings(prev => ({ ...prev, interval: parseInt(e.target.value) || 5 }))}
+                    />
+                  </div>
+                </div>
               )}
             </div>
 

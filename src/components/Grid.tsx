@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
@@ -603,6 +604,10 @@ interface GridProps {
   modelSettings: any;
   lang?: 'en' | 'zh';
   username?: string;
+  gallerySettings?: any;
+  onGallerySettingsChange?: (settings: any) => void;
+  foldedGroups?: string[];
+  onFoldedGroupsChange?: (groups: string[]) => void;
 }
 
 const resolveFieldValueForAI = (val: any, refField: Field) => {
@@ -613,6 +618,19 @@ const resolveFieldValueForAI = (val: any, refField: Field) => {
     return mapped.length === 1 && !Array.isArray(val) && refField.type === 'singleSelect' ? mapped[0] : mapped.join(', ');
   }
   return val;
+};
+
+export const resolveTemplateString = (templateStr: string, fields: Field[], record: any) => {
+  if (!templateStr) return '';
+  let str = templateStr;
+  fields.forEach(f => {
+      let val = record[f.id];
+      val = resolveFieldValueForAI(val, f);
+      if (Array.isArray(val)) val = val.map(v => v?.name || String(v?.url || v)).join(', ');
+      else val = typeof val === 'object' ? JSON.stringify(val) : String(val || '');
+      str = str.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), val);
+  });
+  return str;
 };
 
 const getBase64ImageParts = async (templateStr: string, fields: Field[], record: any) => {
@@ -674,8 +692,9 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
         }
         str = str.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), dataUrls.join(' '));
       } else {
-         if (Array.isArray(val)) val = val.map(v => v?.url || v).join(', ');
-         else val = String(val || '');
+         val = resolveFieldValueForAI(val, f);
+         if (Array.isArray(val)) val = val.map(v => v?.name || String(v?.url || v)).join(', ');
+         else val = typeof val === 'object' ? JSON.stringify(val) : String(val || '');
          str = str.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), val);
       }
     }
@@ -784,8 +803,8 @@ const triggerDownload = async (url: string, filename: string, folderPath?: strin
 
 const gallerySettingsCache = new Map<string, any>();
 
-function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage }: { tableId?: string, data: any, lang: string, onPreviewImage: (url: string, items: any[]) => void }) {
-    const defaultSettings = gallerySettingsCache.get(tableId) || {
+function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gallerySettings, onGallerySettingsChange }: { tableId?: string, data: any, lang: string, onPreviewImage: (url: string, items: any[]) => void, gallerySettings?: any, onGallerySettingsChange?: (s: any) => void }) {
+    const defaultSettings = gallerySettings || gallerySettingsCache.get(tableId) || {
         statusFilter: 'all',
         ratingFilter: 'all',
         columnFilter: 'all',
@@ -806,7 +825,11 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage }: { 
     const [showRefFieldsMenu, setShowRefFieldsMenu] = useState(false);
 
     useEffect(() => {
-        gallerySettingsCache.set(tableId, { statusFilter, ratingFilter, columnFilter, showRating, displayFieldIds, refFieldIds });
+        const settings = { statusFilter, ratingFilter, columnFilter, showRating, displayFieldIds, refFieldIds };
+        gallerySettingsCache.set(tableId, settings);
+        if (onGallerySettingsChange) {
+            onGallerySettingsChange(settings);
+        }
     }, [tableId, statusFilter, ratingFilter, columnFilter, showRating, displayFieldIds, refFieldIds]);
 
     const imageFields = data.fields.filter((f: any) => f.type === 'attachment' || f.type === 'aiImage');
@@ -1022,18 +1045,48 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage }: { 
     );
 }
 
-export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment }: GridProps) {
+const scrollCache = new Map<string, number>();
+
+export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const [activeCell, setActiveCell] = useState<{ recordId: string; fieldId: string } | null>(null);
   const [forceEdit, setForceEdit] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
   const [selectedColIds, setSelectedColIds] = useState<Set<string>>(new Set());
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const currentScrollKey = `${tableId}_${viewMode}`;
+  const isRestoringScroll = useRef(false);
+  const ignoreScrollUntil = useRef(0);
+
+  // Restore scroll position when table changes
+  useLayoutEffect(() => {
+     isRestoringScroll.current = true;
+     if (scrollContainerRef.current) {
+         // Using setTimeout to ensure the DOM is fully painted (like large gallery images)
+         setTimeout(() => {
+            if (scrollContainerRef.current) {
+                isRestoringScroll.current = true;
+                scrollContainerRef.current.scrollTop = scrollCache.get(currentScrollKey) || 0;
+                // Ignore scroll events for next 50ms (debouncing browser auto-scroll clamp)
+                ignoreScrollUntil.current = Date.now() + 50;
+                setTimeout(() => { isRestoringScroll.current = false; }, 50);
+            }
+         }, 10);
+     }
+  }, [tableId, viewMode, currentScrollKey]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+     if (isRestoringScroll.current || Date.now() < ignoreScrollUntil.current) return;
+     scrollCache.set(currentScrollKey, e.currentTarget.scrollTop);
+  };
   const [contextMenuState, setContextMenuState] = useState<{ x: number, y: number, recordId?: string } | null>(null);
   const [colContextMenuState, setColContextMenuState] = useState<{ x: number, y: number, fieldId?: string } | null>(null);
   const [cellContextMenuState, setCellContextMenuState] = useState<{ x: number, y: number } | null>(null);
   const [insertRowCount, setInsertRowCount] = useState(1);
   const [insertColCount, setInsertColCount] = useState(1);
+  const [showClearAnnotationsConfirm, setShowClearAnnotationsConfirm] = useState(false);
   const [cutBox, setCutBox] = useState<{ minR: number, maxR: number, minC: number, maxC: number } | null>(null);
   
   const [draggedColId, setDraggedColId] = useState<string | null>(null);
@@ -1234,8 +1287,21 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              val = val ? Number(val) : null;
           } else if (field.type === 'checkbox') {
              val = val === 'true' || val === '1';
+          } else if (field.type === 'singleSelect') {
+             if (val) {
+                 const match = field.options?.find(o => o.name === val.trim() || o.id === val.trim());
+                 val = match ? match.id : val;
+             }
           } else if (field.type === 'multiSelect') {
-             val = val ? val.split(',') : [];
+             if (val) {
+                 const parts = val.split(',').map((s: string) => s.trim());
+                 val = parts.map((part: string) => {
+                     const match = field.options?.find(o => o.name === part || o.id === part);
+                     return match ? match.id : part;
+                 });
+             } else {
+                 val = [];
+             }
           }
           onUpdateRecord(record.id, field.id, val);
       }
@@ -1377,7 +1443,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
     e.dataTransfer.setData('text/plain', `row:${id}`);
   };
 
-  const [generatingCell, setGeneratingCell] = useState<{ recordId: string, fieldId: string } | null>(null);
+  const [generatingCells, setGeneratingCells] = useState<Set<string>>(new Set());
 
 
 
@@ -1387,15 +1453,20 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       return;
     }
     
-    try {
       const recordsToProcess = targetRecordIds ? data.records.filter(r => targetRecordIds.includes(r.id)) : data.records.filter(r => {
           let val = r[field.id];
           if (field.type === 'aiImage') return !val || (Array.isArray(val) && val.length === 0);
           return val === undefined || val === null || val === '';
       });
-      for (const record of recordsToProcess) {
-        setGeneratingCell({ recordId: record.id, fieldId: field.id });
-        let resultText = '';
+      
+      let hasError = false;
+      let lastErrorMessage = '';
+      const MAX_CONCURRENT = 4;
+      
+      const processRecord = async (record: any) => {
+          setGeneratingCells(prev => new Set(prev).add(`${record.id}-${field.id}`));
+          try {
+            let resultText = '';
         const contextData: any = {};
         
         if (field.refFields && field.refFields.length > 0) {
@@ -1418,12 +1489,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
            promptDataUrls = dataUrls;
         } else {
            // For text, just interpolate textually
-           data.fields.forEach(f => {
-              let val = record[f.id];
-              if (Array.isArray(val)) val = val.map(v => v?.url || v).join(', ');
-              else val = String(val || '');
-              promptString = promptString.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), val);
-           });
+           promptString = resolveTemplateString(promptString, data.fields, record);
            promptString = `You are an AI assistant helping to evaluate a table row. Here is the data context for this row:\n\n${JSON.stringify(contextData, null, 2)}\n\nBased ONLY on the context provided, perform the following instruction and respond with the concise result. Do not include markdown formatting or conversational filler.\n\nInstruction: ${promptString}`;
         }
         
@@ -1432,7 +1498,13 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         if (field.type === 'aiImage') {
           const cfg = field.aiImageConfig || {};
           const count = cfg.count || 1;
-          const ratio = cfg.ratio || "1:1";
+          
+          let ratioRaw = resolveTemplateString(cfg.ratio || "1:1", data.fields, record);
+          let ratio = ratioRaw.replace(/：/g, ':').trim();
+          
+          let resolutionRaw = resolveTemplateString(cfg.resolution || "1024x1024", data.fields, record);
+          let resolution = resolutionRaw.trim().toLowerCase();
+          
           const res4kMap: Record<string, string> = {
             '1:1': '4096x4096',
             '16:9': '4096x2304',
@@ -1454,16 +1526,13 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              '4:3': '1024x1024',
              '3:4': '1024x1024'
           };
-          const sizeStr = (cfg.resolution === '4k') ? (res4kMap[ratio] || '4096x4096') : (cfg.resolution === '2k') ? (res2kMap[ratio] || '2048x2048') : (hdMap[ratio] || "1024x1024");
+          const sizeStr = (resolution === '4k') ? (res4kMap[ratio] || '4096x4096') : (resolution === '2k') ? (res2kMap[ratio] || '2048x2048') : (hdMap[ratio] || "1024x1024");
           
           const imgSet = modelSettings.image || {};
           
           let resolvedModel = (imgSet.modelName || 'dall-e-3').split(',')[0].trim();
           if (cfg.modelTemplate) {
-             let template = cfg.modelTemplate;
-             data.fields.forEach(f => {
-               template = template.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`, 'g'), String(record[f.id] || ''));
-             });
+             let template = resolveTemplateString(cfg.modelTemplate, data.fields, record);
              if (template.trim()) {
                resolvedModel = template.trim();
              }
@@ -1659,16 +1728,8 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
            if (resultParams && Array.isArray(resultParams)) {
               const cfg = field.aiImageConfig || {};
               if (cfg.filenameTemplate || cfg.folderPath) {
-                 let template = cfg.filenameTemplate || 'image';
-                 let folderTemplate = cfg.folderPath || '';
-                 data.fields.forEach(f => {
-                   let val = record[f.id];
-                   if (Array.isArray(val)) val = val.map(v => v?.name || String(v?.url || v)).join(', ');
-                   else val = String(val || '');
-                   const regex = new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g');
-                   template = template.replace(regex, val);
-                   folderTemplate = folderTemplate.replace(regex, val);
-                 });
+                 let template = resolveTemplateString(cfg.filenameTemplate || 'image', data.fields, record);
+                 let folderTemplate = resolveTemplateString(cfg.folderPath || '', data.fields, record);
                  const filename = template.trim();
                  const folderPath = folderTemplate.trim();
                  
@@ -1685,12 +1746,39 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         }
         
         onUpdateRecord(record.id, field.id, finalResultParams);
+          } catch (err: any) {
+            console.error("AI Generation failed for record:", record.id, err);
+            hasError = true;
+            lastErrorMessage = err.message;
+          } finally {
+            setGeneratingCells(prev => {
+              const next = new Set(prev);
+              next.delete(`${record.id}-${field.id}`);
+              return next;
+            });
+          }
+      };
+
+      const queue = [...recordsToProcess];
+      const activePromises = new Set<Promise<void>>();
+
+      while(queue.length > 0 || activePromises.size > 0) {
+          while (queue.length > 0 && activePromises.size < MAX_CONCURRENT) {
+              const record = queue.shift()!;
+              const promise = processRecord(record);
+              activePromises.add(promise);
+              promise.finally(() => activePromises.delete(promise));
+              
+              if (queue.length > 0) await new Promise(r => setTimeout(r, 150));
+          }
+          if (activePromises.size > 0) {
+              await Promise.race(activePromises);
+          }
       }
-    } catch (err: any) {
-      alert("AI Generation failed: " + err.message);
-    } finally {
-      setGeneratingCell(null);
-    }
+      
+      if (hasError) {
+        alert("Some AI Generation tasks failed. Last error: " + lastErrorMessage);
+      }
   };
   
   const totalTableWidth = visibleFields.reduce((acc, f) => acc + (f.width || 150), 0) + 64; // 64 for row corner
@@ -1708,9 +1796,9 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
   }
 
   return (
-    <div className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate' }}>
+    <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate' }}>
       {viewMode === 'gallery' ? (
-        <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} />
+        <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} gallerySettings={gallerySettings} onGallerySettingsChange={onGallerySettingsChange} />
       ) : (
       <table className="min-w-full text-left" style={{ tableLayout: 'fixed', width: totalTableWidth, borderCollapse: 'separate', borderSpacing: 0 }}>
         <thead className="sticky top-0 z-40 bg-gray-50 text-sm">
@@ -1812,6 +1900,9 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         <tbody className="text-[13px]">
           {data.records.map((record, index) => {
              const groupHeadersToRender: any[] = [];
+             let isRowHidden = false;
+             let hiddenByLevel = -1;
+
              if (groupConfig && groupConfig.length > 0) {
                  let changedLevel = -1;
                  for (let level = 0; level < groupConfig.length; level++) {
@@ -1822,25 +1913,50 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                      
                      if (changedLevel !== -1 || val1 !== val2) {
                          if (changedLevel === -1) changedLevel = level;
-                         const field = data.fields.find(f => f.id === fieldId);
-                         groupHeadersToRender.push({ level, field, value: record[fieldId] });
+                     }
+
+                     let key = '';
+                     for (let i = 0; i <= level; i++) {
+                         key += String(groupConfig[i].fieldId) + ':' + JSON.stringify(record[groupConfig[i].fieldId]) + '|';
+                     }
+
+                     if (changedLevel !== -1 && changedLevel <= level) {
+                         // Render this header if an ancestor hasn't folded it
+                         if (hiddenByLevel === -1 || level <= hiddenByLevel) {
+                             const field = data.fields.find(f => f.id === fieldId);
+                             groupHeadersToRender.push({ level, field, value: record[fieldId], groupKey: key });
+                         }
+                     }
+
+                     if (foldedGroups?.includes(key)) {
+                         isRowHidden = true;
+                         if (hiddenByLevel === -1) hiddenByLevel = level;
                      }
                  }
              }
 
              return (
               <React.Fragment key={record.id}>
-                 {groupHeadersToRender.map((gh) => (
-                   <tr key={`gh-${record.id}-${gh.level}`} className="bg-gray-50 border-b border-t border-gray-200">
-                     <td colSpan={visibleFields.length + 2} className="p-0">
-                       <div className="sticky left-0 flex items-center py-2 text-[13px] font-medium text-gray-800 w-fit" style={{ paddingLeft: `${gh.level * 24 + 16}px` }}>
-                         <ChevronDown className="w-4 h-4 mr-1.5 opacity-50 text-gray-500"/>
-                         <span className="text-gray-500 mr-1.5">{gh.field?.name}:</span>
-                         <span>{gh.value == null || gh.value === '' ? (lang === 'en' ? '(Empty)' : '(空)') : String(gh.value)}</span>
-                       </div>
-                     </td>
-                   </tr>
-                 ))}
+                 {groupHeadersToRender.map((gh) => {
+                    const isFolded = foldedGroups?.includes(gh.groupKey);
+                    return (
+                    <tr key={`gh-${record.id}-${gh.level}`} className="bg-gray-50 border-b border-t border-gray-200 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => {
+                        const next = new Set(foldedGroups || []);
+                        if (isFolded) next.delete(gh.groupKey);
+                        else next.add(gh.groupKey);
+                        onFoldedGroupsChange?.(Array.from(next));
+                    }}>
+                      <td colSpan={visibleFields.length + 2} className="p-0 select-none">
+                        <div className="sticky left-0 flex items-center py-2 text-[13px] font-medium text-gray-800 w-fit" style={{ paddingLeft: `${gh.level * 24 + 16}px` }}>
+                          <ChevronDown className={`w-4 h-4 mr-1.5 text-gray-500 transition-transform ${isFolded ? '-rotate-90' : ''}`} />
+                          <span className="text-gray-500 mr-1.5">{gh.field?.name}:</span>
+                          <span>{gh.value == null || gh.value === '' ? (lang === 'en' ? '(Empty)' : '(空)') : String(gh.value)}</span>
+                        </div>
+                      </td>
+                    </tr>
+                    );
+                 })}
+                 {!isRowHidden && (
                  <tr 
                    className={cn(
                      "group transition-colors",
@@ -1925,7 +2041,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                     isSearchMatchActive={activeSearchMatch?.recordId === record.id && activeSearchMatch?.fieldId === field.id}
                     isActive={activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
                     forceEdit={forceEdit && activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
-                    isGeneratingCol={generatingCell?.recordId === record.id && generatingCell?.fieldId === field.id}
+                    isGeneratingCol={generatingCells.has(`${record.id}-${field.id}`)}
                     frozenLeftOffset={colIdx <= frozenColIndex ? frozenLeftOffsets[colIdx] : undefined}
                     isFrozenLast={colIdx === frozenColIndex}
                     onActivate={() => { setActiveCell({ recordId: record.id, fieldId: field.id }); setForceEdit(false); }}
@@ -1985,11 +2101,15 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                        }
                     }}
                     onContextMenu={(e: React.MouseEvent) => {
-                       // Only allow context menu if it's within a selection.
-                       if (isSelectedBox && (selectionBox !== null || extraSelectedCells.length > 0)) {
-                           e.preventDefault();
-                           setCellContextMenuState({ x: e.clientX, y: e.clientY });
+                       e.preventDefault();
+                       // If clicking outside current selection, set this cell as the only selected cell
+                       if (!isSelectedBox) {
+                          setIsSelecting(true);
+                          setSelectionStart({ r: index, c: colIdx });
+                          setSelectionEnd({ r: index, c: colIdx });
+                          setExtraSelectedCells([]);
                        }
+                       setCellContextMenuState({ x: e.clientX, y: e.clientY });
                     }}
                     onActivateNextRow={() => {
                        if (index < data.records.length - 1) {
@@ -2002,6 +2122,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               })}
               <td className="border-b border-gray-200"></td>
             </tr>
+            )}
             </React.Fragment>
             );
           })}
@@ -2033,10 +2154,14 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                 newItems[previewImageState.currentIndex] = newItem;
                 setPreviewImageState({ ...previewImageState, items: newItems });
                 if (previewImageState.onUpdate) {
-                   previewImageState.onUpdate(newItems);
+                   const cleanedItems = newItems.map(item => {
+                       const { mappedUrl, refUrls, ...cleanProps } = item;
+                       return cleanProps;
+                   });
+                   previewImageState.onUpdate(cleanedItems);
                 }
                 if (onUpdateGlobalAttachment) {
-                   const { url, mappedUrl, ...updatedProps } = newItem;
+                   const { url, mappedUrl, refUrls, ...updatedProps } = newItem;
                    if (url) {
                        onUpdateGlobalAttachment(url, updatedProps);
                    }
@@ -2265,6 +2390,65 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                       }
                    }
                    extraSelectedCells.forEach(cell => allSelectedCells.add(`${cell.r},${cell.c}`));
+                   
+                   if (allSelectedCells.size === 0 && activeCell) {
+                      const r = data.records.findIndex(rec => rec.id === activeCell.recordId);
+                      const c = visibleFields.findIndex(f => f.id === activeCell.fieldId);
+                      if (r >= 0 && c >= 0) {
+                         allSelectedCells.add(`${r},${c}`);
+                      }
+                   }
+
+                   if (allSelectedCells.size === 0) {
+                      setCellContextMenuState(null);
+                      return;
+                   }
+
+                   setShowClearAnnotationsConfirm(true);
+                   setCellContextMenuState(null);
+                }}
+             >
+                <div className="flex items-center">
+                   <Trash2 className="w-4 h-4 mr-2" />
+                   {lang === 'en' ? 'Clear Revisions' : '清除全部标注'}
+                </div>
+             </button>
+          </div>
+        </>
+      )}
+
+      {showClearAnnotationsConfirm && createPortal(
+        <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-xl font-semibold mb-4">{lang === 'en' ? 'Clear Revisions' : '清除全部标注'}</h2>
+            <p className="text-gray-600 mb-6">{lang === 'en' ? 'Are you sure you want to clear all markings for the selected cells?' : '确定要清除所选单元格的全部标注吗？'}</p>
+            <div className="flex justify-end space-x-3">
+              <button 
+                onClick={() => setShowClearAnnotationsConfirm(false)}
+                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                {lang === 'en' ? 'Cancel' : '取消'}
+              </button>
+              <button 
+                onClick={() => {
+                   const allSelectedCells = new Set<string>();
+                   if (selectionBox) {
+                      for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+                         for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+                            allSelectedCells.add(`${r},${c}`);
+                         }
+                      }
+                   }
+                   extraSelectedCells.forEach(cell => allSelectedCells.add(`${cell.r},${cell.c}`));
+                   
+                   if (allSelectedCells.size === 0 && activeCell) {
+                      const r = data.records.findIndex(rec => rec.id === activeCell.recordId);
+                      const c = visibleFields.findIndex(f => f.id === activeCell.fieldId);
+                      if (r >= 0 && c >= 0) {
+                         allSelectedCells.add(`${r},${c}`);
+                      }
+                   }
+
                    const selectedArr = Array.from(allSelectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
                    
                    selectedArr.forEach(({r, c}) => {
@@ -2289,17 +2473,16 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                          }
                       }
                    });
-                   
-                   setCellContextMenuState(null);
+                   setShowClearAnnotationsConfirm(false);
                 }}
-             >
-                <div className="flex items-center">
-                   <Trash2 className="w-4 h-4 mr-2" />
-                   {lang === 'en' ? 'Clear Revisions' : '清除全部标注'}
-                </div>
-             </button>
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+              >
+                {lang === 'en' ? 'Confirm' : '确定'}
+              </button>
+            </div>
           </div>
-        </>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -2621,7 +2804,7 @@ function HeaderCell({
                     {field.type === 'aiImage' && (
                      <div className="mt-2 space-y-2">
                        <div>
-                         <label className="block text-[10px] text-gray-500 mb-1">原始图片 (引用字段)</label>
+                         <label className="block text-[10px] text-gray-500 mb-1">原始图片</label>
                          <div className="relative">
                            <textarea
                              className="w-full text-xs border border-gray-300 rounded p-1 outline-none"
@@ -2647,31 +2830,85 @@ function HeaderCell({
                          </div>
                        </div>
                        <div className="grid grid-cols-3 gap-2">
-                         <div>
+                         <div className="flex flex-col">
                            <label className="block text-[10px] text-gray-500 mb-1">分辨率</label>
-                           <select 
-                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none"
-                             value={draftAiImageConfig.resolution || '1k'}
-                             onChange={e => setDraftAiImageConfig(prev => ({ ...prev, resolution: e.target.value }))}
-                           >
-                             <option value="1k">1K</option>
-                             <option value="2k">2K</option>
-                             <option value="4k">4K</option>
-                           </select>
+                           <div className="flex items-stretch border border-gray-300 bg-white rounded">
+                             <div className="relative flex-1 w-0">
+                               <select 
+                                  className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
+                                  value={draftAiImageConfig.resolution || '1k'}
+                                  onChange={e => setDraftAiImageConfig(prev => ({ ...prev, resolution: e.target.value }))}
+                               >
+                                  {!['1k', '2k', '4k'].includes((draftAiImageConfig.resolution || '1k').toLowerCase()) && (
+                                     <option value={draftAiImageConfig.resolution}>{draftAiImageConfig.resolution}</option>
+                                  )}
+                                  <option value="1k">1K</option>
+                                  <option value="2k">2K</option>
+                                  <option value="4k">4K</option>
+                               </select>
+                               <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none">
+                                 <ChevronDown className="w-3 h-3 text-gray-500" />
+                               </div>
+                             </div>
+                             <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
+                               <Plus className="w-3 h-3 text-gray-500" />
+                               <select 
+                                  className="absolute inset-0 opacity-0 cursor-pointer text-[10px]"
+                                  title="引用字段"
+                                  value=""
+                                  onChange={e => {
+                                    if (!e.target.value) return;
+                                    setDraftAiImageConfig(prev => ({ ...prev, resolution: `{${e.target.value}}` }));
+                                  }}
+                               >
+                                  <option value="">+ 引用</option>
+                                  {allFields.filter(f => f.id !== field.id).map(f => (
+                                    <option key={f.id} value={f.name}>{f.name}</option>
+                                  ))}
+                               </select>
+                             </div>
+                           </div>
                          </div>
-                         <div>
+                         <div className="flex flex-col">
                            <label className="block text-[10px] text-gray-500 mb-1">比例</label>
-                           <select 
-                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none"
-                             value={draftAiImageConfig.ratio || '1:1'}
-                             onChange={e => setDraftAiImageConfig(prev => ({ ...prev, ratio: e.target.value }))}
-                           >
-                             <option value="1:1">1:1</option>
-                             <option value="16:9">16:9</option>
-                             <option value="9:16">9:16</option>
-                             <option value="4:3">4:3</option>
-                             <option value="3:4">3:4</option>
-                           </select>
+                           <div className="flex items-stretch border border-gray-300 bg-white rounded">
+                             <div className="relative flex-1 w-0">
+                               <select 
+                                  className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
+                                  value={draftAiImageConfig.ratio || '1:1'}
+                                  onChange={e => setDraftAiImageConfig(prev => ({ ...prev, ratio: e.target.value }))}
+                               >
+                                  {!['1:1', '16:9', '9:16', '4:3', '3:4'].includes(draftAiImageConfig.ratio || '1:1') && (
+                                     <option value={draftAiImageConfig.ratio}>{draftAiImageConfig.ratio}</option>
+                                  )}
+                                  <option value="1:1">1:1</option>
+                                  <option value="16:9">16:9</option>
+                                  <option value="9:16">9:16</option>
+                                  <option value="4:3">4:3</option>
+                                  <option value="3:4">3:4</option>
+                               </select>
+                               <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none">
+                                 <ChevronDown className="w-3 h-3 text-gray-500" />
+                               </div>
+                             </div>
+                             <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
+                               <Plus className="w-3 h-3 text-gray-500" />
+                               <select 
+                                  className="absolute inset-0 opacity-0 cursor-pointer text-[10px]"
+                                  title="引用字段"
+                                  value=""
+                                  onChange={e => {
+                                    if (!e.target.value) return;
+                                    setDraftAiImageConfig(prev => ({ ...prev, ratio: `{${e.target.value}}` }));
+                                  }}
+                               >
+                                  <option value="">+ 引用</option>
+                                  {allFields.filter(f => f.id !== field.id).map(f => (
+                                    <option key={f.id} value={f.name}>{f.name}</option>
+                                  ))}
+                               </select>
+                             </div>
+                           </div>
                          </div>
                          <div>
                            <label className="block text-[10px] text-gray-500 mb-1">生成数量</label>
@@ -2687,7 +2924,7 @@ function HeaderCell({
                          </div>
                        </div>
                        <div className="relative">
-                          <label className="block text-[10px] text-gray-500 mb-1">保存的图片文件名 (可引用字段)</label>
+                          <label className="block text-[10px] text-gray-500 mb-1">保存的图片文件名</label>
                           <input 
                             type="text" 
                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none placeholder:text-gray-300"
@@ -3173,7 +3410,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
       case 'attachment': {
         let fileItems: any[] = [];
         if (Array.isArray(value)) {
-          fileItems = value.map((v: any) => typeof v === 'string' ? { url: v } : (v.url ? v : { url: v.name || '' }));
+          fileItems = value.map((v: any) => {
+             if (typeof v === 'string') return { url: v };
+             const { refUrls, ...cleanV } = v;
+             return cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+          });
         } else if (typeof value === 'string' && value.trim() !== '') {
           fileItems = value.split(',').map(s => ({ url: s.trim() }));
         }
@@ -3246,7 +3487,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
       case 'aiImage': {
         let fileItems: any[] = [];
         if (Array.isArray(value)) {
-          fileItems = value.map((v: any) => typeof v === 'string' ? { url: v } : (v.url ? v : { url: v.name || '' }));
+          fileItems = value.map((v: any) => {
+             if (typeof v === 'string') return { url: v };
+             const { refUrls, ...cleanV } = v;
+             return cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+          });
         } else if (typeof value === 'string' && value.trim() !== '') {
           fileItems = value.split(',').map(s => ({ url: s.trim() }));
         }
@@ -3825,7 +4070,11 @@ function SelectCellEditor({ field, ids, isMulti, onChange, onClose, onUpdateFiel
 function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: any, onChange: (v: any) => void, onClose: () => void, onPreview: (url: string, allUrls?: {url: string, annotations?: any[]}[], onUpdate?: (items: any[]) => void) => void }) {
   let fileItems: any[] = [];
   if (Array.isArray(value)) {
-    fileItems = value.map((v: any) => typeof v === 'string' ? { url: v } : (v.url ? v : { url: v.name || '' }));
+    fileItems = value.map((v: any) => {
+       if (typeof v === 'string') return { url: v };
+       const { refUrls, ...cleanV } = v;
+       return cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+    });
   } else if (typeof value === 'string' && value.trim() !== '') {
     fileItems = value.split(',').map(s => ({ url: s.trim() }));
   }
