@@ -1,0 +1,49 @@
+# Hong's AI Table Studio - Technical Details
+
+## 1. Project Overview
+Hong's AI Table Studio is a reactive, client-side, browser-based database/spreadsheet hybrid application (similar to Airtable or Bitable). It is designed to be highly responsive, localized in the browser, and capable of handling complex formula evaluations, data relations, and persistent local storage.
+
+## 2. Technology Stack
+- **Core Framework**: React 19 (Hooks, Context, Portals)
+- **Language**: TypeScript (`^5.8.2`)
+- **Build Tool**: Vite (`^6.2.0`)
+- **Styling**: Tailwind CSS (`v4`), `clsx`, `tailwind-merge`
+- **Icons**: `lucide-react`
+- **Data Parsing/Exporting**: `papaparse` (CSV processing)
+- **Formula Evaluation**: `expr-eval` for legacy Math strings, with native JS `Function` evaluation for Excel-like commands.
+- **Persistence**: `idb-keyval` (IndexedDB) and native **File System Access API** (for local auto-save to the user's hard drive).
+
+## 3. Architecture & File Structure
+- `index.html`: The entry HTML file, containing the animated splash screen and root `div`.
+- `main.js` / `preload.js`: Foundational structure indicating this project can also be run natively within an Electron shell.
+- `src/`
+  - `App.tsx`: The mega-component housing routing, table navigation (left sidebar), settings, permissions for the File System Access API, and application state.
+  - `main.tsx`: React rendering entry point.
+  - `types.ts`: Shared TS interfaces defining the architecture of `GridData`, `FieldType`, and `Attachment`.
+  - `initialData.ts`: Standard fallback boilerplate for newly created tables when no previous state exists.
+  - `components/`: Contains UI components.
+    - `Grid.tsx`: The heart of the grid rendering logic. Manages rendering rows, columns, specific field types, and drag-and-drop handles.
+  - `lib/`:
+    - `utils.ts`: Typical `cn()` style utilities for Tailwind.
+    - `idb.ts`: Abstraction layer for `idb-keyval` allowing the app to store handles (like the autosave directory handle) safely across browser sessions.
+
+## 4. Key Technical Mechanisms
+### 4.1 Local Persistence & Auto-Save
+The application defaults to caching tables inside `localStorage` (`bitable_project_cache`). 
+However, it implements the **File System Access API** to create a true continuous backup loop. By obtaining a user-granted directory handle (`showDirectoryPicker`), the app can seamlessly write `JSON` structural backups directly to a local folder in the background.
+
+### 4.2 Formula Evaluation Engine (`src/App.tsx: computeFormulaValue`)
+The engine dynamically computes fields whenever a record changes. 
+- It isolates dependencies enclosed in brackets (e.g., `{Price}`).
+- For legacy formulas, it falls back to `expr-eval`.
+- For Excel-like formulas (prefixed with `=`), it maps the record values, sanitizes special characters, and executes a strictly-scoped `new Function()` sandbox to return real-time calculations.
+
+### 4.3 Animation & Splash Screen
+The initial splash screen uses SVG drawing animations (`stroke-dasharray/offset`) combined with CSS `fractalNoise` displacement filters to create a rough, hand-drawn paper look. React detects when the component mounts and dispatches `window.removeInitialSplash()` to unmount the CSS layer smoothly once the JS engine is fully initialized.
+
+## 5. Deployment Details
+Since the primary logic exists on the client side, the project compiles to static assets (`dist` folder). 
+- **Build**: `npm run build` generates the required HTML/JS/CSS.
+- **Preview**: `npm run preview` spins up an express/vite server locally.
+- **Hosting**: The contents of the `/dist` directory can be deployed to any static host (Cloudflare Pages, Vercel, Firebase Hosting, GitHub Pages) without needing a standard Node.js server. 
+- **Electron**: As implied by `main.js`, you can initialize an Electron window rendering `index.html` locally to compile this into a desktop `.exe` or `.dmg`.
