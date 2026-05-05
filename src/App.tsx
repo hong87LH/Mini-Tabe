@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { initialGridData } from './initialData';
 import { Grid } from './components/Grid';
 import { FieldType, Attachment, GridData } from './types';
-import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy, Image as ImageIcon } from 'lucide-react';
+import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy, Image as ImageIcon, Video, User, FileText, Folder } from 'lucide-react';
 import Papa from 'papaparse';
 import { Parser } from 'expr-eval';
 import { getStringColor } from './lib/utils';
@@ -77,14 +77,25 @@ export const computeFormulaValue = (field: any, record: any, fields: any[]) => {
 };
 
 const TABLE_ICONS = [
+  'lucide:Image', 'lucide:Video', 'lucide:User', 'lucide:FileText', 'lucide:Folder',
   '💼','📅','📊','📁','📝','📌',
   '⭐','❤️','🔥','✨','💎','🎁',
   '💻','📱','🔋','🔌','⌨️','🌐',
   '📷','🖼️','🎨','🌅','📸','🌆',
   '🎬','🎥','📺','🎞️','▶️','📹',
   '📄','📚','📖','📋','🧾','📕',
-  '📗','📘','📙','🖋️','📓'
+  '📗','📘','📙','🖋️','📓', '😄'
 ];
+
+export function renderTableIconNode(icon: string | null | undefined, customClass: string = "w-4 h-4") {
+  if (!icon) return null;
+  if (icon === 'lucide:Image') return <ImageIcon className={customClass} />;
+  if (icon === 'lucide:Video') return <Video className={customClass} />;
+  if (icon === 'lucide:User') return <User className={customClass} />;
+  if (icon === 'lucide:FileText') return <FileText className={customClass} />;
+  if (icon === 'lucide:Folder') return <Folder className={customClass} />;
+  return icon;
+}
 
 function TableNavItem({ 
   tbl, isActive, onClick, onRename, onDelete, onDuplicate, onIconChange,
@@ -163,7 +174,7 @@ function TableNavItem({
              className="w-5 h-5 flex items-center justify-center cursor-pointer hover:bg-white/50 rounded transition-colors"
              title="Change Icon"
            >
-             {tbl.icon ? <span className="text-sm leading-none flex items-center justify-center -mt-px">{tbl.icon}</span> : <GridIcon className={`w-4 h-4 ${isActive ? 'text-blue-600' : 'text-gray-400 group-hover:text-gray-600'}`} />}
+             {tbl.icon ? <span className={`text-sm leading-none flex items-center justify-center -mt-px ${isActive ? 'text-blue-600' : 'text-gray-500 group-hover:text-gray-600'}`}>{renderTableIconNode(tbl.icon)}</span> : <GridIcon className={`w-4 h-4 ${isActive ? 'text-blue-600' : 'text-gray-500 group-hover:text-gray-600'}`} />}
            </div>
            
            {showIconMenu && menuPos && (
@@ -186,10 +197,10 @@ function TableNavItem({
                   {TABLE_ICONS.map(icon => (
                     <button 
                       key={icon}
-                      className={`w-7 h-7 flex items-center justify-center rounded hover:bg-blue-50 text-sm ${tbl.icon === icon ? 'bg-blue-100' : ''}`}
+                      className={`w-7 h-7 flex items-center justify-center rounded hover:bg-blue-50 text-sm ${tbl.icon === icon ? 'bg-blue-100 text-blue-600' : 'text-gray-500'}`}
                       onClick={(e) => { e.preventDefault(); e.stopPropagation(); onIconChange(icon); setShowIconMenu(false); }}
                     >
-                      {icon}
+                      {renderTableIconNode(icon, "w-4 h-4")}
                     </button>
                   ))}
                </div>,
@@ -1463,7 +1474,7 @@ export default function App() {
                     onClick={() => setActiveTableId(tbl.id)}
                     className={`w-10 h-10 flex items-center justify-center rounded transition-colors ${tbl.id === activeTableId ? 'bg-blue-100/80 text-blue-800' : 'text-gray-400 hover:bg-gray-200/50 hover:text-gray-900'}`}
                   >
-                    {tbl.icon ? <span className="text-xl flex items-center justify-center -mt-px">{tbl.icon}</span> : <GridIcon className="w-5 h-5" />}
+                    {tbl.icon ? <span className="text-xl flex items-center justify-center -mt-px">{renderTableIconNode(tbl.icon, "w-5 h-5")}</span> : <GridIcon className="w-5 h-5" />}
                   </button>
                ))}
             </div>
@@ -1523,7 +1534,7 @@ export default function App() {
                 className="flex items-center text-lg font-bold text-gray-800 tracking-tight cursor-pointer hover:bg-gray-100 px-2 py-1 rounded transition-colors group"
                 onClick={() => setShowTableMenu(!showTableMenu)}
               >
-                 {tables[activeTableIndex]?.icon && <span className="mr-2 text-[22px] leading-none flex items-center">{tables[activeTableIndex].icon}</span>}
+                 {tables[activeTableIndex]?.icon && <span className="mr-2 text-[22px] leading-none flex items-center text-gray-500">{renderTableIconNode(tables[activeTableIndex].icon, "w-5 h-5")}</span>}
                  {activeTableName}
                  <ChevronDown className="w-4 h-4 ml-1 text-gray-400 opacity-50 group-hover:opacity-100 transition-opacity" />
               </div>
@@ -1535,7 +1546,7 @@ export default function App() {
                       onClick={() => { setActiveTableId(tbl.id); setShowTableMenu(false); }}
                       className={`w-full flex items-center px-4 py-2 text-sm transition-colors ${tbl.id === activeTableId ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}
                     >
-                      {tbl.icon ? <span className="mr-2.5 text-base leading-none -mt-px w-4 text-center">{tbl.icon}</span> : <GridIcon className="w-4 h-4 mr-2.5 opacity-60" />}
+                      {tbl.icon ? <span className="mr-2.5 text-base leading-none -mt-px w-4 text-center flex justify-center">{renderTableIconNode(tbl.icon, "w-4 h-4")}</span> : <GridIcon className="w-4 h-4 mr-2.5 opacity-60" />}
                       {tbl.name}
                     </button>
                   ))}

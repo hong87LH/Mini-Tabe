@@ -6,6 +6,8 @@ import { cn, getStringColor } from '../lib/utils';
 import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
 
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   if (!query || !text) return <>{text}</>;
@@ -173,9 +175,26 @@ const ZoomableImage = ({
                     className={`flex-1 w-full flex items-center justify-center relative overflow-hidden cursor-move ${i > 0 ? 'border-t border-gray-700' : ''}`}
                     onWheel={(e) => {
                         e.preventDefault();
-                        const newScales = [...refScales];
-                        newScales[i] = Math.min(Math.max(0.5, refScales[i] - e.deltaY * 0.01), 10);
-                        setRefScales(newScales);
+                        const s = refScales[i] || 1;
+                        const newScale = Math.min(Math.max(0.5, s - e.deltaY * 0.01), 10);
+                        if (newScale !== s) {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const mouseX = e.clientX - rect.left - rect.width / 2;
+                          const mouseY = e.clientY - rect.top - rect.height / 2;
+                          setRefPos(prevPos => {
+                            const newPos = [...prevPos];
+                            newPos[i] = {
+                              x: mouseX - (mouseX - (prevPos[i]?.x || 0)) * (newScale / s),
+                              y: mouseY - (mouseY - (prevPos[i]?.y || 0)) * (newScale / s)
+                            };
+                            return newPos;
+                          });
+                          setRefScales(prevScales => {
+                             const newScales = [...prevScales];
+                             newScales[i] = newScale;
+                             return newScales;
+                          });
+                        }
                     }}
                     onMouseDown={(e) => {
                         setRefIsDragging(true);
@@ -208,7 +227,18 @@ const ZoomableImage = ({
         className="flex-1 relative flex items-center justify-center overflow-hidden"
         onWheel={(e) => {
           e.preventDefault();
-          setScale(s => Math.min(Math.max(0.5, s - e.deltaY * 0.01), 10));
+          const s = scale;
+          const newScale = Math.min(Math.max(0.5, s - e.deltaY * 0.01), 10);
+          if (newScale !== s) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left - rect.width / 2;
+            const mouseY = e.clientY - rect.top - rect.height / 2;
+            setPos(prev => ({
+              x: mouseX - (mouseX - prev.x) * (newScale / s),
+              y: mouseY - (mouseY - prev.y) * (newScale / s)
+            }));
+            setScale(newScale);
+          }
         }}
         onClick={(e) => {
            if ((e.target as HTMLElement).closest('.annotation-popup')) return;
@@ -244,8 +274,26 @@ const ZoomableImage = ({
             {annotationViewState === 2 ? <MessageSquareText className="w-5 h-5" /> : <MessageSquare className="w-5 h-5" />}
             {annotationViewState === 0 && <span className="absolute rotate-45 w-6 h-[2px] bg-red-400"></span>}
          </button>
-         <button onClick={(e) => { e.stopPropagation(); setScale(1); setPos({x: 0, y: 0}); setRefScales([1, 1]); setRefPos([{x: 0, y: 0}, {x: 0, y: 0}]); }} title="Reset Zoom" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+         <button onClick={(e) => { 
+            e.stopPropagation(); 
+            if (!imgRef.current) return;
+            const img = imgRef.current;
+            const currentRatio = img.naturalWidth / img.width;
+            if (Math.abs(scale - 1) < 0.1) {
+               setScale(currentRatio);
+               setRefScales([currentRatio, currentRatio]);
+            } else {
+               setScale(1); 
+               setPos({x: 0, y: 0}); 
+               setRefScales([1, 1]); 
+               setRefPos([{x: 0, y: 0}, {x: 0, y: 0}]);
+            }
+         }} title="Toggle Zoom (Fit / Actual Size)" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors flex items-center justify-center">
+            {imgRef.current && Math.abs(scale - 1) < 0.1 ? (
+               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+            ) : (
+               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+            )}
          </button>
          <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(src); }} title="Copy Image" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
             <Copy className="w-5 h-5" />
@@ -633,6 +681,228 @@ export const resolveTemplateString = (templateStr: string, fields: Field[], reco
       str = str.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), val);
   });
   return str;
+};
+
+const resolveFilenameAndFolder = (filenameTemplate: string, folderPathTpl: string, fields: Field[], record: any) => {
+   let filename = resolveTemplateString(filenameTemplate || 'image', fields, record).trim();
+   let folderPath = resolveTemplateString(folderPathTpl || '', fields, record).trim();
+   let zipPath = '';
+
+   const normalizedTemplate = filename.replace(/\\/g, '/');
+   if (normalizedTemplate.includes('/')) {
+     const parts = normalizedTemplate.split('/');
+     filename = parts.pop() || 'image';
+     const subDir = parts.join('/');
+     folderPath = folderPath ? `${folderPath}/${subDir}` : subDir;
+     zipPath = subDir;
+   }
+   return { filename, folderPath, zipPath };
+};
+
+const BatchDownloadPopup = ({ 
+  selectedCells, 
+  data, 
+  visibleFields, 
+  lang, 
+  onClose,
+  triggerDownload
+}: { 
+  selectedCells: Set<string>; 
+  data: GridData; 
+  visibleFields: Field[]; 
+  lang: string; 
+  onClose: () => void;
+  triggerDownload: (url: string, filename: string, folderPath?: string) => Promise<string | undefined>;
+}) => {
+  // ratings index 0 is unrated, 1-5 is stars
+  const [selectedRatings, setSelectedRatings] = useState<Record<number, boolean>>({ 0: false, 1: false, 2: false, 3: false, 4: false, 5: false });
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [progress, setProgress] = useState({ current: 0, total: 0 });
+
+  const getFilteredImages = () => {
+     const selectedArr = Array.from(selectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
+     const targetImages: { url: string, filename: string, folderPath: string, zipPath?: string }[] = [];
+     const hasAnyFilter = Object.values(selectedRatings).some(v => v);
+
+     selectedArr.forEach(({r, c}) => {
+        const record = data.records[r];
+        const field = visibleFields[c];
+        if (!record || !field || (field.type !== 'attachment' && field.type !== 'aiImage')) return;
+
+        const val = record[field.id];
+        if (!val) return;
+
+        let items: any[] = [];
+        if (Array.isArray(val)) items = val;
+        else if (typeof val === 'string' && val.trim()) items = val.split(',').map(u => ({ url: u.trim() }));
+        else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
+
+        const cfg = field.aiImageConfig || {};
+        const hasConfig = Object.keys(cfg).length > 0 || cfg.filenameTemplate || cfg.folderPath;
+        const { filename: baseFilename, folderPath, zipPath } = resolveFilenameAndFolder(cfg.filenameTemplate || 'image', cfg.folderPath || '', data.fields, record);
+
+        let activeIndex = 0;
+        items.forEach((item) => {
+           let rtg = 0;
+           let itemName = '';
+           if (item && typeof item === 'object') {
+             rtg = item.rating || 0;
+             itemName = item.name || '';
+           }
+
+           if (!hasAnyFilter || selectedRatings[rtg]) {
+              const url = typeof item === 'string' ? item : item.url;
+              if (url) {
+                 const generatedFilename = baseFilename + (items.length > 1 ? `_${activeIndex + 1}` : '') + '.png';
+                 const currentFilename = (!hasConfig && itemName) ? itemName : generatedFilename;
+                 targetImages.push({ url, filename: currentFilename, folderPath, zipPath });
+              }
+           }
+           activeIndex++;
+        });
+     });
+     return targetImages;
+  };
+
+  const images = useMemo(() => getFilteredImages(), [selectedCells, data, visibleFields, selectedRatings]);
+
+  const toggleRating = (r: number) => setSelectedRatings(prev => ({ ...prev, [r]: !prev[r] }));
+
+  const handleZipDownload = async () => {
+    if (images.length === 0) return;
+    setIsProcessing(true);
+    setProgress({ current: 0, total: images.length });
+    
+    const zip = new JSZip();
+    const w = window as any;
+    const isElectron = !!(w.electronAPI || w.electron);
+    
+    for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        try {
+            let blob: Blob;
+            if (img.url.startsWith('data:')) {
+                const res = await fetch(img.url);
+                blob = await res.blob();
+            } else if (isElectron && w.electronAPI?.readLocalFile) {
+                // Try reading local file via IPC for Electron
+                const base64Data = await w.electronAPI.readLocalFile(img.url);
+                if (base64Data) {
+                    const res = await fetch(`data:application/octet-stream;base64,${base64Data}`);
+                    blob = await res.blob();
+                } else {
+                    const res = await fetch(img.url);
+                    blob = await res.blob();
+                }
+            } else {
+                const res = await fetch(img.url);
+                blob = await res.blob();
+            }
+            const path = img.zipPath ? `${img.zipPath}/${img.filename}` : img.filename;
+            zip.file(path, blob);
+        } catch (e) {
+            console.error("Failed to fetch image for zip", img.url, e);
+        }
+        setProgress({ current: i + 1, total: images.length });
+    }
+
+    try {
+        const content = await zip.generateAsync({ type: 'blob' });
+        saveAs(content, `images_${new Date().getTime()}.zip`);
+    } catch (e) {
+        console.error("Failed to generate zip", e);
+    }
+    
+    setIsProcessing(false);
+    onClose();
+  };
+
+  const handleLocalSave = async () => {
+    if (images.length === 0) return;
+    
+    const w = window as any;
+    let baseDir = '';
+    if (w.electronAPI?.selectDirectory) {
+        baseDir = await w.electronAPI.selectDirectory();
+        if (!baseDir) return; // User canceled
+    }
+
+    setIsProcessing(true);
+    setProgress({ current: 0, total: images.length });
+
+    for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        const finalFolder = baseDir ? (img.zipPath ? `${baseDir}/${img.zipPath}` : baseDir) : (img.zipPath || '');
+        await triggerDownload(img.url, img.filename, finalFolder);
+        setProgress({ current: i + 1, total: images.length });
+    }
+    
+    setIsProcessing(false);
+    onClose();
+  };
+
+  const isElectron = !!((window as any).electronAPI || (window as any).electron);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-black/50">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
+        <h2 className="text-xl font-semibold mb-4">{lang === 'en' ? 'Batch Download Images' : '批量下载图片'}</h2>
+        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X className="w-5 h-5"/></button>
+        
+        <div className="mb-6">
+          <label className="text-sm font-medium text-gray-700 block mb-2">{lang === 'en' ? 'Filter by Star Rating' : '筛选标星图片'}</label>
+          <div className="flex flex-wrap gap-2">
+            {[0, 1, 2, 3, 4, 5].map(r => (
+              <button
+                key={r}
+                onClick={() => toggleRating(r)}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium flex items-center transition-colors ${selectedRatings[r] ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}
+              >
+                {r === 0 ? (lang === 'en' ? 'Unrated' : '无标星') : (
+                  <>
+                    <Star className={`w-3.5 h-3.5 mr-1 ${selectedRatings[r] ? 'fill-blue-700 text-blue-700' : 'fill-transparent'}`} /> {r}
+                  </>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="text-sm text-gray-600 mb-6">
+           {lang === 'en' ? 'Selected Images:' : '已选中图片数量:'} <strong className="text-gray-900">{images.length}</strong>
+        </div>
+
+        {isProcessing && (
+           <div className="mb-4">
+              <div className="w-full bg-gray-200 rounded-full h-2 mb-1">
+                 <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${(progress.current / progress.total) * 100}%` }}></div>
+              </div>
+              <div className="text-xs text-gray-500 text-right">{progress.current} / {progress.total}</div>
+           </div>
+        )}
+
+        <div className="flex justify-end gap-3">
+          <button 
+            disabled={images.length === 0 || isProcessing}
+            onClick={handleZipDownload}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+          >
+             {lang === 'en' ? 'Download ZIP' : '打包下载 (ZIP)'}
+          </button>
+          {isElectron && (
+             <button 
+               disabled={images.length === 0 || isProcessing}
+               onClick={handleLocalSave}
+               className="px-4 py-2 border border-blue-600 text-blue-600 rounded-md hover:bg-blue-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+             >
+                {lang === 'en' ? 'Batch Save Locally' : '批量另存至本地'}
+             </button>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
 };
 
 const getBase64ImageParts = async (templateStr: string, fields: Field[], record: any) => {
@@ -1089,6 +1359,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
   const [insertRowCount, setInsertRowCount] = useState(1);
   const [insertColCount, setInsertColCount] = useState(1);
   const [showClearAnnotationsConfirm, setShowClearAnnotationsConfirm] = useState(false);
+  const [showBatchDownloadDialog, setShowBatchDownloadDialog] = useState<Set<string> | null>(null);
   const [cutBox, setCutBox] = useState<{ minR: number, maxR: number, minC: number, maxC: number } | null>(null);
   
   const [draggedColId, setDraggedColId] = useState<string | null>(null);
@@ -1732,13 +2003,12 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               if (cfg.filenameTemplate || cfg.folderPath) {
                  let template = resolveTemplateString(cfg.filenameTemplate || 'image', data.fields, record);
                  let folderTemplate = resolveTemplateString(cfg.folderPath || '', data.fields, record);
-                 const filename = template.trim();
-                 const folderPath = folderTemplate.trim();
+                 const { filename: finalFilename, folderPath: finalFolderPath } = resolveFilenameAndFolder(cfg.filenameTemplate || 'image', cfg.folderPath || '', data.fields, record);
                  
                  const savedUrls: string[] = [];
                  for (let i = 0; i < resultParams.length; i++) {
                      const url = resultParams[i];
-                     const savedPath = await triggerDownload(url, filename + (resultParams.length > 1 ? `_${i+1}` : '') + '.png', folderPath);
+                     const savedPath = await triggerDownload(url, finalFilename + (resultParams.length > 1 ? `_${i+1}` : '') + '.png', finalFolderPath);
                      savedUrls.push(savedPath || url);
                  }
                  downloadedUrls = savedUrls;
@@ -2383,6 +2653,41 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              style={{ left: cellContextMenuState.x, top: cellContextMenuState.y }}
           >
              <button 
+                className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between pointer-events-auto text-blue-600 hover:text-blue-700 border-b border-gray-100"
+                onClick={() => {
+                   const allSelectedCells = new Set<string>();
+                   if (selectionBox) {
+                      for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+                         for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+                            allSelectedCells.add(`${r},${c}`);
+                         }
+                      }
+                   }
+                   extraSelectedCells.forEach(cell => allSelectedCells.add(`${cell.r},${cell.c}`));
+                   
+                   if (allSelectedCells.size === 0 && activeCell) {
+                      const r = data.records.findIndex(rec => rec.id === activeCell.recordId);
+                      const c = visibleFields.findIndex(f => f.id === activeCell.fieldId);
+                      if (r >= 0 && c >= 0) {
+                         allSelectedCells.add(`${r},${c}`);
+                      }
+                   }
+
+                   if (allSelectedCells.size === 0) {
+                      setCellContextMenuState(null);
+                      return;
+                   }
+
+                   setShowBatchDownloadDialog(allSelectedCells);
+                   setCellContextMenuState(null);
+                }}
+             >
+                <div className="flex items-center">
+                   <Download className="w-4 h-4 mr-2" />
+                   {lang === 'en' ? 'Batch Download Images' : '批量打包/下载图片'}
+                </div>
+             </button>
+             <button 
                 className="w-full text-left px-4 py-2 hover:bg-red-50 transition-colors flex items-center justify-between pointer-events-auto text-red-600 hover:text-red-700"
                 onClick={() => {
                    const allSelectedCells = new Set<string>();
@@ -2419,6 +2724,17 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              </button>
           </div>
         </>
+      )}
+
+      {showBatchDownloadDialog && (
+         <BatchDownloadPopup
+            selectedCells={showBatchDownloadDialog}
+            data={data}
+            visibleFields={visibleFields}
+            lang={lang}
+            onClose={() => setShowBatchDownloadDialog(null)}
+            triggerDownload={triggerDownload}
+         />
       )}
 
       {showClearAnnotationsConfirm && createPortal(

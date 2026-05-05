@@ -1,5 +1,5 @@
 // main.js （ES Module 版本）
-import { app, BrowserWindow, protocol, ipcMain, nativeImage } from 'electron';
+import { app, BrowserWindow, protocol, ipcMain, nativeImage, dialog } from 'electron';
 import path from 'path';
 import isDev from 'electron-is-dev';
 import fs from 'fs';
@@ -75,6 +75,31 @@ app.whenReady().then(() => {
   });
 
   // ▼▼▼ 监听前端请求，抓取系统级原生缩略图 (解决内存崩溃神兵利器) ▼▼▼
+  ipcMain.handle('read-local-file', async (event, filePath) => {
+    try {
+      if (filePath.startsWith('file://')) {
+        filePath = fileURLToPath(filePath);
+      } else if (filePath.startsWith('local-img://')) {
+        filePath = decodeURIComponent(filePath.replace('local-img://', ''));
+      }
+      if (fs.existsSync(filePath)) {
+        const buffer = fs.readFileSync(filePath);
+        return buffer.toString('base64');
+      }
+      return null;
+    } catch (err) {
+      console.error('Failed to read file:', err);
+      return null;
+    }
+  });
+
+  ipcMain.handle('select-directory', async (event) => {
+    const win = BrowserWindow.getFocusedWindow();
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+    if (!canceled && filePaths.length > 0) return filePaths[0];
+    return null;
+  });
+
   ipcMain.handle('get-thumbnail', async (event, filePath, size = { width: 150, height: 150 }) => {
     try {
       if (!fs.existsSync(filePath)) return null;
@@ -94,30 +119,46 @@ app.whenReady().then(() => {
   // ▼▼▼ 监听前端下载文件请求，执行真实的物理写入 ▼▼▼
   ipcMain.handle('download-file', async (event, { url, filename, folderPath }) => {
     try {
-      // 1. 如果配置了目标文件夹，确保文件夹存在
-      if (folderPath && !fs.existsSync(folderPath)) {
-        fs.mkdirSync(folderPath, { recursive: true });
-      }
-      
-      const targetDir = folderPath ? folderPath : app.getPath('downloads');
-      const initialPath = path.join(targetDir, filename);
+      let finalTargetPath;
 
-      // 2. 通过防覆盖逻辑获取"千真万确不会撞车"的最终路径
-      const finalTargetPath = getUniqueFilePath(initialPath);
+      // 1. 如果配置了目标文件夹，直接静默保存。如果没有配置，则弹出另存为窗口
+      if (!folderPath) {
+        const win = BrowserWindow.getFocusedWindow();
+        const { canceled, filePath } = await dialog.showSaveDialog(win, {
+           defaultPath: path.join(app.getPath('downloads'), filename),
+        });
+        if (canceled || !filePath) return null;
+        finalTargetPath = filePath;
+      } else {
+        if (!fs.existsSync(folderPath)) {
+          await fs.promises.mkdir(folderPath, { recursive: true });
+        }
+        const initialPath = path.join(folderPath, filename);
+        // 2. 通过防覆盖逻辑获取"千真万确不会撞车"的最终路径
+        finalTargetPath = getUniqueFilePath(initialPath);
+      }
 
       // 3. 落盘
       if (url.startsWith('data:')) {
         const base64Data = url.split(',')[1];
         const buffer = Buffer.from(base64Data, 'base64');
-        fs.writeFileSync(finalTargetPath, buffer);
+        await fs.promises.writeFile(finalTargetPath, buffer);
+      } else if (url.startsWith('file://')) {
+        let srcPath = fileURLToPath(url);
+        await fs.promises.copyFile(srcPath, finalTargetPath);
+      } else if (url.startsWith('local-img://')) {
+        let srcPath = decodeURIComponent(url.replace('local-img://', ''));
+        await fs.promises.copyFile(srcPath, finalTargetPath);
+      } else if (fs.existsSync(url)) {
+        await fs.promises.copyFile(url, finalTargetPath);
       } else {
         const response = await fetch(url);
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
-        fs.writeFileSync(finalTargetPath, buffer);
+        await fs.promises.writeFile(finalTargetPath, buffer);
       }
 
-      console.log(`[成功] 图片已静默保存至: ${finalTargetPath}`);
+      console.log(`[成功] 图片已保存至: ${finalTargetPath}`);
       // 返回后端最终敲定的路径给前端
       return finalTargetPath; 
     } catch (err) {
