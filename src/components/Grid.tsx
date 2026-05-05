@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
-import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star } from 'lucide-react';
+import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2 } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -1720,25 +1720,8 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
 
 
 
-  const handleGenerateColumn = async (field: Field, targetRecordIds?: string[]) => {
-    if (!field.prompt) {
-      alert("Please configure a prompt for this Smart Text column first.");
-      return;
-    }
-    
-      const recordsToProcess = targetRecordIds ? data.records.filter(r => targetRecordIds.includes(r.id)) : data.records.filter(r => {
-          let val = r[field.id];
-          if (field.type === 'aiImage') return !val || (Array.isArray(val) && val.length === 0);
-          return val === undefined || val === null || val === '';
-      });
-      
-      let hasError = false;
-      let lastErrorMessage = '';
-      const MAX_CONCURRENT = 4;
-      
-      const processRecord = async (record: any) => {
-          setGeneratingCells(prev => new Set(prev).add(`${record.id}-${field.id}`));
-          try {
+
+  const executeAIGenerateCell = async (record: any, field: Field) => {
             let resultText = '';
         const contextData: any = {};
         
@@ -2018,6 +2001,28 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         }
         
         onUpdateRecord(record.id, field.id, finalResultParams);
+  };
+
+  const handleGenerateColumn = async (field: Field, targetRecordIds?: string[]) => {
+    if (!field.prompt) {
+      alert("Please configure a prompt for this Smart Text column first.");
+      return;
+    }
+    
+      const recordsToProcess = targetRecordIds ? data.records.filter(r => targetRecordIds.includes(r.id)) : data.records.filter(r => {
+          let val = r[field.id];
+          if (field.type === 'aiImage') return !val || (Array.isArray(val) && val.length === 0);
+          return val === undefined || val === null || val === '';
+      });
+      
+      let hasError = false;
+      let lastErrorMessage = '';
+      const MAX_CONCURRENT = 4;
+      
+      const processRecord = async (record: any) => {
+          setGeneratingCells(prev => new Set(prev).add(`${record.id}-${field.id}`));
+          try {
+            await executeAIGenerateCell(record, field);
           } catch (err: any) {
             console.error("AI Generation failed for record:", record.id, err);
             hasError = true;
@@ -2053,6 +2058,73 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       }
   };
   
+
+  const [runningWorkflowRows, setRunningWorkflowRows] = useState<Set<string>>(new Set());
+
+  const handleRunWorkflow = async (targetRecordIds: string[]) => {
+      const recordsToProcess = data.records.filter(r => targetRecordIds.includes(r.id));
+      if (recordsToProcess.length === 0) return;
+      
+      const aiFields = data.fields.filter(f => f.type === 'aiText' || f.type === 'aiImage');
+      if (aiFields.length === 0) {
+          alert(lang === 'en' ? "No Smart Text / AI Image columns found in the table." : "表格中没有智能文本/智能图片列。");
+          return;
+      }
+      
+      for (const record of recordsToProcess) {
+          setRunningWorkflowRows(prev => new Set(prev).add(record.id));
+          
+          let rowFailed = false;
+          for (const field of aiFields) {
+              if (rowFailed) break; 
+              
+              if (!field.prompt) continue; 
+              
+              let val = record[field.id];
+              let shouldGenerate = false;
+              if (field.type === 'aiImage') {
+                 shouldGenerate = (!val || (Array.isArray(val) && val.length === 0));
+              } else {
+                 shouldGenerate = (val === undefined || val === null || val === '');
+              }
+              
+              if (!shouldGenerate) continue;
+
+              let attempts = 0;
+              let success = false;
+              
+              while (attempts < 2 && !success) {
+                  attempts++;
+                  try {
+                      setGeneratingCells(prev => new Set(prev).add(`${record.id}-${field.id}`));
+                      await executeAIGenerateCell(record, field);
+                      success = true;
+                  } catch (err: any) {
+                      console.error(`Workflow generation failed for record ${record.id}, field ${field.id}, attempt ${attempts}`, err);
+                      if (attempts === 2) {
+                          rowFailed = true;
+                      } else {
+                          // Wait a bit before retry
+                          await new Promise(r => setTimeout(r, 1000));
+                      }
+                  } finally {
+                      setGeneratingCells(prev => {
+                          const next = new Set(prev);
+                          next.delete(`${record.id}-${field.id}`);
+                          return next;
+                      });
+                  }
+              }
+          }
+          
+          setRunningWorkflowRows(prev => {
+              const next = new Set(prev);
+              next.delete(record.id);
+              return next;
+          });
+      }
+  };
+
   const totalTableWidth = visibleFields.reduce((acc, f) => acc + (f.width || 150), 0) + 64; // 64 for row corner
 
   let frozenColIndex = -1;
@@ -2281,8 +2353,11 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                       setInsertRowCount(Math.max(sel.size, 1));
                     }}
                   >
-                    <span className={cn("group-hover:hidden", selectedRecordIds.has(record.id) ? 'hidden' : '')}>{index + 1}</span>
-                    <div className={cn("items-center justify-center space-x-1 hidden group-hover:flex", selectedRecordIds.has(record.id) ? '!flex' : '')}>
+                    <span className={cn("group-hover:hidden", selectedRecordIds.has(record.id) || runningWorkflowRows.has(record.id) ? 'hidden' : '')}>{index + 1}</span>
+                    {runningWorkflowRows.has(record.id) && !selectedRecordIds.has(record.id) && (
+                       <Loader2 className="w-4 h-4 text-purple-500 animate-spin group-hover:hidden" />
+                    )}
+                    <div className={cn("items-center justify-center space-x-1 hidden group-hover:flex", (selectedRecordIds.has(record.id) || runningWorkflowRows.has(record.id)) ? '!flex' : '')}>
                       <input 
                         type="checkbox" 
                         checked={selectedRecordIds.has(record.id)}
@@ -2500,6 +2575,17 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                 </div>
              </button>
              <div className="border-t border-gray-100 my-1"></div>
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-purple-50 text-purple-600 transition-colors flex items-center"
+                onClick={() => {
+                   const idsObj = Array.from(selectedRecordIds).length > 0 ? Array.from(selectedRecordIds) : [contextMenuState.recordId!];
+                   handleRunWorkflow(idsObj);
+                   setContextMenuState(null);
+                }}
+             >
+                <Sparkles className="w-4 h-4 mr-2" /> 
+                {lang === 'en' ? `Run Workflow (${Math.max(selectedRecordIds.size, 1)})` : `运行智能生成 (${Math.max(selectedRecordIds.size, 1)})`}
+             </button>
              <button 
                 className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 transition-colors flex items-center"
                 onClick={() => {

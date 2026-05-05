@@ -39,6 +39,17 @@ If you are running this application comprehensively as a desktop-installed app:
 - **Do Not Upload, Just Link**: You do not have to manually click and upload images taking up memory. You can directly paste the physical path of the image sitting on your computer (e.g., `C:\Users\YourName\Pictures\design.png`).
 - The system will intelligently mount these system paths and read them instantly, keeping your local performance perfectly sharp and bridging the gap between web capabilities and your desktop environment.
 
+### AI Workflows & Batch Generation
+If your table features columns specifically geared towards artificial intelligence (like **Smart Text** or **AI Image** field types):
+- **Sequential Row Processing**: You can select one or multiple rows, right-click, and choose **Run Workflow**.
+- **Automated Queuing**: The system will automatically move left to right across AI columns within the same row, triggering and completing generation requests one by one. Once a row is complete, it shifts down to the next selected row. 
+- **Resilience**: If a specific AI task fails (due to a connection issue or timeout), the application will attempt an immediate retry. If it encounters consecutive failures, it gracefully skips that item, ensuring that a batch job doesn't completely stall because of one bad connection.
+
+### Batch Saving & Image Archiving
+If you have generated assets or loaded multiple attachments, you can seamlessly export them directly to your workstation:
+- **Zip Archive Download**: At any point within the image grid viewer, you can batch download selected photos compiled into a single Zip archive.
+- **Desktop Batch Save Capabilities**: Operating in standard desktop/Electron environments unlocks a **Batch Save Locally** button. The system respects generated structured sub-folder paths (if configured via filename templates) and quietly writes all items directly onto your physical disk without redundant save confirmation prompts. It also intelligently resolves filename collisions automatically.
+
 ### Drag and Drop
 - **Columns**: Click and hold a column header to drag it left or right, reordering the grid.
 - **Rows**: Use the grip handle located at the far left edge of any row to reorder the row structure vertically.
