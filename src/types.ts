@@ -12,16 +12,6 @@ export interface Attachment {
   name: string;
 }
 
-export interface ModelProvider {
-  id: string;
-  name: string;
-  type: 'text' | 'image' | 'video';
-  protocol: 'openai' | 'gemini' | 'gemini-custom';
-  endpoint: string;
-  models: string; // comma-separated list of models
-  key: string;
-}
-
 export interface Field {
   id: string;
   name: string;

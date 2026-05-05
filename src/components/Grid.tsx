@@ -1784,28 +1784,22 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           };
           const sizeStr = (resolution === '4k') ? (res4kMap[ratio] || '4096x4096') : (resolution === '2k') ? (res2kMap[ratio] || '2048x2048') : (hdMap[ratio] || "1024x1024");
           
-          const legacyImgSet = modelSettings.image || {};
-          let resolvedModel = ((legacyImgSet.modelName || 'dall-e-3').split(',')[0] || '').trim();
+          const imgSetList = Array.isArray(modelSettings.image) ? modelSettings.image : [modelSettings.image || {}];
+          
+          let resolvedModel = 'dall-e-3';
+          const defaultImgSet = imgSetList[0] || {};
+          if (defaultImgSet.modelName) {
+            resolvedModel = defaultImgSet.modelName.split(',')[0].trim();
+          }
+
           if (cfg.modelTemplate) {
              let template = resolveTemplateString(cfg.modelTemplate, data.fields, record);
              if (template.trim()) {
                resolvedModel = template.trim();
              }
           }
-
-          let providerConfig = (modelSettings.providers || []).find((p: any) => p.type === 'image' && typeof p.models === 'string' && p.models.split(',').map((m:any)=>m.trim()).includes(resolvedModel));
-          if (!providerConfig) {
-             providerConfig = (modelSettings.providers || []).find((p: any) => p.type === 'image');
-          }
-          if (!providerConfig) {
-             providerConfig = { protocol: legacyImgSet.provider || 'openai', endpoint: legacyImgSet.endpoint, key: legacyImgSet.key, models: legacyImgSet.modelName };
-          }
-          const imgSet = {
-             provider: providerConfig.protocol,
-             endpoint: providerConfig.endpoint,
-             key: providerConfig.key,
-             modelName: providerConfig.models
-          };
+          
+          const imgSet = imgSetList.find((s: any) => s.modelName ? s.modelName.split(',').map((m: string) => m.trim()).includes(resolvedModel) : false) || defaultImgSet;
 
           let finalPrompt = promptString;
           let imageParts: any[] = [...promptImageParts];
@@ -1913,8 +1907,14 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           }
         } else {
           const cfg = field.aiTextConfig || {};
-          const legacyTxtSet = modelSettings.text || {};
-          let resolvedModel = ((legacyTxtSet.modelName || 'gpt-3.5-turbo').split(',')[0] || '').trim();
+          const txtSetList = Array.isArray(modelSettings.text) ? modelSettings.text : [modelSettings.text || {}];
+          
+          const defaultTxtSet = txtSetList[0] || {};
+          let resolvedModel = 'gpt-3.5-turbo';
+          if (defaultTxtSet.modelName) {
+            resolvedModel = defaultTxtSet.modelName.split(',')[0].trim();
+          }
+
           if (cfg.modelTemplate) {
              let template = cfg.modelTemplate;
              data.fields.forEach(f => {
@@ -1924,23 +1924,13 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                resolvedModel = template.trim();
              }
           }
-          
-          let providerConfig = (modelSettings.providers || []).find((p: any) => p.type === 'text' && typeof p.models === 'string' && p.models.split(',').map((m:any)=>m.trim()).includes(resolvedModel));
-          if (!providerConfig) {
-             providerConfig = (modelSettings.providers || []).find((p: any) => p.type === 'text');
-          }
-          if (!providerConfig) {
-             providerConfig = { protocol: legacyTxtSet.provider || 'openai', endpoint: legacyTxtSet.endpoint, key: legacyTxtSet.key, models: legacyTxtSet.modelName };
-          }
-          const txtSet = {
-             provider: providerConfig.protocol,
-             endpoint: providerConfig.endpoint,
-             key: providerConfig.key,
-             modelName: providerConfig.models
-          };
 
-          if (txtSet.provider === 'gemini' && (!cfg.modelTemplate)) {
-            resolvedModel = 'gemini-1.5-flash';
+          let txtSet = txtSetList.find((s: any) => s.modelName ? s.modelName.split(',').map((m: string) => m.trim()).includes(resolvedModel) : false);
+          if (!txtSet) {
+             txtSet = defaultTxtSet;
+             if (txtSet.provider === 'gemini' && (!cfg.modelTemplate)) {
+               resolvedModel = 'gemini-1.5-flash';
+             }
           }
           
           let textParts: any[] = [{ text: promptString }];
@@ -1985,7 +1975,13 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               });
             }
 
-            const res = await fetch(`${txtSet.endpoint || 'https://api.openai.com/v1'}/chat/completions`, {
+            let apiEndpoint = txtSet.endpoint || 'https://api.openai.com/v1';
+            apiEndpoint = apiEndpoint.replace(/\/$/, '');
+            if (!apiEndpoint.endsWith('/chat/completions')) {
+               apiEndpoint += '/chat/completions';
+            }
+            
+            const res = await fetch(apiEndpoint, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -3398,16 +3394,11 @@ function HeaderCell({
                             onMouseDown={e => e.stopPropagation()}
                           />
                           <datalist id={`model-suggestions-${field.id}`}>
-                            {Array.from(new Set([
-                              ...(modelSettings?.image?.modelName?.split(',') || []),
-                              ...(modelSettings?.providers || []).filter((p: any) => p.type === 'image' && typeof p.models === 'string')
-                                .flatMap((p: any) => p.models.split(',').map((m:any) => m.trim()).filter(Boolean))
-                            ])).map((m: any) => m.trim()).filter(Boolean).map((m: any) => (
+                            {(Array.isArray(modelSettings?.image) ? modelSettings.image : [modelSettings?.image]).flatMap((s: any) => s?.modelName ? s.modelName.split(',') : []).map((m: string) => m?.trim()).filter(Boolean).map((m: string) => (
                                <option key={m} value={m} />
                             ))}
                             <option value="gemini-3.1-flash-image-preview" />
                             <option value="gemini-3-pro-image-preview" />
-                            <option value="dall-e-3" />
                           </datalist>
                           <select 
                              className="absolute bottom-1 right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px]"
@@ -3477,11 +3468,7 @@ function HeaderCell({
                             onMouseDown={e => e.stopPropagation()}
                           />
                           <datalist id={`txt-model-suggestions-${field.id}`}>
-                            {Array.from(new Set([
-                              ...(modelSettings?.text?.modelName?.split(',') || []),
-                              ...(modelSettings?.providers || []).filter((p: any) => p.type === 'text' && typeof p.models === 'string')
-                                .flatMap((p: any) => p.models.split(',').map((m:any) => m.trim()).filter(Boolean))
-                            ])).map((m: any) => m.trim()).filter(Boolean).map((m: any) => (
+                            {(Array.isArray(modelSettings?.text) ? modelSettings.text : [modelSettings?.text]).flatMap((s: any) => s?.modelName ? s.modelName.split(',') : []).map((m: string) => m?.trim()).filter(Boolean).map((m: string) => (
                                <option key={m} value={m} />
                             ))}
                           </datalist>
