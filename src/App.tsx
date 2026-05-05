@@ -675,29 +675,85 @@ export default function App() {
   // Model settings
   const [modelSettings, setModelSettings] = useState(() => {
     try {
+      const savedV3 = localStorage.getItem('bitable_model_settings_v3');
+      if (savedV3) return JSON.parse(savedV3);
+
       const saved = localStorage.getItem('bitable_model_settings_v2');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const providers = [];
+        if (parsed.text) {
+          providers.push({
+            id: 'legacy-text',
+            name: 'Legacy Text',
+            type: 'text',
+            protocol: parsed.text.provider,
+            endpoint: parsed.text.endpoint,
+            models: parsed.text.modelName,
+            key: parsed.text.key || ''
+          });
+        }
+        if (parsed.image) {
+          providers.push({
+            id: 'legacy-image',
+            name: 'Legacy Image',
+            type: 'image',
+            protocol: parsed.image.provider,
+            endpoint: parsed.image.endpoint,
+            models: parsed.image.modelName,
+            key: parsed.image.key || ''
+          });
+        }
+        return { providers, text: parsed.text, image: parsed.image };
+      }
+      
       // fallback to migration
       const savedV1 = localStorage.getItem('bitable_model_settings');
       if (savedV1) {
         const v1 = JSON.parse(savedV1);
-        return {
-          text: {
+        const textFallback = {
             provider: v1.activeModel || 'openai',
             key: v1.activeModel === 'gemini' ? (v1.geminiKey || '') : (v1.openaiKey || ''),
             endpoint: v1.openaiEndpoint || 'https://api-inference.modelscope.cn/v1',
             modelName: v1.openaiModel || 'deepseek-ai/DeepSeek-V3.2',
-          },
-          image: {
+        };
+        const imageFallback = {
             provider: 'openai',
             key: '',
             endpoint: 'https://api.openai.com/v1',
             modelName: 'dall-e-3'
-          }
+        };
+        return {
+          providers: [
+            { id: 'v1-text', name: 'Migrated Text', type: 'text', protocol: textFallback.provider, endpoint: textFallback.endpoint, models: textFallback.modelName, key: textFallback.key },
+            { id: 'v1-image', name: 'Migrated Image', type: 'image', protocol: imageFallback.provider, endpoint: imageFallback.endpoint, models: imageFallback.modelName, key: imageFallback.key }
+          ],
+          text: textFallback,
+          image: imageFallback
         };
       }
     } catch (e) {}
     return {
+      providers: [
+        {
+          id: 'default-text',
+          name: 'Default Text',
+          type: 'text',
+          protocol: 'openai',
+          endpoint: 'https://api-inference.modelscope.cn/v1',
+          models: 'deepseek-ai/DeepSeek-V3.2',
+          key: ''
+        },
+        {
+          id: 'default-image',
+          name: 'Default Image',
+          type: 'image',
+          protocol: 'openai',
+          endpoint: 'https://api.openai.com/v1',
+          models: 'dall-e-3',
+          key: ''
+        }
+      ],
       text: {
         provider: 'openai',
         key: '',
@@ -714,8 +770,11 @@ export default function App() {
   });
 
   useEffect(() => {
-    localStorage.setItem('bitable_model_settings_v2', JSON.stringify(modelSettings));
+    localStorage.setItem('bitable_model_settings_v3', JSON.stringify(modelSettings));
+    localStorage.setItem('bitable_model_settings_v2', JSON.stringify({text: modelSettings.text, image: modelSettings.image}));
   }, [modelSettings]);
+
+  const [collapsedProviders, setCollapsedProviders] = useState<Set<string>>(new Set());
 
   const [autoSaveSettings, setAutoSaveSettings] = useState(() => {
     try {
@@ -2115,190 +2174,204 @@ export default function App() {
                />
             </div>
 
-            <div className="grid grid-cols-2 gap-6">
-              {/* Text Model Settings */}
-              <div className="space-y-4">
-                 <h3 className="font-semibold text-gray-700 pb-2 border-b">Text AI Model (LLM)</h3>
+            <div className="mb-6">
+               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
-                    <select 
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                      value={modelSettings.text?.provider || 'openai'}
-                      onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, provider: e.target.value } }))}
-                    >
-                       <option value="gemini">Gemini (Google AI Studio)</option>
-                       <option value="gemini-custom">Gemini (Compatible Endpoint)</option>
-                       <option value="openai">OpenAI Compatible</option>
-                    </select>
+                   <h3 className="font-semibold text-gray-700">Model Providers ({lang === 'en' ? 'LLM, Image, Video' : '大语言、图片、视频'})</h3>
+                   <p className="text-[10px] text-gray-500 mt-1">{lang === 'en' ? 'Register multiple models & protocols. They will appear in generation dropdowns.' : '登记您的不同协议与模型的访问密钥，列配置里可自由指定选用哪项'}</p>
                  </div>
-                 
-                 {(modelSettings.text?.provider === 'gemini' || modelSettings.text?.provider === 'gemini-custom') && (
-                    <>
-                      {modelSettings.text?.provider === 'gemini-custom' && (
-                        <>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">API Endpoint</label>
-                            <input 
-                              type="url" 
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                              placeholder="https://api.example.com/v1beta/models/..."
-                              value={modelSettings.text?.endpoint || ''}
-                              onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, endpoint: e.target.value } }))}
-                            />
-                          </div>
-                        </>
-                      )}
-                      {(modelSettings.text?.provider === 'gemini' || modelSettings.text?.provider === 'gemini-custom') && (
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Model Name (Use ',' for multiple models)</label>
-                          <input 
-                            type="text" 
-                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                            placeholder="gemini-1.5-pro, gemini-1.5-flash"
-                            value={modelSettings.text?.modelName || ''}
-                            onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, modelName: e.target.value } }))}
-                          />
-                        </div>
-                      )}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
-                        <input 
-                          type="password" 
-                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                          placeholder="AIzaSy..."
-                          value={modelSettings.text?.key || ''}
-                          onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, key: e.target.value } }))}
-                        />
-                      </div>
-                    </>
-                 )}
-
-                 {modelSettings.text?.provider === 'openai' && (
-                    <>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">API Endpoint</label>
-                        <input 
-                          type="url" 
-                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                          placeholder="https://api.openai.com/v1"
-                          value={modelSettings.text?.endpoint || ''}
-                          onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, endpoint: e.target.value } }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Model Name (Use ',' for multiple models)</label>
-                        <input 
-                          type="text" 
-                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                          placeholder="gpt-3.5-turbo, gpt-4o"
-                          value={modelSettings.text?.modelName || ''}
-                          onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, modelName: e.target.value } }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
-                        <input 
-                          type="password" 
-                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                          placeholder="sk-..."
-                          value={modelSettings.text?.key || ''}
-                          onChange={e => setModelSettings(prev => ({ ...prev, text: { ...prev.text, key: e.target.value } }))}
-                        />
-                      </div>
-                    </>
-                  )}
-              </div>
-
-              {/* Image Model Settings */}
-              <div className="space-y-4">
-                <h3 className="font-semibold text-gray-700 pb-2 border-b">Image AI Model</h3>
-                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
-                    <select 
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                      value={modelSettings.image?.provider || 'openai'}
-                      onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, provider: e.target.value } }))}
-                    >
-                       <option value="gemini">Gemini (Google AI Studio)</option>
-                       <option value="gemini-custom">Gemini (Compatible Endpoint)</option>
-                       <option value="openai">OpenAI Compatible</option>
-                    </select>
+                 <div className="flex gap-2 mt-2 sm:mt-0">
+                   <button 
+                     onClick={() => {
+                        const fileInput = document.createElement('input');
+                        fileInput.type = 'file';
+                        fileInput.accept = '.json';
+                        fileInput.onchange = (e: any) => {
+                           const file = e.target.files[0];
+                           if (!file) return;
+                           const reader = new FileReader();
+                           reader.onload = (re) => {
+                             try {
+                               const data = JSON.parse(re.target?.result as string);
+                               if (data && Array.isArray(data)) {
+                                  setModelSettings(prev => ({ ...prev, providers: data }));
+                                  alert(lang === 'en' ? 'Imported successfully' : '导入成功');
+                               }
+                             } catch (err) {
+                               alert('Invalid JSON');
+                             }
+                           };
+                           reader.readAsText(file);
+                        };
+                        fileInput.click();
+                     }}
+                     className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded transition-colors"
+                   >
+                     {lang === 'en' ? 'Import' : '导入'}
+                   </button>
+                   <button 
+                     onClick={() => {
+                        const includeKeys = window.confirm(lang === 'en' ? 'Export API Keys? (Cancel for No)' : '是否导出包含 API 密钥? (取消则不包含，适合分享配置)');
+                        const exportData = (modelSettings.providers || []).map((p: any) => ({
+                           ...p,
+                           key: includeKeys ? p.key : ''
+                        }));
+                        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `model_providers_${new Date().getTime()}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                     }}
+                     className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded transition-colors"
+                   >
+                     {lang === 'en' ? 'Export' : '导出'}
+                   </button>
+                   <button 
+                     onClick={() => {
+                        const newProvider = { id: `provider-${Date.now()}`, name: lang === 'en' ? 'New Provider' : '新模型配置', type: 'text', protocol: 'openai', endpoint: '', models: '', key: '' };
+                        setModelSettings(prev => ({ ...prev, providers: [...(prev.providers || []), newProvider] }));
+                     }}
+                     className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors flex items-center"
+                   >
+                     <Plus className="w-3 h-3 mr-1" /> {lang === 'en' ? 'Add' : '新增'}
+                   </button>
                  </div>
-                 
-                 {(modelSettings.image?.provider === 'gemini' || modelSettings.image?.provider === 'gemini-custom') && (
-                    <>
-                      {modelSettings.image?.provider === 'gemini-custom' && (
-                        <>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">API Endpoint</label>
-                            <input 
-                              type="url" 
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                              placeholder="https://api.example.com/v1beta/models/..."
-                              value={modelSettings.image?.endpoint || ''}
-                              onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, endpoint: e.target.value } }))}
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Model Name (Use ',' for multiple models)</label>
-                            <input 
-                              type="text" 
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                              placeholder="gemini-3.1-flash-image-preview, gemini-3-pro-image-preview"
-                              value={modelSettings.image?.modelName || ''}
-                              onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, modelName: e.target.value } }))}
-                            />
-                          </div>
-                        </>
-                      )}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
-                        <input 
-                          type="password" 
-                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                          placeholder="AIzaSy..."
-                          value={modelSettings.image?.key || ''}
-                          onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, key: e.target.value } }))}
-                        />
-                      </div>
-                    </>
-                 )}
+               </div>
 
-                 {modelSettings.image?.provider === 'openai' && (
-                    <>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">API Endpoint</label>
-                        <input 
-                          type="url" 
-                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                          placeholder="https://api.openai.com/v1"
-                          value={modelSettings.image?.endpoint || ''}
-                          onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, endpoint: e.target.value } }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
-                        <input 
-                          type="text" 
-                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                          placeholder="dall-e-3"
-                          value={modelSettings.image?.modelName || ''}
-                          onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, modelName: e.target.value } }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
-                        <input 
-                          type="password" 
-                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" 
-                          placeholder="sk-..."
-                          value={modelSettings.image?.key || ''}
-                          onChange={e => setModelSettings(prev => ({ ...prev, image: { ...prev.image, key: e.target.value } }))}
-                        />
-                      </div>
-                    </>
+               <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-2">
+                 {(modelSettings.providers || []).map((provider: any, idx: number) => (
+                    <div key={provider.id} className="p-4 border border-gray-200 rounded-lg relative group bg-gray-50/50">
+                       <div className="absolute top-2 right-2 flex items-center gap-1 opacity-50 hover:opacity-100 transition-opacity z-10">
+                         <button 
+                           onClick={(e) => {
+                               e.stopPropagation();
+                               setCollapsedProviders(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(provider.id)) next.delete(provider.id);
+                                  else next.add(provider.id);
+                                  return next;
+                               });
+                           }}
+                           className="p-1 text-gray-500 hover:text-blue-600 rounded hover:bg-blue-50"
+                           title={lang === 'en' ? 'Toggle Collapse' : '折叠/展开'}
+                         >
+                           <ChevronDown className={`w-4 h-4 transition-transform ${collapsedProviders.has(provider.id) ? 'rotate-180' : ''}`}/>
+                         </button>
+                         <button 
+                           onClick={() => {
+                              setModelSettings((prev: any) => ({ ...prev, providers: prev.providers.filter((p: any) => p.id !== provider.id) }));
+                           }}
+                           className="p-1 text-gray-500 hover:text-red-600 rounded hover:bg-red-50"
+                           title={lang === 'en' ? 'Delete Provider' : '删除'}
+                         >
+                           <X className="w-4 h-4"/>
+                         </button>
+                       </div>
+
+                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+                         <div>
+                           <label className="block text-xs font-medium text-gray-500 mb-1">{lang === 'en' ? 'Name / Identifier' : '显示名称标识'}</label>
+                           <input type="text" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500" value={provider.name} onChange={e => {
+                               const newProviders = [...modelSettings.providers];
+                               newProviders[idx].name = e.target.value;
+                               setModelSettings(prev => ({ ...prev, providers: newProviders }));
+                           }} />
+                         </div>
+                         <div className="grid grid-cols-2 gap-4">
+                           <div>
+                             <label className="block text-xs font-medium text-gray-500 mb-1">{lang === 'en' ? 'Type' : '类型'}</label>
+                             <select className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 bg-white" value={provider.type} onChange={e => {
+                                 const newProviders = [...modelSettings.providers];
+                                 newProviders[idx].type = e.target.value;
+                                 setModelSettings(prev => ({ ...prev, providers: newProviders }));
+                             }}>
+                               <option value="text">{lang === 'en' ? 'Text (LLM)' : '文本生成'}</option>
+                               <option value="image">{lang === 'en' ? 'Image Generation' : '图片生成'}</option>
+                               <option value="video">{lang === 'en' ? 'Video Generation' : '视频生成'}</option>
+                             </select>
+                           </div>
+                           <div>
+                           <label className="block text-xs font-medium text-gray-500 mb-1">{lang === 'en' ? 'Protocol' : '兼容协议'}</label>
+                           <select className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 bg-white" value={provider.protocol} onChange={e => {
+                               const newProviders = [...modelSettings.providers];
+                               newProviders[idx].protocol = e.target.value;
+                               setModelSettings(prev => ({ ...prev, providers: newProviders }));
+                           }}>
+                             <option value="openai">OpenAI Compatible</option>
+                             <option value="gemini">Gemini (Google AI Studio)</option>
+                             <option value="gemini-custom">Gemini (Proxied API)</option>
+                           </select>
+                         </div>
+                       </div>
+                       </div>
+
+                       {!collapsedProviders.has(provider.id) && (
+                         <>
+                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+                             <div>
+                               <label className="block text-xs font-medium text-gray-500 mb-1">API Endpoint</label>
+                               <input type="text" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 font-mono" value={provider.endpoint} onChange={e => {
+                                     const newProviders = [...modelSettings.providers];
+                                     newProviders[idx].endpoint = e.target.value;
+                                     setModelSettings(prev => ({ ...prev, providers: newProviders }));
+                               }} placeholder={provider.protocol === 'openai' ? 'https://api.openai.com/v1' : 'https://generativelanguage.googleapis.com/v1beta/models/...'} />
+                             </div>
+                             <div>
+                               <label className="block text-xs font-medium text-gray-500 mb-1">API Key</label>
+                               <input type="password" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 font-mono" value={provider.key} onChange={e => {
+                                   const newProviders = [...modelSettings.providers];
+                                   newProviders[idx].key = e.target.value;
+                                   setModelSettings(prev => ({ ...prev, providers: newProviders }));
+                               }} placeholder="sk-..." />
+                             </div>
+                           </div>
+
+                           <div>
+                             <label className="block text-xs font-medium text-gray-500 mb-1">{lang === 'en' ? 'Avail. Models (Comma separated)' : '支持的模型 (逗号分隔)'}</label>
+                             <input type="text" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 font-mono" value={provider.models} onChange={e => {
+                                 const newProviders = [...modelSettings.providers];
+                                 newProviders[idx].models = e.target.value;
+                                 setModelSettings(prev => ({ ...prev, providers: newProviders }));
+                             }} placeholder="gpt-4o, dall-e-3, etc." />
+                           </div>
+                         </>
+                       )}
+                    </div>
+                 ))}
+                 {(modelSettings.providers || []).length === 0 && (
+                    <div className="text-center py-8 text-gray-500 border-2 border-dashed border-gray-200 rounded-lg">
+                       <Sparkles className="w-6 h-6 mx-auto text-gray-300 mb-2" />
+                       {lang === 'en' ? 'No model providers configured.' : '暂无模型配置登记，请添加至少一个'}
+                    </div>
                  )}
-              </div>
+               </div>
+                  <div className="mt-6 mb-6 pt-6 border-t border-gray-200">
+                    <h3 className="font-semibold text-gray-700 mb-4">{lang === 'en' ? 'OSS Configuration (Optional)' : 'OSS 存储配置 (可选)'}</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Access Key ID</label>
+                        <input type="text" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 font-mono" value={modelSettings.oss?.accessKeyId || ''} onChange={e => setModelSettings(prev => ({ ...prev, oss: { ...prev.oss, accessKeyId: e.target.value } }))} placeholder="LTAI..." />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Access Key Secret</label>
+                        <input type="password" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 font-mono" value={modelSettings.oss?.accessKeySecret || ''} onChange={e => setModelSettings(prev => ({ ...prev, oss: { ...prev.oss, accessKeySecret: e.target.value } }))} placeholder="..." />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Endpoint</label>
+                        <input type="text" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 font-mono" value={modelSettings.oss?.endpoint || ''} onChange={e => setModelSettings(prev => ({ ...prev, oss: { ...prev.oss, endpoint: e.target.value } }))} placeholder="https://oss-cn-beijing.aliyuncs.com" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Bucket</label>
+                        <input type="text" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 font-mono" value={modelSettings.oss?.bucket || ''} onChange={e => setModelSettings(prev => ({ ...prev, oss: { ...prev.oss, bucket: e.target.value } }))} />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Custom Domain / CDNs (Optional)</label>
+                        <input type="text" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 font-mono" value={modelSettings.oss?.domain || ''} onChange={e => setModelSettings(prev => ({ ...prev, oss: { ...prev.oss, domain: e.target.value } }))} placeholder="https://yourbucket.oss-cn-beijing.aliyuncs.com" />
+                      </div>
+                    </div>
+                  </div>
             </div>
 
             <hr className="my-6 border-gray-200" />
