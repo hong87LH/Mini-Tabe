@@ -39,7 +39,8 @@ const ZoomableImage = ({
   onClose,
   onUpdateItem,
   username,
-  lang = 'zh'
+  lang = 'zh',
+  sourceViewMode
 }: { 
   item: any, 
   onPrev: (e: React.MouseEvent) => void, 
@@ -47,10 +48,16 @@ const ZoomableImage = ({
   onClose: () => void,
   onUpdateItem?: (newItem: any) => void,
   username?: string,
-  lang?: 'en' | 'zh'
+  lang?: 'en' | 'zh',
+  sourceViewMode?: 'table' | 'gallery'
 }) => {
   const src = item.mappedUrl;
   const refUrls: string[] = item.refUrls || [];
+  
+  // Use state to track if reference panel should be shown.
+  // Defaults to true if launched from gallery (Review Mode), false if from table (Normal Default View).
+  const [isRefMode, setIsRefMode] = useState(sourceViewMode === 'gallery');
+
   const [scale, setScale] = useState(1);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   
@@ -167,7 +174,7 @@ const ZoomableImage = ({
          if (e.target === e.currentTarget) onClose();
       }}
     >
-      {refUrls.length > 0 && (
+      {isRefMode && refUrls.length > 0 && (
          <div className="flex-1 max-w-[35%] border-r border-gray-700 flex flex-col relative bg-black/50 overflow-hidden">
             {refUrls.map((rUrl, i) => (
                 <div 
@@ -274,6 +281,15 @@ const ZoomableImage = ({
             {annotationViewState === 2 ? <MessageSquareText className="w-5 h-5" /> : <MessageSquare className="w-5 h-5" />}
             {annotationViewState === 0 && <span className="absolute rotate-45 w-6 h-[2px] bg-red-400"></span>}
          </button>
+         {refUrls.length > 0 && (
+            <button 
+               onClick={(e) => { e.stopPropagation(); setIsRefMode(prev => !prev); }} 
+               title={lang === 'en' ? "Toggle Reference Preview" : "切换参考图大屏模式"} 
+               className={`p-2 rounded-full transition-colors flex items-center justify-center ${isRefMode ? 'bg-blue-600 text-white' : 'bg-black/50 text-white/70 hover:text-white'}`}
+            >
+               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+            </button>
+         )}
          <button onClick={(e) => { 
             e.stopPropagation(); 
             if (!imgRef.current) return;
@@ -1407,14 +1423,65 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
   const [draggedRowId, setDraggedRowId] = useState<string | null>(null);
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
 
-  const [previewImageState, setPreviewImageState] = useState<{ items: any[], currentIndex: number, onUpdate?: (newItems: any[]) => void } | null>(null);
+  const [previewImageState, setPreviewImageState] = useState<{ items: any[], currentIndex: number, sourceViewMode: 'table' | 'gallery', onUpdate?: (newItems: any[]) => void } | null>(null);
 
   const setPreviewImage = (path: string | null, allItems: any[] = [], onUpdate?: (newItems: any[]) => void) => {
       if (!path) { setPreviewImageState(null); return; }
       if (allItems.length === 0) allItems = [{ url: path }];
-      const parsedItems = allItems.map(it => typeof it === 'string' ? { url: it, mappedUrl: fullImageBlobCache.get(it) || (it.startsWith('/') || it.match(/^[a-zA-Z]:\\/) ? `file://${it}` : it) } : { ...it, mappedUrl: it.mappedUrl || fullImageBlobCache.get(it.url) || (it.url.startsWith('/') || it.url.match(/^[a-zA-Z]:\\/) ? `file://${it.url}` : it.url) });
+      
+      const defaultSettings = gallerySettings || gallerySettingsCache.get(tableId) || { refFieldIds: [] };
+      const refFieldIds = defaultSettings.refFieldIds || [];
+
+      let parsedItems = allItems.map(it => typeof it === 'string' ? { url: it } : { ...it });
+      parsedItems = parsedItems.map(it => {
+          const itemUrl = it.url;
+          const mappedUrl = fullImageBlobCache.get(itemUrl) || ((itemUrl.startsWith('/') || itemUrl.match(/^[a-zA-Z]:\\/)) ? `file://${itemUrl}` : itemUrl);
+          it.mappedUrl = it.mappedUrl || mappedUrl;
+          
+          if (!it.refUrls && refFieldIds.length > 0) {
+              for (const rec of data.records) {
+                  let found = false;
+                  for (const f of data.fields) {
+                      if (f.type === 'attachment' || f.type === 'aiImage') {
+                          const val = rec[f.id];
+                          if (val) {
+                              const strVal = typeof val === 'string' ? val : JSON.stringify(val);
+                              if (strVal.includes(itemUrl)) {
+                                  found = true;
+                                  break;
+                              }
+                          }
+                      }
+                  }
+                  if (found) {
+                      const refUrls: string[] = [];
+                      refFieldIds.forEach((id: string) => {
+                           const val = rec[id];
+                           if (val) {
+                               let items: any[] = [];
+                               if (Array.isArray(val)) items = val;
+                               else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
+                               else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
+
+                               items.forEach((curIt: any) => {
+                                   const u = typeof curIt === 'string' ? curIt : curIt.url;
+                                   if (u) {
+                                       const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) ? `file://${u}` : u);
+                                       refUrls.push(mappedU as string);
+                                   }
+                               });
+                           }
+                      });
+                      it.refUrls = refUrls;
+                      break; 
+                  }
+              }
+          }
+          return it;
+      });
+
       const currentIndex = parsedItems.findIndex((it: any) => it.mappedUrl === path || it.url === path);
-      setPreviewImageState({ items: parsedItems, currentIndex: currentIndex === -1 ? 0 : currentIndex, onUpdate });
+      setPreviewImageState({ items: parsedItems, currentIndex: currentIndex === -1 ? 0 : currentIndex, sourceViewMode: viewMode, onUpdate });
   };
 
   const handlePreviewPrev = () => {
@@ -2558,6 +2625,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              onClose={() => setPreviewImageState(null)}
              username={username}
              lang={lang}
+             sourceViewMode={previewImageState.sourceViewMode}
              onUpdateItem={(newItem) => {
                 const newItems = [...previewImageState.items];
                 newItems[previewImageState.currentIndex] = newItem;
