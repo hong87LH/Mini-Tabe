@@ -924,7 +924,8 @@ const BatchDownloadPopup = ({
 const getBase64ImageParts = async (templateStr: string, fields: Field[], record: any) => {
   const parts: any[] = [];
   const dataUrlsOut: string[] = [];
-  if (!templateStr) return { cleanString: '', parts, dataUrls: dataUrlsOut };
+  const originalUrlsOut: string[] = [];
+  if (!templateStr) return { cleanString: '', parts, dataUrls: dataUrlsOut, originalUrls: originalUrlsOut };
   let str = templateStr;
   
   for (let f of fields) {
@@ -958,6 +959,7 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
             parts.push({ inlineData: { mimeType: mime, data: b64 } });
             dataUrls.push(fetchUrl);
             dataUrlsOut.push(fetchUrl);
+            originalUrlsOut.push(fetchUrl);
           } else {
             let b64: string | null = null;
             let mime = 'image/jpeg';
@@ -1011,9 +1013,11 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
                const finalDataUrl = `data:${mime};base64,${b64}`;
                dataUrls.push(finalDataUrl);
                dataUrlsOut.push(finalDataUrl);
+               originalUrlsOut.push(fetchUrl);
             } else {
                dataUrls.push(u); 
                dataUrlsOut.push(u);
+               originalUrlsOut.push(fetchUrl);
             }
           }
         }
@@ -1027,7 +1031,7 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
     }
   }
 
-  return { cleanString: str, parts, dataUrls: dataUrlsOut };
+  return { cleanString: str, parts, dataUrls: dataUrlsOut, originalUrls: originalUrlsOut };
 };
 
 const triggerDownload = async (url: string, filename: string, folderPath?: string): Promise<string | undefined> => {
@@ -1445,10 +1449,17 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                       if (f.type === 'attachment' || f.type === 'aiImage') {
                           const val = rec[f.id];
                           if (val) {
-                              const strVal = typeof val === 'string' ? val : JSON.stringify(val);
-                              if (strVal.includes(itemUrl)) {
-                                  found = true;
-                                  break;
+                              let items: any[] = [];
+                              if (Array.isArray(val)) items = val;
+                              else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
+                              else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
+
+                              for (const item of items) {
+                                  const u = typeof item === 'string' ? item : item.url;
+                                  if (u && (u === itemUrl || u.replace(/\\/g, '/') === itemUrl.replace(/\\/g, '/'))) {
+                                      found = true;
+                                      break;
+                                  }
                               }
                           }
                       }
@@ -1843,12 +1854,14 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         let promptString = field.prompt || "";
         let promptImageParts: any[] = [];
         let promptDataUrls: string[] = [];
+        let promptOriginalUrls: string[] = [];
         
         if (field.type === 'aiImage') {
-           const { cleanString, parts, dataUrls } = await getBase64ImageParts(promptString, data.fields, record);
+           const { cleanString, parts, dataUrls, originalUrls } = await getBase64ImageParts(promptString, data.fields, record);
            promptString = cleanString;
            promptImageParts = parts;
            promptDataUrls = dataUrls;
+           promptOriginalUrls = originalUrls || [];
         } else {
            // For text, just interpolate textually
            promptString = resolveTemplateString(promptString, data.fields, record);
@@ -1910,14 +1923,45 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           let finalPrompt = promptString;
           let imageParts: any[] = [...promptImageParts];
           let finalDataUrls: string[] = [...promptDataUrls];
+          let finalOriginalUrls: string[] = [...promptOriginalUrls];
           if (cfg.sourceImageTemplate) {
-             const { parts, dataUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record);
+             const { parts, dataUrls, originalUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record);
              imageParts = [...imageParts, ...parts];
              finalDataUrls = [...finalDataUrls, ...dataUrls];
+             finalOriginalUrls = [...finalOriginalUrls, ...(originalUrls || [])];
           }
 
           if (imgSet.provider === 'gemini') {
             throw new Error("Local Gemini Image generation not natively supported in this preview without vertex AI. Please use OpenAI-compatible proxy for images.");
+          } else if (imgSet.provider === 'lingwu') {
+            const w = window as any;
+            if (!w.electronAPI || !w.electronAPI.generateLingwuImage) {
+               throw new Error("Lingwu AI Image generation requires the application to run inside the electron client.");
+            }
+            if (!imgSet.key) throw new Error("Lingwu API Key is required for Image Generation");
+            
+            // Map the prompt and params
+            const params: any = {
+                imageSize: cfg.resolution || '1024x1024',
+                aspectRatio: ratio,
+                images: finalOriginalUrls.length > 0 ? finalOriginalUrls : undefined,
+                quality: 'auto'
+            };
+            
+            const results = [];
+            for (let i = 0; i < count; i++) {
+                const url = await w.electronAPI.generateLingwuImage({
+                    prompt: finalPrompt,
+                    model: resolvedModel,
+                    params: params,
+                    count: 1,
+                    apiKey: imgSet.key,
+                    endpoint: imgSet.endpoint || 'https://api.lingwu.example.com', // Set default
+                    ossConfig: modelSettings?.oss
+                });
+                results.push(url);
+            }
+            resultParams = results;
           } else if (imgSet.provider === 'gemini-custom') {
             if (!imgSet.key) throw new Error("Gemini API Key is required for Image Generation");
             let imgEndpoint = imgSet.endpoint || 'https://generativelanguage.googleapis.com/v1beta';
@@ -2632,13 +2676,13 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                 setPreviewImageState({ ...previewImageState, items: newItems });
                 if (previewImageState.onUpdate) {
                    const cleanedItems = newItems.map(item => {
-                       const { mappedUrl, refUrls, ...cleanProps } = item;
+                       const { mappedUrl, ...cleanProps } = item;
                        return cleanProps;
                    });
                    previewImageState.onUpdate(cleanedItems);
                 }
                 if (onUpdateGlobalAttachment) {
-                   const { url, mappedUrl, refUrls, ...updatedProps } = newItem;
+                   const { url, mappedUrl, ...updatedProps } = newItem;
                    if (url) {
                        onUpdateGlobalAttachment(url, updatedProps);
                    }
@@ -3951,7 +3995,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
         if (Array.isArray(value)) {
           fileItems = value.map((v: any) => {
              if (typeof v === 'string') return { url: v };
-             const { refUrls, ...cleanV } = v;
+             const { mappedUrl, ...cleanV } = v;
              return cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
           });
         } else if (typeof value === 'string' && value.trim() !== '') {
@@ -4028,7 +4072,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
         if (Array.isArray(value)) {
           fileItems = value.map((v: any) => {
              if (typeof v === 'string') return { url: v };
-             const { refUrls, ...cleanV } = v;
+             const { mappedUrl, ...cleanV } = v;
              return cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
           });
         } else if (typeof value === 'string' && value.trim() !== '') {
@@ -4611,7 +4655,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
   if (Array.isArray(value)) {
     fileItems = value.map((v: any) => {
        if (typeof v === 'string') return { url: v };
-       const { refUrls, ...cleanV } = v;
+       const { mappedUrl, ...cleanV } = v;
        return cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
     });
   } else if (typeof value === 'string' && value.trim() !== '') {

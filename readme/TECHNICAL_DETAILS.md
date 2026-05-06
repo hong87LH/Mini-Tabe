@@ -46,6 +46,7 @@ If embedded within an Electron environment (such as `main.js` execution):
 - **Local File System Parsing via Direct Paths**: The image processing engine effortlessly bridges the gap between web URLs and absolute system paths. Paste an absolute path (`C:\` / `/Users/`) and the UI renders it as a `file://` protocol dynamically without demanding traditional file blob uploads.
 - **IPC File Downloader**: Instead of relying on jarring HTML file-save dialogues, the system integrates seamlessly with `electronAPI.downloadFile` using IPC. This allows background downloading and continuous caching integrations without interrupting the user.
 - **Image Annotations & Reviews**: Features an independent overlay matrix tied to the `ZoomableImage` component, converting `X/Y` coordinate clicks into visual markers. These review threads map directly back into the dataset objects, binding design feedback physically to the active cell record.
+- **Ali-OSS Cloud Backup**: Contains an integrated `oss_uploader` utilizing Node's `sharp` library to automatically resize and transcode assets into maximal 3072px width `.webp` resources. The service leverages a Bi-directional CSV synchronization mechanic that continuously checks mapping timestamps to keep cloud and local directories unified.
 
 ## 5. Deployment Details
 Since the primary logic exists on the client side, the project compiles to static assets (`dist` folder). 

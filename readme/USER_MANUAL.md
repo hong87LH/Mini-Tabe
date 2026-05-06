@@ -50,6 +50,11 @@ If you have generated assets or loaded multiple attachments, you can seamlessly 
 - **Zip Archive Download**: At any point within the image grid viewer, you can batch download selected photos compiled into a single Zip archive.
 - **Desktop Batch Save Capabilities**: Operating in standard desktop/Electron environments unlocks a **Batch Save Locally** button. The system respects generated structured sub-folder paths (if configured via filename templates) and quietly writes all items directly onto your physical disk without redundant save confirmation prompts. It also intelligently resolves filename collisions automatically.
 
+### Cloud OSS Image Backup & Smart Syncing
+If you provide an OSS (Aliyun Object Storage) configuration through the settings, the app unlocks seamless multi-device continuity capabilities:
+- **Intelligent WebP Compression**: Before any new image is piped to the cloud, it is dynamically resized to a maximum width of 3K (3072px) and transcoded effortlessly into the high-quality `.webp` format. This guarantees massive footprint reductions without ever compromising human-eye fidelity.
+- **Bi-directional Reference Sync**: The application maintains an absolute reference registry (`oss_references_node.csv`). With bi-directional timestamp checking, the app will instantly sync newer versions up, or download the most recent mapping from the cloud whenever you change devices or clear your browser cache.
+
 ### Drag and Drop
 - **Columns**: Click and hold a column header to drag it left or right, reordering the grid.
 - **Rows**: Use the grip handle located at the far left edge of any row to reorder the row structure vertically.

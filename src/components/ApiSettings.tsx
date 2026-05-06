@@ -81,12 +81,14 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
               <div className="flex items-center space-x-2 flex-1 mr-4">
                  <input 
                    type="text" 
+                   onClick={e => e.stopPropagation()}
                    className="flex-1 border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                    placeholder={lang === 'en' ? 'Provider Name' : '提供商名称'}
                    value={provider.name || ''}
                    onChange={e => updateProvider(type, idx, { name: e.target.value })}
                  />
                  <select 
+                   onClick={e => e.stopPropagation()}
                    className="w-40 border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-400 bg-gray-50"
                    value={provider.provider || 'openai'}
                    onChange={e => updateProvider(type, idx, { provider: e.target.value })}
@@ -94,10 +96,11 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
                    <option value="openai">OpenAI Format</option>
                    <option value="gemini">Gemini Format</option>
                    <option value="gemini-custom">Gemini Custom</option>
+                   <option value="lingwu">灵悟AI Format</option>
                  </select>
               </div>
               <button 
-                onClick={() => removeProvider(type, idx)}
+                onClick={(e) => { e.stopPropagation(); removeProvider(type, idx); }}
                 className="text-red-400 hover:text-red-600 p-2 hover:bg-red-50 rounded transition-colors"
                 title={lang === 'en' ? 'Delete Provider' : '删除提供商'}
               >
