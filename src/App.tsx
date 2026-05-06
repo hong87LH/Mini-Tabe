@@ -10,7 +10,7 @@ import { Parser } from 'expr-eval';
 import { getStringColor } from './lib/utils';
 import { getHandle, setHandle } from './lib/idb';
 
-export const computeFormulaValue = (field: any, record: any, fields: any[]) => {
+const computeFormulaValue = (field: any, record: any, fields: any[]) => {
   if (!field.prompt) return '';
   let formulaStr = field.prompt;
   

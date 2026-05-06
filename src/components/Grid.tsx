@@ -28,7 +28,7 @@ function HighlightedText({ text, query }: { text: string; query?: string }) {
   return <>{parts}</>;
 }
 
-export const copyImageToClipboardMagic = (path: string) => {
+const copyImageToClipboardMagic = (path: string) => {
    navigator.clipboard.writeText(`IMG_COPY_MAGIC:${path}`);
 };
 
@@ -930,9 +930,7 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
           if (!u.trim()) continue;
           
           let fetchUrl = u;
-          if (thumbnailCache.has(u)) {
-             fetchUrl = thumbnailCache.get(u)!;
-          } else if (fullImageBlobCache.has(u)) {
+          if (fullImageBlobCache.has(u)) {
              fetchUrl = fullImageBlobCache.get(u)!;
           } else if (!u.startsWith('data:') && !u.startsWith('http') && !u.startsWith('blob:')) {
              fetchUrl = `file://${u.replace(/\\\\/g, '/')}`;
@@ -945,20 +943,61 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
             dataUrls.push(fetchUrl);
             dataUrlsOut.push(fetchUrl);
           } else {
-            try {
-              const res = await fetch(fetchUrl);
-              const blob = await res.blob();
-              const b64: string = await new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.readAsDataURL(blob);
-              });
-              parts.push({ inlineData: { mimeType: blob.type, data: b64.split(',')[1] } });
-              dataUrls.push(b64);
-              dataUrlsOut.push(b64);
-            } catch(e) {
-              console.error("Could not load image reference:", u, "via fetchUrl:", fetchUrl);
-              dataUrls.push(u); 
+            let b64: string | null = null;
+            let mime = 'image/jpeg';
+            
+            if (fetchUrl.startsWith('file://')) {
+               const w = window as any;
+               mime = u.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+               
+               if (!b64 && w.electronAPI && w.electronAPI.readLocalFile) {
+                  try {
+                     const base64Data = await w.electronAPI.readLocalFile(u);
+                     if (base64Data) {
+                         b64 = base64Data;
+                     }
+                  } catch (e) {
+                     console.error("Local file read via electronAPI failed:", e);
+                  }
+               }
+
+               if (!b64 && w.require && typeof w.require === 'function') {
+                  try {
+                     const fs = w.require('fs');
+                     const buffer = fs.readFileSync(u);
+                     b64 = buffer.toString('base64');
+                  } catch (e) {
+                     console.error("Local fs read failed:", e);
+                  }
+               }
+            }
+
+            if (!b64) {
+               try {
+                 const res = await fetch(fetchUrl);
+                 const blob = await res.blob();
+                 mime = blob.type || mime;
+                 b64 = await new Promise<string>((resolve) => {
+                   const reader = new FileReader();
+                   reader.onloadend = () => {
+                     const result = reader.result as string;
+                     resolve(result.split(',')[1] || '');
+                   };
+                   reader.readAsDataURL(blob);
+                 });
+               } catch(e) {
+                 console.error("Could not load image reference:", u, "via fetchUrl:", fetchUrl, e);
+               }
+            }
+            
+            if (b64) {
+               parts.push({ inlineData: { mimeType: mime, data: b64 } });
+               const finalDataUrl = `data:${mime};base64,${b64}`;
+               dataUrls.push(finalDataUrl);
+               dataUrlsOut.push(finalDataUrl);
+            } else {
+               dataUrls.push(u); 
+               dataUrlsOut.push(u);
             }
           }
         }
@@ -1941,12 +1980,10 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
 
           if (txtSet.provider === 'gemini' || txtSet.provider === 'gemini-custom') {
             if (!txtSet.key) throw new Error("Gemini API Key is required");
-            let endpoint = txtSet.provider === 'gemini' 
-              ? `https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`
-              : txtSet.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`;
+            let endpoint = txtSet.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`;
             
-            if (txtSet.provider === 'gemini-custom' && endpoint.endsWith('/')) endpoint = endpoint.slice(0, -1);
-            if (txtSet.provider === 'gemini-custom' && !endpoint.includes(':generateContent')) {
+            if (endpoint.endsWith('/')) endpoint = endpoint.slice(0, -1);
+            if (!endpoint.includes(':generateContent')) {
                endpoint = `${endpoint}/models/${resolvedModel}:generateContent`;
             }
               
