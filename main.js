@@ -101,6 +101,25 @@ app.whenReady().then(() => {
              } catch(err) {
                 console.error('Failed to upload image:', imgUrl, err);
              }
+           } else if (imgUrl.startsWith('data:image/')) {
+             try {
+                // Parse base64
+                const matches = imgUrl.match(/^data:(image\/\w+);base64,(.+)$/);
+                if (matches && matches.length === 3) {
+                  const ext = matches[1].split('/')[1] || 'png';
+                  const base64Data = matches[2];
+                  const buffer = Buffer.from(base64Data, 'base64');
+                  const { app } = await import('electron');
+                  const tempPath = path.join(app.getPath('temp'), `temp_upload_${Date.now()}.${ext}`);
+                  fs.writeFileSync(tempPath, buffer);
+                  const record = await uploader.upload(tempPath);
+                  uploadedImages.push(record.cloud_url);
+                } else {
+                  uploadedImages.push(imgUrl);
+                }
+             } catch(err) {
+                console.error('Failed to upload base64 image:', err);
+             }
            } else {
              uploadedImages.push(imgUrl);
            }

@@ -1013,11 +1013,11 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
                const finalDataUrl = `data:${mime};base64,${b64}`;
                dataUrls.push(finalDataUrl);
                dataUrlsOut.push(finalDataUrl);
-               originalUrlsOut.push(fetchUrl);
+               originalUrlsOut.push(fetchUrl.startsWith('blob:') ? finalDataUrl : fetchUrl);
             } else {
                dataUrls.push(u); 
                dataUrlsOut.push(u);
-               originalUrlsOut.push(fetchUrl);
+               originalUrlsOut.push(fetchUrl.startsWith('blob:') ? u : fetchUrl);
             }
           }
         }
