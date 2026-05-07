@@ -78,15 +78,6 @@ app.whenReady().then(() => {
   // ▼▼▼ 监听前端请求，抓取系统级原生缩略图 (解决内存崩溃神兵利器) ▼▼▼
   ipcMain.handle('generate-lingwu-image', async (event, { prompt, model, params, count, apiKey, endpoint, ossConfig }) => {
     try {
-      if (ossConfig) {
-        console.log("[generate-lingwu-image] Received ossConfig from UI:");
-        console.log("  akId:", ossConfig.accessKeyId ? "***" : "MISSING");
-        console.log("  akSecret:", ossConfig.accessKeySecret ? "***" : "MISSING");
-        console.log("  bucket:", ossConfig.bucket || "MISSING");
-        console.log("  domain:", ossConfig.domain || "MISSING");
-      } else {
-        console.log("[generate-lingwu-image] No ossConfig received from UI!");
-      }
       const { OssImageUploader } = await import('./oss_uploader.js');
       const uploader = new OssImageUploader(ossConfig);
       

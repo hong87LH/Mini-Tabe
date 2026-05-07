@@ -267,6 +267,12 @@ export default function App() {
              (window as any).activeProjectFileHandle = handle;
          }
      }).catch(e => console.error("Could not load file handle:", e));
+     
+     getHandle('recent_projects').then((handles) => {
+         if (handles && Array.isArray(handles)) {
+             setRecentProjects(handles);
+         }
+     }).catch(e => console.error("Could not load recent projects:", e));
   }, []);
 
   const [projectName, setProjectName] = useState(() => {
@@ -300,7 +306,9 @@ export default function App() {
                  });
                  (window as any).activeProjectFileHandle = fileHandle;
                  setHandle('activeProjectFileHandle', fileHandle).catch((err) => console.error(err));
-                 setProjectName(fileHandle.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+                 const newName = fileHandle.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, "");
+                 setProjectName(newName);
+                 addRecentProject(newName, fileHandle);
              } else {
                  // Verify permissions before writing
                  if (typeof fileHandle.queryPermission === 'function') {
@@ -377,6 +385,47 @@ export default function App() {
       input.click();
   };
 
+  const addRecentProject = (name: string, handle: any) => {
+      setRecentProjects(prev => {
+          const filtered = prev.filter(p => typeof p.name === 'string' && p.name !== name);
+          const newRecent = [{ name, handle }, ...filtered].slice(0, 10);
+          setHandle('recent_projects', newRecent).catch(e => console.error(e));
+          return newRecent;
+      });
+  };
+
+  const handleOpenRecentProject = async (p: {name: string, handle: any}) => {
+       try {
+           const fileHandle = p.handle;
+           if (typeof fileHandle.queryPermission === 'function') {
+               if (await fileHandle.queryPermission({ mode: 'read' }) !== 'granted') {
+                   const perm = await fileHandle.requestPermission({ mode: 'read' });
+                   if (perm !== 'granted') {
+                       throw new Error("Permission denied");
+                   }
+               }
+           }
+           const file = await fileHandle.getFile();
+           const text = await file.text();
+           const parsed = JSON.parse(text);
+           if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].data) {
+               setTablesInternal(parsed);
+               setActiveTableId(parsed[0].id);
+               setProjectName(p.name);
+               setHistory([]);
+               setFuture([]);
+               (window as any).activeProjectFileHandle = fileHandle;
+               setHandle('activeProjectFileHandle', fileHandle).catch((e: any) => console.error(e));
+               setShowRecentMenu(false);
+               addRecentProject(p.name, fileHandle);
+           } else {
+               alert("Invalid project file.");
+           }
+       } catch (e: any) {
+           alert("Error opening file: " + e.message);
+       }
+   };
+
   const handleOpenProject = async () => {
      let fileHandle;
      try {
@@ -402,7 +451,9 @@ export default function App() {
              if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].data) {
                  setTablesInternal(parsed);
                  setActiveTableId(parsed[0].id);
-                 setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
+                 const newName = file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, "");
+                 setProjectName(newName);
+                 addRecentProject(newName, fileHandle);
                  setHistory([]);
                  setFuture([]);
                  (window as any).activeProjectFileHandle = fileHandle;
@@ -479,6 +530,8 @@ export default function App() {
   const [showLoadMenu, setShowLoadMenu] = useState(false);
   const [showSaveMenu, setShowSaveMenu] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
+  const [showRecentMenu, setShowRecentMenu] = useState(false);
+  const [recentProjects, setRecentProjects] = useState<{name: string, handle: any}[]>([]);
   const [draggedTableId, setDraggedTableId] = useState<string | null>(null);
   const [dragOverTableId, setDragOverTableId] = useState<string | null>(null);
   const [dragOverTablePosition, setDragOverTablePosition] = useState<'top' | 'bottom' | null>(null);
@@ -1600,12 +1653,44 @@ export default function App() {
                <span>{lang === 'en' ? 'New Project' : '新建工程'}</span>
              </div>
 
-             <div 
-               className="flex items-center justify-center space-x-1.5 px-3 h-8 rounded-md transition-colors font-medium border border-gray-200 hover:bg-gray-50 cursor-pointer"
-               onClick={handleOpenProject}
-             >
-               <FolderOpen className="w-4 h-4 text-gray-500" />
-               <span>{lang === 'en' ? 'Open Project' : '打开工程'}</span>
+             <div className="flex bg-white rounded-md border border-gray-200 cursor-pointer">
+               <div 
+                 className="flex items-center justify-center space-x-1.5 px-3 h-8 transition-colors font-medium hover:bg-gray-50"
+                 onClick={handleOpenProject}
+               >
+                 <FolderOpen className="w-4 h-4 text-gray-500" />
+                 <span>{lang === 'en' ? 'Open Project' : '打开工程'}</span>
+               </div>
+               <div className="relative border-l border-gray-200">
+                 <div
+                   className="flex items-center justify-center px-1.5 h-8 transition-colors hover:bg-gray-50"
+                   onClick={(e) => { e.stopPropagation(); setShowRecentMenu(!showRecentMenu); setShowLoadMenu(false); setShowShareMenu(false); setShowSaveMenu(false); setShowTableMenu(false); }}
+                   title={lang === 'en' ? 'Recent Projects' : '最近打开'}
+                 >
+                   <ChevronDown className="w-3 h-3 text-gray-500" />
+                 </div>
+                 {showRecentMenu && (
+                    <>
+                    <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setShowRecentMenu(false); }}></div>
+                    <div className="absolute top-full left-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 max-h-64 overflow-y-auto" style={{ zIndex: 999999 }}>
+                        {recentProjects.length === 0 ? (
+                           <div className="px-3 py-2 text-xs text-gray-400">
+                               {lang === 'en' ? 'No recent projects' : '暂无最近打开'}
+                           </div>
+                        ) : recentProjects.map((p, i) => (
+                           <div 
+                             key={i}
+                             className="px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 cursor-pointer truncate"
+                             onClick={() => handleOpenRecentProject(p)}
+                             title={p.name}
+                           >
+                             {p.name}
+                           </div>
+                        ))}
+                    </div>
+                    </>
+                 )}
+               </div>
              </div>
 
              <div className="relative">

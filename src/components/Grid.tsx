@@ -32,6 +32,8 @@ const copyImageToClipboardMagic = (path: string) => {
    navigator.clipboard.writeText(`IMG_COPY_MAGIC:${path}`);
 };
 
+const zoomLevels = [0.125, 0.25, 0.5, 0.707, 1, 1.414, 2, 2.828, 4, 5.656, 8];
+
 const ZoomableImage = ({ 
   item, 
   onPrev, 
@@ -165,9 +167,10 @@ const ZoomableImage = ({
     saveAnnotations(updated);
   };
 
-  return (
+  return createPortal(
     <div 
-      className="fixed inset-0 z-[100] flex bg-black/90 outline-none"
+      className="fixed inset-0 flex bg-black/95 outline-none"
+      style={{ zIndex: 2147483647 }}
       onClick={(e) => {
          if ((e.target as HTMLElement).closest('.annotation-popup')) return;
          if ((e.target as HTMLElement).closest('.annotation-marker')) return;
@@ -183,7 +186,12 @@ const ZoomableImage = ({
                     onWheel={(e) => {
                         e.preventDefault();
                         const s = refScales[i] || 1;
-                        const newScale = Math.min(Math.max(0.5, s - e.deltaY * 0.01), 10);
+                        let newScale = s;
+                        if (e.deltaY > 0) {
+                           newScale = [...zoomLevels].reverse().find(l => l < s - 0.01) || zoomLevels[0];
+                        } else if (e.deltaY < 0) {
+                           newScale = zoomLevels.find(l => l > s + 0.01) || zoomLevels[zoomLevels.length - 1];
+                        }
                         if (newScale !== s) {
                           const rect = e.currentTarget.getBoundingClientRect();
                           const mouseX = e.clientX - rect.left - rect.width / 2;
@@ -235,7 +243,12 @@ const ZoomableImage = ({
         onWheel={(e) => {
           e.preventDefault();
           const s = scale;
-          const newScale = Math.min(Math.max(0.5, s - e.deltaY * 0.01), 10);
+          let newScale = s;
+          if (e.deltaY > 0) {
+             newScale = [...zoomLevels].reverse().find(l => l < s - 0.01) || zoomLevels[0];
+          } else if (e.deltaY < 0) {
+             newScale = zoomLevels.find(l => l > s + 0.01) || zoomLevels[zoomLevels.length - 1];
+          }
           if (newScale !== s) {
             const rect = e.currentTarget.getBoundingClientRect();
             const mouseX = e.clientX - rect.left - rect.width / 2;
@@ -504,7 +517,8 @@ const ZoomableImage = ({
       </div>
       
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -676,7 +690,50 @@ interface GridProps {
   onFoldedGroupsChange?: (groups: string[]) => void;
 }
 
-const resolveFieldValueForAI = (val: any, refField: Field) => {
+export const resolveFieldValueForAI = (val: any, refField: Field, record: any, allFields: Field[]) => {
+  if (refField.type === 'formula') {
+    let displayValue: any = '';
+    if (refField.prompt) {
+      let formulaStr = refField.prompt;
+      const variableNames: string[] = [];
+      const variableValues: any[] = [];
+      
+      if (refField.refFields) {
+        refField.refFields.forEach(refId => {
+          const varRefField = allFields.find(f => f.id === refId);
+          if (varRefField) {
+            let valToUse = resolveFieldValueForAI(record[refId], varRefField, record, allFields);
+            if (varRefField.type === 'singleSelect' || varRefField.type === 'multiSelect') {
+              if (valToUse) {
+                const valArray = Array.isArray(valToUse) ? valToUse : (typeof valToUse === 'string' ? valToUse.split(',').map(s=>s.trim()) : [valToUse]);
+                const mapped = valArray.map(v => varRefField.options?.find((o:any) => o.id === v)?.name || v);
+                valToUse = mapped.length === 1 && !Array.isArray(record[refId]) && varRefField.type === 'singleSelect' ? mapped[0] : mapped.join(', ');
+              }
+            }
+            const varName = 'VAR_' + refId.replace(/[^a-zA-Z0-9]/g, '_');
+            const safeFieldName = varRefField.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            formulaStr = formulaStr.replace(new RegExp(`{${safeFieldName}}`, 'g'), varName);
+            variableNames.push(varName);
+            variableValues.push(valToUse === undefined || valToUse === null ? '' : valToUse);
+          }
+        });
+      }
+
+      let jsFormula = formulaStr;
+      if (jsFormula.startsWith('=')) {
+        jsFormula = jsFormula.substring(1).replace(/&/g, '+');
+      }
+
+      try {
+        const fn = new Function(...variableNames, `return (${jsFormula});`);
+        displayValue = fn(...variableValues);
+      } catch (jsErr) {
+        // fallback legacy evaluate
+      }
+    }
+    return displayValue;
+  }
+
   if (!val) return val;
   if (refField.type === 'singleSelect' || refField.type === 'multiSelect') {
     const valArray = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',').map(s=>s.trim()) : [val]);
@@ -691,10 +748,14 @@ export const resolveTemplateString = (templateStr: string, fields: Field[], reco
   let str = templateStr;
   fields.forEach(f => {
       let val = record[f.id];
-      val = resolveFieldValueForAI(val, f);
+      val = resolveFieldValueForAI(val, f, record, fields);
       if (Array.isArray(val)) val = val.map(v => v?.name || String(v?.url || v)).join(', ');
       else val = typeof val === 'object' ? JSON.stringify(val) : String(val || '');
-      str = str.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), val);
+      
+      const marker = `{${f.name}}`;
+      if (str.includes(marker)) {
+          str = str.split(marker).join(val);
+      }
   });
   return str;
 };
@@ -1021,12 +1082,12 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
             }
           }
         }
-        str = str.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), dataUrls.join(' '));
+        str = str.split(marker).join(dataUrls.join(' '));
       } else {
-         val = resolveFieldValueForAI(val, f);
+         val = resolveFieldValueForAI(val, f, record, fields);
          if (Array.isArray(val)) val = val.map(v => v?.name || String(v?.url || v)).join(', ');
          else val = typeof val === 'object' ? JSON.stringify(val) : String(val || '');
-         str = str.replace(new RegExp(`\\{${f.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\}`, 'g'), val);
+         str = str.split(marker).join(val);
       }
     }
   }
@@ -1846,7 +1907,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           field.refFields.forEach(refId => {
             const refField = data.fields.find(f => f.id === refId);
             if (refField) {
-              contextData[refField.name] = resolveFieldValueForAI(record[refId], refField);
+              contextData[refField.name] = resolveFieldValueForAI(record[refId], refField, record, data.fields);
             }
           });
         }
@@ -2172,6 +2233,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         }
         
         onUpdateRecord(record.id, field.id, finalResultParams);
+        return finalResultParams;
   };
 
   const handleGenerateColumn = async (field: Field, targetRecordIds?: string[]) => {
@@ -2242,16 +2304,17 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           return;
       }
       
-      for (const record of recordsToProcess) {
-          setRunningWorkflowRows(prev => new Set(prev).add(record.id));
+      for (const originalRecord of recordsToProcess) {
+          setRunningWorkflowRows(prev => new Set(prev).add(originalRecord.id));
           
+          let currentRecord = { ...originalRecord };
           let rowFailed = false;
           for (const field of aiFields) {
               if (rowFailed) break; 
               
               if (!field.prompt) continue; 
               
-              let val = record[field.id];
+              let val = currentRecord[field.id];
               let shouldGenerate = false;
               if (field.type === 'aiImage') {
                  shouldGenerate = (!val || (Array.isArray(val) && val.length === 0));
@@ -2267,11 +2330,12 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               while (attempts < 2 && !success) {
                   attempts++;
                   try {
-                      setGeneratingCells(prev => new Set(prev).add(`${record.id}-${field.id}`));
-                      await executeAIGenerateCell(record, field);
+                      setGeneratingCells(prev => new Set(prev).add(`${currentRecord.id}-${field.id}`));
+                      const generatedValue = await executeAIGenerateCell(currentRecord, field);
+                      currentRecord[field.id] = generatedValue;
                       success = true;
                   } catch (err: any) {
-                      console.error(`Workflow generation failed for record ${record.id}, field ${field.id}, attempt ${attempts}`, err);
+                      console.error(`Workflow generation failed for record ${currentRecord.id}, field ${field.id}, attempt ${attempts}`, err);
                       if (attempts === 2) {
                           rowFailed = true;
                       } else {
@@ -2281,7 +2345,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                   } finally {
                       setGeneratingCells(prev => {
                           const next = new Set(prev);
-                          next.delete(`${record.id}-${field.id}`);
+                          next.delete(`${currentRecord.id}-${field.id}`);
                           return next;
                       });
                   }
@@ -2290,7 +2354,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           
           setRunningWorkflowRows(prev => {
               const next = new Set(prev);
-              next.delete(record.id);
+              next.delete(originalRecord.id);
               return next;
           });
       }
@@ -3282,7 +3346,7 @@ function HeaderCell({
                         <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 p-2 max-h-48 overflow-y-auto">
                           <div className="text-[10px] text-gray-500 mb-1 px-1">{lang === 'en' ? 'Select field to insert' : '选择要插入的字段'}</div>
                           <div className="flex flex-col space-y-1">
-                            {allFields.filter(f => f.id !== field.id && f.type !== 'formula').map(f => (
+                            {allFields.filter(f => f.id !== field.id).map(f => (
                               <button
                                 key={f.id}
                                 onClick={() => {
@@ -3350,7 +3414,7 @@ function HeaderCell({
                         <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 p-2 max-h-48 overflow-y-auto">
                           <div className="text-[10px] text-gray-500 mb-1 px-1">{lang === 'en' ? 'Select field to insert' : '选择要插入的字段'}</div>
                           <div className="flex flex-col space-y-1">
-                            {allFields.filter(f => f.id !== field.id && f.type !== 'formula').map(f => (
+                            {allFields.filter(f => f.id !== field.id).map(f => (
                               <button
                                 key={f.id}
                                 onClick={() => {

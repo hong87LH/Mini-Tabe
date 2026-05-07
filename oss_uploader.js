@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import OSS from 'ali-oss';
 import sharp from 'sharp';
@@ -325,29 +326,11 @@ class OssImageUploader {
       throw new Error(`文件不存在: ${filePath}`);
     }
 
-    // ==== 转换为 WEBP 压缩处理 ====
     const ext = path.extname(absPath).toLowerCase();
     const isCompressibleImage = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff'].includes(ext);
 
-    if (isCompressibleImage) {
-      try {
-        const webpPath = path.join(path.dirname(absPath), path.basename(absPath, ext) + '.webp');
-        const tempPath = webpPath + '.tmp';
-        
-        await sharp(absPath)
-          .resize({ width: 3072, withoutEnlargement: true }) // 限制最大宽度为 3K
-          .webp({ quality: 85, effort: 4 })                  // 高质量 webp
-          .toFile(tempPath);
-          
-        fs.renameSync(tempPath, webpPath);
-        absPath = webpPath; // 将实际上传和记录的路径替换为 webp 版本
-      } catch (err) {
-        console.warn(`[OssImageUploader] WEBP 转换异常，退回原图上传: ${err.message}`);
-      }
-    }
-    // ==============================
-
-    const fileHash = this.getFileHash(absPath);
+    const originalAbsPath = absPath;
+    const fileHash = this.getFileHash(originalAbsPath);
 
     // 首先同步一遍 CSV，确保拿到最新的云端数据
     await this.syncCsvBiDirectional();
@@ -360,31 +343,66 @@ class OssImageUploader {
         else await this._removeRecordsBy('cloud_path', existing.cloud_path);
       }
 
-      const dhashMatch = await this.findBestDHashMatch(absPath, threshold);
+      const dhashMatch = await this.findBestDHashMatch(originalAbsPath, threshold);
       if (dhashMatch) return dhashMatch;
     }
+
+    // ==== 转换为 WEBP 压缩处理 ====
+    let uploadPath = originalAbsPath;
+    let isTempWebp = false;
+
+    if (isCompressibleImage) {
+      try {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const webpPath = path.join(os.tmpdir(), path.basename(originalAbsPath, ext) + '_' + uniqueSuffix + '.webp');
+        
+        await sharp(originalAbsPath)
+          .resize({ width: 3072, withoutEnlargement: true }) // 限制最大宽度为 3K
+          .webp({ quality: 85, effort: 4 })                  // 高质量 webp
+          .toFile(webpPath);
+          
+        uploadPath = webpPath; // 实际上传 WEBP
+        isTempWebp = true;
+      } catch (err) {
+        console.warn(`[OssImageUploader] WEBP 转换异常，退回原图上传: ${err.message}`);
+      }
+    }
+    // ==============================
 
     this._ensureOSS();
 
     const dateStr = new Date().toISOString().slice(0, 10);
     const shortHash = fileHash.slice(0, 12);
-    const localFilename = path.basename(absPath);
-    const cloudFilename = `${shortHash}_${localFilename}`;
+    const uploadFilename = path.basename(uploadPath);
+    const localFilename = path.basename(originalAbsPath);
+    const cloudFilename = `${shortHash}_${uploadFilename}`;
     const cloudPath = `${OSS_PREFIX}/${dateStr}/${cloudFilename}`;
     const cloudUrl = `${this._domain}/${cloudPath}`;
-    const fileSize = this._getFileSize(absPath);
-    const dhash = await this.computeDHash(absPath);
+    const fileSize = this._getFileSize(uploadPath);
+    const dhash = await this.computeDHash(originalAbsPath);
     const now = new Date();
 
     try {
-      const result = await this._client.put(cloudPath, absPath);
+      const result = await this._client.put(cloudPath, uploadPath);
       if (!result || !result.url) throw new Error('上传返回结果异常');
     } catch (err) {
+      if (isTempWebp && fs.existsSync(uploadPath)) {
+        try { fs.unlinkSync(uploadPath); } catch (e) {}
+      }
       throw new Error(`上传失败: ${err.message}`);
     }
 
+    // 上传成功后，删除临时生成的 webp 文件
+    if (isTempWebp && fs.existsSync(uploadPath)) {
+      try { 
+         fs.unlinkSync(uploadPath); 
+      } catch (e) {
+         console.warn(`[OssImageUploader] 删除临时文件失败: ${e.message}`);
+      }
+    }
+
     const record = {
-      local_path: absPath,
+      local_path: originalAbsPath,
       file_hash: fileHash,
       dhash: dhash,
       file_size: String(fileSize),
