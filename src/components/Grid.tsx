@@ -1015,11 +1015,39 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
           }
 
           if (fetchUrl.startsWith('data:')) {
-            const mime = fetchUrl.match(/data:(.*?);/)?.[1] || 'image/jpeg';
+            let mime = fetchUrl.match(/data:(.*?);/)?.[1] || 'image/jpeg';
             let b64 = fetchUrl.split(',')[1];
+            
+            if (mime.startsWith('image/') && !mime.includes('svg') && mime !== 'image/jpeg') {
+                try {
+                    b64 = await new Promise<string>((resolve) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const canvas = document.createElement('canvas');
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            const ctx = canvas.getContext('2d');
+                            if (ctx) {
+                                ctx.drawImage(img, 0, 0);
+                                const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+                                mime = 'image/jpeg';
+                                resolve(dataUrl.split(',')[1] || b64);
+                            } else {
+                                resolve(b64);
+                            }
+                        };
+                        img.onerror = () => resolve(b64);
+                        img.src = fetchUrl;
+                    });
+                } catch(e) {
+                    console.error("Failed to convert data: URL to jpeg:", e);
+                }
+            }
+
             parts.push({ inlineData: { mimeType: mime, data: b64 } });
-            dataUrls.push(fetchUrl);
-            dataUrlsOut.push(fetchUrl);
+            const finalDataUrl = `data:${mime};base64,${b64}`;
+            dataUrls.push(finalDataUrl);
+            dataUrlsOut.push(finalDataUrl);
             originalUrlsOut.push(fetchUrl);
           } else {
             let b64: string | null = null;
@@ -1031,9 +1059,14 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
                
                if (!b64 && w.electronAPI && w.electronAPI.readLocalFile) {
                   try {
-                     const base64Data = await w.electronAPI.readLocalFile(u);
-                     if (base64Data) {
-                         b64 = base64Data;
+                     const res = await w.electronAPI.readLocalFile(u, { optimizeImage: true, returnMime: true });
+                     if (res) {
+                         if (typeof res === 'string') {
+                             b64 = res;
+                         } else {
+                             b64 = res.data;
+                             if (res.mime) mime = res.mime;
+                         }
                      }
                   } catch (e) {
                      console.error("Local file read via electronAPI failed:", e);
@@ -1056,14 +1089,42 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
                  const res = await fetch(fetchUrl);
                  const blob = await res.blob();
                  mime = blob.type || mime;
-                 b64 = await new Promise<string>((resolve) => {
-                   const reader = new FileReader();
-                   reader.onloadend = () => {
-                     const result = reader.result as string;
-                     resolve(result.split(',')[1] || '');
-                   };
-                   reader.readAsDataURL(blob);
-                 });
+                 if (mime.startsWith('image/') && !mime.includes('svg')) {
+                     b64 = await new Promise<string>((resolve) => {
+                         const img = new Image();
+                         img.onload = () => {
+                             const canvas = document.createElement('canvas');
+                             canvas.width = img.width;
+                             canvas.height = img.height;
+                             const ctx = canvas.getContext('2d');
+                             if (ctx) {
+                                 ctx.drawImage(img, 0, 0);
+                                 const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+                                 mime = 'image/jpeg';
+                                 resolve(dataUrl.split(',')[1] || '');
+                             } else {
+                                 const reader = new FileReader();
+                                 reader.onloadend = () => resolve((reader.result as string).split(',')[1] || '');
+                                 reader.readAsDataURL(blob);
+                             }
+                         };
+                         img.onerror = () => {
+                             const reader = new FileReader();
+                             reader.onloadend = () => resolve((reader.result as string).split(',')[1] || '');
+                             reader.readAsDataURL(blob);
+                         };
+                         img.src = URL.createObjectURL(blob);
+                     });
+                 } else {
+                     b64 = await new Promise<string>((resolve) => {
+                       const reader = new FileReader();
+                       reader.onloadend = () => {
+                         const result = reader.result as string;
+                         resolve(result.split(',')[1] || '');
+                       };
+                       reader.readAsDataURL(blob);
+                     });
+                 }
                } catch(e) {
                  console.error("Could not load image reference:", u, "via fetchUrl:", fetchUrl, e);
                }

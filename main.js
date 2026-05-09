@@ -217,7 +217,7 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('read-local-file', async (event, filePath) => {
+  ipcMain.handle('read-local-file', async (event, filePath, options = {}) => {
     try {
       if (filePath.startsWith('file://')) {
         filePath = fileURLToPath(filePath);
@@ -225,7 +225,26 @@ app.whenReady().then(() => {
         filePath = decodeURIComponent(filePath.replace('local-img://', ''));
       }
       if (fs.existsSync(filePath)) {
-        const buffer = fs.readFileSync(filePath);
+        let buffer = fs.readFileSync(filePath);
+        let mimeInfo = null;
+        if (options && options.optimizeImage) {
+           const ext = path.extname(filePath).toLowerCase();
+           if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.tiff', '.avif', '.bmp'].includes(ext)) {
+               try {
+                  const sharpModule = await import('sharp');
+                  const sharp = sharpModule.default || sharpModule;
+                  buffer = await sharp(buffer)
+                     .jpeg({ quality: 95 })
+                     .toBuffer();
+                  mimeInfo = 'image/jpeg';
+               } catch (e) {
+                  console.warn('sharp conversion failed in read-local-file:', e);
+               }
+           }
+        }
+        if (options && options.returnMime) {
+           return { data: buffer.toString('base64'), mime: mimeInfo };
+        }
         return buffer.toString('base64');
       }
       return null;
