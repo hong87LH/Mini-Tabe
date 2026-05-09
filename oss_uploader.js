@@ -34,7 +34,7 @@ const CSV_FIELDS = [
 ];
 
 const OSS_PREFIX = 'references-node';   // 独立前缀，不与 Python 版混用
-const DHASH_THRESHOLD = 10;             // dHash Hamming 距离阈值
+const DHASH_THRESHOLD = 20;             // dHash Hamming 距离阈值
 const CSV_BACKUP_PATH = `${OSS_PREFIX}/oss_references_node.csv`;  // OSS 备份路径
 
 // ============================================================
@@ -104,30 +104,31 @@ class OssImageUploader {
   async computeDHash(filePath) {
     try {
       const { data, info } = await sharp(filePath)
-        .resize(9, 8, { fit: 'fill' })
+        .resize(17, 16, { fit: 'fill' })
         .grayscale()
         .raw()
         .toBuffer({ resolveWithObject: true });
 
       let hash = 0n;
-      for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-          const left  = data[row * 9 + col];
-          const right = data[row * 9 + col + 1];
+      for (let row = 0; row < 16; row++) {
+        for (let col = 0; col < 16; col++) {
+          const left  = data[row * 17 + col];
+          const right = data[row * 17 + col + 1];
           if (left > right) {
-            const bitIndex = row * 8 + col;
+            const bitIndex = row * 16 + col;
             hash |= (1n << BigInt(bitIndex));
           }
         }
       }
 
-      return hash.toString(16).padStart(16, '0');
+      return hash.toString(16).padStart(64, '0');
     } catch {
       return '';
     }
   }
 
   static hammingDistance(hash1, hash2) {
+    if (hash1.length !== hash2.length) return 999;
     const x = BigInt('0x' + hash1) ^ BigInt('0x' + hash2);
     let count = 0;
     let n = x;
@@ -315,7 +316,17 @@ class OssImageUploader {
     const { force = false, threshold = DHASH_THRESHOLD } = options;
     let absPath = filePath;
     if (filePath.startsWith('file://')) {
-      absPath = fileURLToPath(filePath);
+      try {
+        absPath = fileURLToPath(filePath);
+      } catch (err) {
+        absPath = decodeURIComponent(filePath.replace(/^file:\/\//i, ''));
+        if (absPath.startsWith('/')) {
+          absPath = absPath.substring(1);
+        }
+        if (!/^[a-zA-Z]:/.test(absPath) && !absPath.startsWith('\\\\') && !absPath.startsWith('/')) {
+          absPath = '\\\\' + absPath;
+        }
+      }
     } else if (filePath.startsWith('local-img://')) {
       absPath = decodeURIComponent(filePath.replace('local-img://', ''));
     } else {
@@ -357,8 +368,7 @@ class OssImageUploader {
         const webpPath = path.join(os.tmpdir(), path.basename(originalAbsPath, ext) + '_' + uniqueSuffix + '.webp');
         
         await sharp(originalAbsPath)
-          .resize({ width: 3072, withoutEnlargement: true }) // 限制最大宽度为 3K
-          .webp({ quality: 85, effort: 4 })                  // 高质量 webp
+          .webp({ quality: 90 }) // 保持原图尺寸，质量 90
           .toFile(webpPath);
           
         uploadPath = webpPath; // 实际上传 WEBP
