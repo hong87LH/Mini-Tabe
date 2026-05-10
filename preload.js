@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getThumbnail: (path, size) => ipcRenderer.invoke('get-thumbnail', path, size),
   readLocalFile: (filePath, options) => ipcRenderer.invoke('read-local-file', filePath, options),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
-  generateLingwuImage: (options) => ipcRenderer.invoke('generate-lingwu-image', options)
+  generateLingwuImage: (options) => ipcRenderer.invoke('generate-lingwu-image', options),
+  generateLingwuVideo: (options) => ipcRenderer.invoke('generate-lingwu-video', options)
 });
 

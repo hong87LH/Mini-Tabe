@@ -306,9 +306,11 @@ export default function App() {
                  });
                  (window as any).activeProjectFileHandle = fileHandle;
                  setHandle('activeProjectFileHandle', fileHandle).catch((err) => console.error(err));
+                 const savedFile = await fileHandle.getFile();
+                 const pathStr = (window as any).electronAPI?.getPathForFile?.(savedFile) || (window as any).electron?.getPathForFile?.(savedFile) || savedFile.path || fileHandle.name;
                  const newName = fileHandle.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, "");
                  setProjectName(newName);
-                 addRecentProject(newName, fileHandle);
+                 addRecentProject(newName, fileHandle, pathStr);
              } else {
                  // Verify permissions before writing
                  if (typeof fileHandle.queryPermission === 'function') {
@@ -353,8 +355,8 @@ export default function App() {
      setActiveTableIdState('table_1');
      activeTableIdRef.current = 'table_1';
      setProjectName('Untitled Project');
-     setHistory([]);
-     setFuture([]);
+     setPastStates([]);
+     setFutureStates([]);
      setShowNewProjectConfirm(false);
   };
 
@@ -373,8 +375,8 @@ export default function App() {
                     setTablesInternal(parsed);
                     setActiveTableId(parsed[0].id);
                     setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
-                    setHistory([]);
-                    setFuture([]);
+                    setPastStates([]);
+                    setFutureStates([]);
                 } else {
                     alert("Invalid project file.");
                 }
@@ -385,16 +387,16 @@ export default function App() {
       input.click();
   };
 
-  const addRecentProject = (name: string, handle: any) => {
+  const addRecentProject = (name: string, handle: any, pathStr?: string) => {
       setRecentProjects(prev => {
           const filtered = prev.filter(p => typeof p.name === 'string' && p.name !== name);
-          const newRecent = [{ name, handle }, ...filtered].slice(0, 10);
+          const newRecent = [{ name, handle, path: pathStr }, ...filtered].slice(0, 10);
           setHandle('recent_projects', newRecent).catch(e => console.error(e));
           return newRecent;
       });
   };
 
-  const handleOpenRecentProject = async (p: {name: string, handle: any}) => {
+  const handleOpenRecentProject = async (p: {name: string, handle: any, path?: string}) => {
        try {
            const fileHandle = p.handle;
            if (typeof fileHandle.queryPermission === 'function') {
@@ -412,12 +414,13 @@ export default function App() {
                setTablesInternal(parsed);
                setActiveTableId(parsed[0].id);
                setProjectName(p.name);
-               setHistory([]);
-               setFuture([]);
+               setPastStates([]);
+               setFutureStates([]);
                (window as any).activeProjectFileHandle = fileHandle;
                setHandle('activeProjectFileHandle', fileHandle).catch((e: any) => console.error(e));
                setShowRecentMenu(false);
-               addRecentProject(p.name, fileHandle);
+               const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || fileHandle.name;
+               addRecentProject(p.name, fileHandle, pathStr);
            } else {
                alert("Invalid project file.");
            }
@@ -453,9 +456,10 @@ export default function App() {
                  setActiveTableId(parsed[0].id);
                  const newName = file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, "");
                  setProjectName(newName);
-                 addRecentProject(newName, fileHandle);
-                 setHistory([]);
-                 setFuture([]);
+                 const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || fileHandle.name;
+                 addRecentProject(newName, fileHandle, pathStr);
+                 setPastStates([]);
+                 setFutureStates([]);
                  (window as any).activeProjectFileHandle = fileHandle;
                  setHandle('activeProjectFileHandle', fileHandle).catch((e: any) => console.error(e));
              } else {
@@ -469,6 +473,37 @@ export default function App() {
      }
   };
 
+  const [pastStates, setPastStates] = useState<{ id: string, name: string, data: GridData }[][]>([]);
+  const [futureStates, setFutureStates] = useState<{ id: string, name: string, data: GridData }[][]>([]);
+
+  const undo = () => {
+    setPastStates(h => {
+        if (h.length === 0) return h;
+        const prev = h[h.length - 1];
+        setFutureStates(f => [tables, ...f]);
+        setTablesInternal(prev);
+        if (!prev.find(t => t.id === activeTableIdRef.current)) {
+            setActiveTableIdState(prev[0].id);
+            activeTableIdRef.current = prev[0].id;
+        }
+        return h.slice(0, h.length - 1);
+    });
+  };
+
+  const redo = () => {
+    setFutureStates(f => {
+        if (f.length === 0) return f;
+        const next = f[0];
+        setPastStates(h => [...h, tables]);
+        setTablesInternal(next);
+        if (!next.find(t => t.id === activeTableIdRef.current)) {
+            setActiveTableIdState(next[0].id);
+            activeTableIdRef.current = next[0].id;
+        }
+        return f.slice(1);
+    });
+  };
+
   useEffect(() => {
      const handleKeyDown = (e: KeyboardEvent) => {
          // Ctrl+S / Cmd+S
@@ -476,19 +511,35 @@ export default function App() {
              e.preventDefault();
              saveProjectToDisk();
          }
+         // Undo / Redo
+         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+             e.preventDefault();
+             if (e.shiftKey) {
+                 redo();
+             } else {
+                 undo();
+             }
+         } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+             e.preventDefault();
+             redo();
+         }
      };
      window.addEventListener('keydown', handleKeyDown);
      return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tables]);
-  const [history, setHistory] = useState<{ id: string, name: string, data: GridData }[][]>([]);
-  const [future, setFuture] = useState<{ id: string, name: string, data: GridData }[][]>([]);
+  }, [tables, pastStates, futureStates, projectName]);
 
   const setTables = (update: any) => {
      setTablesInternal(prev => {
         const result = typeof update === 'function' ? update(prev) : update;
         if (result !== prev) {
-           setHistory(h => [...h.slice(-19), prev]);
-           setFuture([]);
+           setPastStates(h => {
+              const last = h.length > 0 ? h[h.length - 1] : null;
+              if (last === prev) return h;
+              return [...h.slice(-19), prev];
+           });
+           setFutureStates([]);
         }
         return result;
      });
@@ -503,35 +554,13 @@ export default function App() {
      setActiveTableIdState(id);
   };
 
-  const undo = () => {
-    if (history.length === 0) return;
-    const prev = history[history.length - 1];
-    setFuture(f => [tables, ...f]);
-    setHistory(h => h.slice(0, h.length - 1));
-    setTablesInternal(prev);
-    if (!prev.find(t => t.id === activeTableId)) {
-      setActiveTableId(prev[0].id);
-    }
-  };
-
-  const redo = () => {
-    if (future.length === 0) return;
-    const next = future[0];
-    setHistory(h => [...h, tables]);
-    setFuture(f => f.slice(1));
-    setTablesInternal(next);
-    if (!next.find(t => t.id === activeTableId)) {
-      setActiveTableId(next[0].id);
-    }
-  };
-
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [showTableMenu, setShowTableMenu] = useState(false);
   const [showLoadMenu, setShowLoadMenu] = useState(false);
   const [showSaveMenu, setShowSaveMenu] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [showRecentMenu, setShowRecentMenu] = useState(false);
-  const [recentProjects, setRecentProjects] = useState<{name: string, handle: any}[]>([]);
+  const [recentProjects, setRecentProjects] = useState<{name: string, handle: any, path?: string}[]>([]);
   const [draggedTableId, setDraggedTableId] = useState<string | null>(null);
   const [dragOverTableId, setDragOverTableId] = useState<string | null>(null);
   const [dragOverTablePosition, setDragOverTablePosition] = useState<'top' | 'bottom' | null>(null);
@@ -670,9 +699,10 @@ export default function App() {
     setTables(prev => {
       const idx = prev.findIndex(t => t.id === activeTableId);
       if (idx === -1) return prev;
-      const newTables = [...prev];
-      const curData = newTables[idx].data;
+      const curData = prev[idx].data;
       const newData = typeof update === 'function' ? update(curData) : update;
+      if (newData === curData) return prev;
+      const newTables = [...prev];
       newTables[idx] = { ...newTables[idx], data: newData };
       return newTables;
     });
@@ -920,13 +950,63 @@ export default function App() {
     return () => clearInterval(intervalId);
   }, [autoSaveSettings.enabled, autoSaveSettings.interval]);
 
+  const isValueEqual = (a: any, b: any) => {
+      if (a === b) return true;
+      if ((a === undefined || a === null || a === '') && (b === undefined || b === null || b === '')) return true;
+      if (Array.isArray(a) && Array.isArray(b)) {
+          if (a.length !== b.length) return false;
+          for (let i = 0; i < a.length; i++) {
+              if (typeof a[i] === 'object' && typeof b[i] === 'object') {
+                  if (JSON.stringify(a[i]) !== JSON.stringify(b[i])) return false;
+              } else if (a[i] !== b[i]) return false;
+          }
+          return true;
+      }
+      if (typeof a === 'object' && typeof b === 'object' && a !== null && b !== null) {
+          return JSON.stringify(a) === JSON.stringify(b);
+      }
+      return false;
+  };
+
   const handleUpdateRecord = (recordId: string, fieldId: string, value: any) => {
-    setData(prev => ({
-      ...prev,
-      records: prev.records.map(rec => 
-        rec.id === recordId ? { ...rec, [fieldId]: value } : rec
-      )
-    }));
+    setData((prev: GridData) => {
+      const record = prev.records.find((r: any) => r.id === recordId);
+      if (!record || isValueEqual(record[fieldId], value)) return prev;
+      return {
+        ...prev,
+        records: prev.records.map((rec: any) => 
+          rec.id === recordId ? { ...rec, [fieldId]: value } : rec
+        )
+      };
+    });
+  };
+
+  const handleUpdateRecordsBatch = (updates: { recordId: string, fieldId: string, value: any }[]) => {
+    setData((prev: GridData) => {
+      let hasChanges = false;
+      const recordsToUpdate = new Map<string, any>();
+      for (const update of updates) {
+        const rec = prev.records.find((r: any) => r.id === update.recordId);
+        if (rec && !isValueEqual(rec[update.fieldId], update.value)) {
+            hasChanges = true;
+            if (!recordsToUpdate.has(update.recordId)) {
+                recordsToUpdate.set(update.recordId, { [update.fieldId]: update.value });
+            } else {
+                recordsToUpdate.get(update.recordId)[update.fieldId] = update.value;
+            }
+        }
+      }
+      if (!hasChanges) return prev;
+      return {
+        ...prev,
+        records: prev.records.map((rec: any) => {
+          if (recordsToUpdate.has(rec.id)) {
+             return { ...rec, ...recordsToUpdate.get(rec.id) };
+          }
+          return rec;
+        })
+      };
+    });
   };
 
   const handleAddRecord = () => {
@@ -956,20 +1036,40 @@ export default function App() {
   };
 
   const handleAddField = () => {
-    setData((prev: any) => ({
-      ...prev,
-      fields: [
-        ...prev.fields,
-        { id: `fld_${Date.now()}`, name: 'New Field', type: 'text', width: 150 }
-      ]
-    }));
+    setData((prev: any) => {
+      let name = 'New Field';
+      let counter = 1;
+      while (prev.fields.some((f: any) => f.name === name)) {
+        name = `New Field ${counter}`;
+        counter++;
+      }
+      return {
+        ...prev,
+        fields: [
+          ...prev.fields,
+          { id: `fld_${Date.now()}`, name, type: 'text', width: 150 }
+        ]
+      };
+    });
   };
 
   const handleInsertField = (index: number, count: number = 1) => {
     setData((prev: any) => {
+      const existingNames = new Set(prev.fields.map((f: any) => f.name));
+      const getUniqueName = (base: string) => {
+        let name = base;
+        let c = 1;
+        while (existingNames.has(name)) {
+          name = `${base} ${c}`;
+          c++;
+        }
+        existingNames.add(name);
+        return name;
+      };
+
       const newFields = Array.from({ length: count }).map((_, i) => ({ 
         id: `fld_${Date.now()}_${i}`, 
-        name: count > 1 ? `New Field ${i + 1}` : 'New Field', 
+        name: getUniqueName(count > 1 ? `New Field ${i + 1}` : 'New Field'), 
         type: 'text', 
         width: 150 
       }));
@@ -998,8 +1098,15 @@ export default function App() {
     }));
   };
 
-  const handleRenameField = (fieldId: string, name: string) => {
+  const handleRenameField = (fieldId: string, rawName: string) => {
     setData(prev => {
+      let name = rawName;
+      let counter = 1;
+      while (prev.fields.some(f => f.id !== fieldId && f.name === name)) {
+        name = `${rawName} ${counter}`;
+        counter++;
+      }
+
       const field = prev.fields.find(f => f.id === fieldId);
       if (!field) return prev;
       const oldName = field.name;
@@ -1185,8 +1292,8 @@ export default function App() {
                    setTablesInternal(parsed);
                    setActiveTableId(parsed[0].id);
                    setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
-                   setHistory([]);
-                   setFuture([]);
+                   setPastStates([]);
+                   setFutureStates([]);
                } else {
                    const newTables = parsed.map((t: any) => ({...t, id: `table_${Date.now()}_${Math.random().toString(36).substring(2, 9)}` }));
                    setTables((prev: any[]) => [...prev, ...newTables]);
@@ -1196,8 +1303,8 @@ export default function App() {
                setTablesInternal(parsed);
                setActiveTableId(parsed[0].id);
                setProjectName(file.name.replace(/\.aistudio\.json$/i, "").replace(/\.json$/i, ""));
-               setHistory([]);
-               setFuture([]);
+               setPastStates([]);
+               setFutureStates([]);
            }
         } else if (parsed.fields && parsed.records) {
            // It's a single table
@@ -1312,8 +1419,8 @@ export default function App() {
 
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
       const type = e.dataTransfer.items[0].type;
-      if (type.startsWith('image/')) {
-        return; // do not show global overlay for images
+      if (type.startsWith('image/') || type.startsWith('video/') || type.startsWith('audio/')) {
+        return; // do not show global overlay for media files
       }
     }
     setIsDraggingGlobalFile(true);
@@ -1632,13 +1739,13 @@ export default function App() {
             <div className="flex items-center space-x-1">
               <button 
                 className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
-                onClick={undo} disabled={history.length === 0} title="Undo"
+                onClick={undo} disabled={pastStates.length === 0} title="Undo"
               >
                 <Undo2 className="w-4 h-4" />
               </button>
               <button 
                 className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
-                onClick={redo} disabled={future.length === 0} title="Redo"
+                onClick={redo} disabled={futureStates.length === 0} title="Redo"
               >
                 <Redo2 className="w-4 h-4" />
               </button>
@@ -1682,7 +1789,7 @@ export default function App() {
                              key={i}
                              className="px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 cursor-pointer truncate"
                              onClick={() => handleOpenRecentProject(p)}
-                             title={p.name}
+                             title={p.path || p.name}
                            >
                              {p.name}
                            </div>
@@ -2135,6 +2242,7 @@ export default function App() {
                }));
             }}
             onUpdateRecord={handleUpdateRecord}
+            onUpdateRecordsBatch={handleUpdateRecordsBatch}
             onAddRecord={handleAddRecord}
             onInsertRecords={handleInsertRecords}
             onDeleteRecords={handleDeleteRecords}

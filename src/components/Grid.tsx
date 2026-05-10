@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
-import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2 } from 'lucide-react';
+import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -109,6 +109,7 @@ const ZoomableImage = ({
   sourceViewMode?: 'table' | 'gallery'
 }) => {
   const src = item.mappedUrl;
+  const isVideo = src.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/);
   const refUrls: string[] = item.refUrls || [];
   
   // Use state to track if reference panel should be shown.
@@ -425,16 +426,30 @@ const ZoomableImage = ({
            setIsDragging(false);
         }}
       >
-        <img 
-          ref={imgRef}
-          src={src} 
-          className="max-w-[90vw] max-h-[90vh] object-contain pointer-events-auto" 
-          draggable={false} 
-          onDoubleClick={(e) => {
-             e.stopPropagation();
-             handleImageClick(e);
-          }} 
-        />
+        {isVideo ? (
+           <video 
+             ref={imgRef as any}
+             src={src} 
+             className="max-w-[90vw] max-h-[90vh] object-contain pointer-events-auto bg-black rounded" 
+             controls
+             autoPlay
+             onDoubleClick={(e) => {
+                e.stopPropagation();
+                handleImageClick(e);
+             }} 
+           />
+        ) : (
+           <img 
+             ref={imgRef}
+             src={src} 
+             className="max-w-[90vw] max-h-[90vh] object-contain pointer-events-auto" 
+             draggable={false} 
+             onDoubleClick={(e) => {
+                e.stopPropagation();
+                handleImageClick(e);
+             }} 
+           />
+        )}
         
         {/* Render annotations */}
         {annotationViewState > 0 && annotations.map(ann => {
@@ -621,8 +636,16 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
          return;
       }
       
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
+      const isVideo = pathStr.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/) || file?.type.startsWith('video/');
+      const media = isVideo ? document.createElement('video') : new Image();
+      if (!isVideo) {
+         (media as HTMLImageElement).crossOrigin = 'anonymous';
+      } else {
+         (media as HTMLVideoElement).crossOrigin = 'anonymous';
+         (media as HTMLVideoElement).preload = 'metadata';
+         (media as HTMLVideoElement).muted = true;
+      }
+      
       let urlToLoad = '';
       let objectUrl = '';
 
@@ -637,33 +660,68 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
         urlToLoad = pathStr;
       }
 
-      await new Promise<void>((imgResolve) => {
-        img.onload = () => {
+      await new Promise<void>((mediaResolve) => {
+        const handleLoad = () => {
           if (objectUrl) URL.revokeObjectURL(objectUrl);
+          
+          if (isVideo) {
+             (media as HTMLVideoElement).currentTime = 1; // Seek to 1s
+          } else {
+             processAndExtract();
+          }
+        };
 
+        const processAndExtract = () => {
           const MAX_DIM = 256;
-          if (img.width <= MAX_DIM && img.height <= MAX_DIM && !file) {
+          let w = isVideo ? (media as HTMLVideoElement).videoWidth : (media as HTMLImageElement).width;
+          let h = isVideo ? (media as HTMLVideoElement).videoHeight : (media as HTMLImageElement).height;
+          
+          if (!w || !h) {
+            resolve(urlToLoad);
+            mediaResolve();
+            return;
+          }
+
+          if (w <= MAX_DIM && h <= MAX_DIM && !file && !isVideo) {
             thumbnailCache.set(pathStr, urlToLoad);
             resolve(urlToLoad);
-            imgResolve();
+            mediaResolve();
             return;
           }
 
           const canvas = document.createElement('canvas');
-          let w = img.width;
-          let h = img.height;
-          if (w > h) {
-            h *= MAX_DIM / w;
-            w = MAX_DIM;
+          let vw = w, vh = h;
+          if (vw > vh) {
+            vh *= MAX_DIM / vw;
+            vw = MAX_DIM;
           } else {
-            w *= MAX_DIM / h;
-            h = MAX_DIM;
+            vw *= MAX_DIM / vh;
+            vh = MAX_DIM;
           }
-          canvas.width = w;
-          canvas.height = h;
+          canvas.width = vw;
+          canvas.height = vh;
           const ctx = canvas.getContext('2d');
           if (ctx) {
-            ctx.drawImage(img, 0, 0, w, h);
+            if (isVideo) {
+               ctx.fillStyle = '#000';
+               ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+            ctx.drawImage(media, 0, 0, vw, vh);
+            
+            if (isVideo) {
+               // draw play button overlay
+               ctx.fillStyle = 'rgba(0,0,0,0.5)';
+               ctx.beginPath();
+               ctx.arc(vw/2, vh/2, 20, 0, Math.PI * 2);
+               ctx.fill();
+               ctx.fillStyle = '#fff';
+               ctx.beginPath();
+               ctx.moveTo(vw/2 - 6, vh/2 - 8);
+               ctx.lineTo(vw/2 + 10, vh/2);
+               ctx.lineTo(vw/2 - 6, vh/2 + 8);
+               ctx.fill();
+            }
+            
             try {
               const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
               thumbnailCache.set(pathStr, dataUrl);
@@ -674,16 +732,23 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
           } else {
             resolve(urlToLoad);
           }
-          imgResolve();
+          mediaResolve();
         };
 
-        img.onerror = () => {
+        if (isVideo) {
+           media.onloadeddata = handleLoad;
+           media.onseeked = processAndExtract;
+        } else {
+           media.onload = handleLoad;
+        }
+
+        media.onerror = () => {
           if (objectUrl) URL.revokeObjectURL(objectUrl);
           resolve(urlToLoad);
-          imgResolve();
+          mediaResolve();
         };
 
-        img.src = urlToLoad;
+        media.src = urlToLoad;
       });
     });
     processThumbnailQueue();
@@ -717,6 +782,7 @@ interface GridProps {
   activeSearchMatch?: { recordId: string, fieldId: string, recordIndex: number, fieldIndex: number } | null;
   onUpdateGlobalAttachment?: (url: string, updatedProps: any) => void;
   onUpdateRecord: (recordId: string, fieldId: string, value: any) => void;
+  onUpdateRecordsBatch?: (updates: { recordId: string, fieldId: string, value: any }[]) => void;
   onDeleteRecords?: (recordIds: string[]) => void;
   onAddRecord: () => void;
   onInsertRecords?: (index: number, count: number) => void;
@@ -1340,12 +1406,12 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
         }
     }, [tableId, statusFilter, ratingFilter, columnFilter, showRating, displayFieldIds, refFieldIds]);
 
-    const imageFields = data.fields.filter((f: any) => f.type === 'attachment' || f.type === 'aiImage');
+    const imageFields = data.fields.filter((f: any) => f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo');
 
     const imagesMap = new Map();
     data.records.forEach((rec: any) => {
         data.fields.forEach((f: any) => {
-            if (f.type === 'attachment' || f.type === 'aiImage') {
+            if (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo') {
                 const val = rec[f.id];
                 if (val) {
                     let items: any[] = [];
@@ -1555,14 +1621,14 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
 const scrollCache = new Map<string, number>();
 
-export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange }: GridProps) {
+export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const globalAttachmentPropsMap = useMemo(() => {
      const map = new Map<string, any>();
      data.records.forEach((rec) => {
          data.fields.forEach((f) => {
-             if (f.type === 'attachment' || f.type === 'aiImage') {
+             if (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo') {
                  const val = rec[f.id];
                  if (val) {
                      let items: any[] = [];
@@ -1650,7 +1716,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               for (const rec of data.records) {
                   let found = false;
                   for (const f of data.fields) {
-                      if (f.type === 'attachment' || f.type === 'aiImage') {
+                      if (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo') {
                           const val = rec[f.id];
                           if (val) {
                               let items: any[] = [];
@@ -1790,7 +1856,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                   let val = record[field.id];
                   rawColVals.push(val);
                   
-                  if (field.type === 'attachment' || field.type === 'aiImage') {
+                  if (field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') {
                      if (Array.isArray(val)) {
                        val = val.map((a: any) => a.url || a).join(',');
                      } else if (typeof val === 'string') val = val;
@@ -1883,6 +1949,8 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           }
       }
 
+      const batchUpdates = [];
+
       for (const { rIdx, cIdx, val: rawVal } of pasteCells) {
           if (rawVal === undefined) continue;
           
@@ -1890,7 +1958,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           const field = visibleFields[cIdx];
           let val = rawVal;
           
-          if (field.type === 'attachment' || field.type === 'aiImage') {
+          if (field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') {
                 if (isRaw) {
                    // Internal paste handles full items array natively
                    val = rawVal;
@@ -1926,7 +1994,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                  val = [];
              }
           }
-          onUpdateRecord(record.id, field.id, val);
+          batchUpdates.push({ recordId: record.id, fieldId: field.id, value: val });
       }
 
       if (cutBox) {
@@ -1935,10 +2003,16 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               // skip updating if the cut cell was just overwritten by the paste (optimisation)
               // but for safety, clear it.
               const field = visibleFields[c];
-              onUpdateRecord(data.records[r].id, field.id, field.type === 'multiSelect' ? [] : '');
+              batchUpdates.push({ recordId: data.records[r].id, fieldId: field.id, value: field.type === 'multiSelect' ? [] : '' });
            }
          }
          setCutBox(null);
+      }
+      
+      if (onUpdateRecordsBatch && batchUpdates.length > 0) {
+          onUpdateRecordsBatch(batchUpdates);
+      } else {
+          batchUpdates.forEach(u => onUpdateRecord(u.recordId, u.fieldId, u.value));
       }
     };
 
@@ -1959,20 +2033,27 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              }
          }
          // Clear cells
+         const batchUpdates = [];
          if (selectionBox) {
            for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
              for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
                 const field = visibleFields[c];
-                onUpdateRecord(data.records[r].id, field.id, field.type === 'multiSelect' ? [] : '');
+                batchUpdates.push({ recordId: data.records[r].id, fieldId: field.id, value: field.type === 'multiSelect' ? [] : '' });
              }
            }
          }
          extraSelectedCells.forEach(cell => {
              const field = visibleFields[cell.c];
              if (field) {
-               onUpdateRecord(data.records[cell.r].id, field.id, field.type === 'multiSelect' ? [] : '');
+               batchUpdates.push({ recordId: data.records[cell.r].id, fieldId: field.id, value: field.type === 'multiSelect' ? [] : '' });
              }
          });
+         
+         if (onUpdateRecordsBatch && batchUpdates.length > 0) {
+             onUpdateRecordsBatch(batchUpdates);
+         } else {
+             batchUpdates.forEach(u => onUpdateRecord(u.recordId, u.fieldId, u.value));
+         }
       }
     };
 
@@ -1987,7 +2068,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
          for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
             const field = visibleFields[c];
             let val = record[field.id];
-            if (field.type === 'attachment' || field.type === 'aiImage') {
+            if (field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') {
                if (Array.isArray(val)) {
                  val = val.map((a: any) => a.url || a).join(',');
                } else if (typeof val === 'string') {
@@ -2089,7 +2170,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         let promptDataUrls: string[] = [];
         let promptOriginalUrls: string[] = [];
         
-        if (field.type === 'aiImage') {
+        if (field.type === 'aiImage' || field.type === 'aiVideo') {
            const { cleanString, parts, dataUrls, originalUrls } = await getBase64ImageParts(promptString, data.fields, record);
            promptString = cleanString;
            promptImageParts = parts;
@@ -2288,6 +2369,83 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
             const urls = json.data.map((d: any) => d.url || (d.b64_json ? `data:image/png;base64,${d.b64_json}` : null)).filter(Boolean);
             resultParams = urls;
           }
+        } else if (field.type === 'aiVideo') {
+           const cfg = field.aiVideoConfig || {};
+           
+           let ratioRaw = resolveTemplateString(cfg.ratio || "16:9", data.fields, record);
+           let ratio = ratioRaw.replace(/：/g, ':').trim();
+           
+           let resolution = resolveTemplateString(cfg.resolution || "1080P", data.fields, record).trim();
+           let mode = resolveTemplateString(cfg.mode || "fast", data.fields, record).trim();
+           let durationRaw = resolveTemplateString(cfg.duration || "10", data.fields, record).trim();
+           let duration = parseInt(durationRaw) || 10;
+           
+           // Collect reference images or videos
+           let finalOriginalUrls: string[] = [...promptOriginalUrls];
+           if (cfg.sourceImageTemplate) {
+              const { originalUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record);
+              finalOriginalUrls = [...finalOriginalUrls, ...(originalUrls || [])];
+           }
+           
+           const vidSetList = Array.isArray(modelSettings.video) ? modelSettings.video : [modelSettings.video || {}];
+           const defaultVidSet = vidSetList[0] || {};
+           let resolvedModel = 'video-v1';
+           if (defaultVidSet.modelName) {
+              resolvedModel = defaultVidSet.modelName.split(',')[0].trim();
+           }
+           if (cfg.modelTemplate) {
+              let template = resolveTemplateString(cfg.modelTemplate, data.fields, record);
+              if (template.trim()) resolvedModel = template.trim();
+           }
+           const vidSet = vidSetList.find((s: any) => s.modelName ? s.modelName.split(',').map((m:string)=>m.trim()).includes(resolvedModel) : false) || defaultVidSet;
+
+           if (vidSet.provider !== 'lingwu') {
+              throw new Error("Only Lingwu provider is currently supported for aiVideo.");
+           }
+           const w = window as any;
+           if (!w.electronAPI || !w.electronAPI.generateLingwuVideo) {
+              throw new Error("Lingwu AI Video generation requires the application to run inside the electron client.");
+           }
+           if (!vidSet.key) throw new Error("Lingwu API Key is required for Video Generation");
+
+           // Categorize media into images, videos, audio based on extension or prefix
+           const images: string[] = [];
+           const videos: string[] = [];
+           const audio: string[] = [];
+           finalOriginalUrls.forEach(url => {
+              if (!url) return;
+              const lowerUrl = url.toLowerCase();
+              if (lowerUrl.includes('.mp4') || lowerUrl.includes('.webm') || lowerUrl.includes('.mov') || lowerUrl.startsWith('local-video:')) {
+                 videos.push(url);
+              } else if (lowerUrl.includes('.mp3') || lowerUrl.includes('.wav') || lowerUrl.startsWith('data:audio')) {
+                 audio.push(url);
+              } else {
+                 images.push(url);
+              }
+           });
+
+           const params: any = {
+              resolution,
+              aspectRatio: ratio,
+              mode,
+              duration,
+              sound: cfg.sound === 'true',
+              enhancePrompt: cfg.enhancePrompt === 'true'
+           };
+
+           const resultUrl = await w.electronAPI.generateLingwuVideo({
+                prompt: promptString,
+                model: resolvedModel,
+                params: params,
+                images: images,
+                videos: videos,
+                audio: audio,
+                apiKey: vidSet.key,
+                endpoint: vidSet.endpoint || 'https://api.ai6700.com/api',
+                ossConfig: modelSettings?.oss
+           });
+
+           resultParams = Array.isArray(resultUrl) ? resultUrl : [resultUrl];
         } else {
           const cfg = field.aiTextConfig || {};
           const txtSetList = Array.isArray(modelSettings.text) ? modelSettings.text : [modelSettings.text || {}];
@@ -2381,21 +2539,24 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         }
         
         let finalResultParams = resultParams;
-        if (field.type === 'aiImage') {
+        if (field.type === 'aiImage' || field.type === 'aiVideo') {
            const existing = Array.isArray(record[field.id]) ? record[field.id] : (record[field.id] ? [record[field.id]] : []);
            let downloadedUrls: string[] = [...(resultParams || [])];
            
            if (resultParams && Array.isArray(resultParams)) {
-              const cfg = field.aiImageConfig || {};
+              const cfg = field.type === 'aiVideo' ? (field.aiVideoConfig || {}) : (field.aiImageConfig || {});
               if (cfg.filenameTemplate || cfg.folderPath) {
-                 let template = resolveTemplateString(cfg.filenameTemplate || 'image', data.fields, record);
-                 let folderTemplate = resolveTemplateString(cfg.folderPath || '', data.fields, record);
-                 const { filename: finalFilename, folderPath: finalFolderPath } = resolveFilenameAndFolder(cfg.filenameTemplate || 'image', cfg.folderPath || '', data.fields, record);
+                 const { filename: finalFilename, folderPath: finalFolderPath } = resolveFilenameAndFolder(cfg.filenameTemplate || (field.type === 'aiVideo' ? 'video' : 'image'), cfg.folderPath || '', data.fields, record);
                  
                  const savedUrls: string[] = [];
                  for (let i = 0; i < resultParams.length; i++) {
                      const url = resultParams[i];
-                     const savedPath = await triggerDownload(url, finalFilename + (resultParams.length > 1 ? `_${i+1}` : '') + '.png', finalFolderPath);
+                     let ext = field.type === 'aiVideo' ? '.mp4' : '.png'; // default fallback
+                     if (url.includes('.mp4')) ext = '.mp4';
+                     else if (url.includes('.mov')) ext = '.mov';
+                     else if (url.includes('.webm')) ext = '.webm';
+                     
+                     const savedPath = await triggerDownload(url, finalFilename + (resultParams.length > 1 ? `_${i+1}` : '') + ext, finalFolderPath);
                      savedUrls.push(savedPath || url);
                  }
                  downloadedUrls = savedUrls;
@@ -2470,7 +2631,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       const recordsToProcess = data.records.filter(r => targetRecordIds.includes(r.id));
       if (recordsToProcess.length === 0) return;
       
-      const aiFields = data.fields.filter(f => f.type === 'aiText' || f.type === 'aiImage');
+      const aiFields = data.fields.filter(f => f.type === 'aiText' || f.type === 'aiImage' || f.type === 'aiVideo');
       if (aiFields.length === 0) {
           alert(lang === 'en' ? "No Smart Text / AI Image columns found in the table." : "表格中没有智能文本/智能图片列。");
           return;
@@ -2551,10 +2712,10 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       {viewMode === 'gallery' ? (
         <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} gallerySettings={gallerySettings} onGallerySettingsChange={onGallerySettingsChange} />
       ) : (
-      <table className="min-w-full text-left" style={{ tableLayout: 'fixed', width: totalTableWidth, borderCollapse: 'separate', borderSpacing: 0 }}>
+      <table className="text-left" style={{ tableLayout: 'fixed', width: '100%', minWidth: totalTableWidth + 100, borderCollapse: 'separate', borderSpacing: 0 }}>
         <thead className="sticky top-0 z-40 bg-gray-50 text-sm">
           <tr>
-            <th className="sticky top-0 left-0 w-16 bg-gray-50 border-r border-b border-gray-200 z-[45] p-0">
+            <th className="sticky top-0 left-0 bg-gray-50 border-r border-b border-gray-200 z-[45] p-0" style={{ width: 64, minWidth: 64, maxWidth: 64 }}>
               <div 
                  className="w-full justify-center flex items-center h-8 text-gray-400 border-t border-transparent cursor-pointer"
                  onClick={() => {
@@ -2641,11 +2802,12 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                 modelSettings={modelSettings}
               />
             ))}
-            <th className="bg-gray-50 border-r border-b border-gray-200 font-normal group cursor-pointer hover:bg-gray-100" style={{ width: 100 }} onClick={onAddField}>
+            <th className="bg-gray-50 border-r border-b border-gray-200 font-normal group cursor-pointer hover:bg-gray-100" style={{ width: 100, minWidth: 100, maxWidth: 100 }} onClick={onAddField}>
               <div className="flex items-center px-3 h-8 text-gray-500">
                 <Plus className="w-4 h-4 mr-1" />
               </div>
             </th>
+            <th className="bg-gray-50 border-b border-gray-200" style={{ width: 'auto' }}></th>
           </tr>
         </thead>
         <tbody className="text-[13px]">
@@ -2712,7 +2874,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                    className={cn(
                      "group transition-colors",
                 draggedRowId === record.id ? "opacity-50 bg-gray-100" : "",
-                dragOverRowId === record.id ? "border-t-2 border-t-blue-500" : ""
+                dragOverRowId === record.id ? "[&>td]:shadow-[inset_0_2px_0_#3b82f6]" : ""
               )}
               onDragOver={(e) => {
                 if (draggedRowId) {
@@ -2878,6 +3040,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                 );
               })}
               <td className="border-b border-gray-200"></td>
+              <td className="border-b border-gray-200"></td>
             </tr>
             )}
             </React.Fragment>
@@ -2885,10 +3048,10 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           })}
           {/* Add New Row Button */}
           <tr>
-            <td className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 w-16 z-30 p-0 select-none transition-colors">
+            <td className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 z-30 p-0 select-none transition-colors" style={{ width: 64, minWidth: 64, maxWidth: 64 }}>
               <div className={cn("flex items-center justify-center font-bold text-lg", heightClass)}>+</div>
             </td>
-            <td colSpan={visibleFields.length + 1} className="border-b border-gray-200 bg-white hover:bg-gray-50 cursor-pointer transition-colors p-0" onClick={onAddRecord}>
+            <td colSpan={visibleFields.length + 2} className="border-b border-gray-200 bg-white hover:bg-gray-50 cursor-pointer transition-colors p-0" onClick={onAddRecord}>
               <div className={cn("flex items-center px-4 text-gray-500 hover:text-gray-700", heightClass)}>
                  {lang === 'en' ? "Tap to add a new record" : "点击添加新记录"}
               </div>
@@ -2933,7 +3096,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           <div className="fixed inset-0 z-40" onClick={() => setContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenuState(null); }}></div>
           <div 
              className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[150px] text-sm text-gray-700"
-             style={{ left: contextMenuState.x, top: contextMenuState.y }}
+             style={contextMenuState.y + 160 > window.innerHeight ? { left: contextMenuState.x, bottom: window.innerHeight - contextMenuState.y, top: 'auto' } : { left: contextMenuState.x, top: contextMenuState.y }}
           >
              <button 
                 className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
@@ -3015,7 +3178,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           <div className="fixed inset-0 z-40" onClick={() => setColContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setColContextMenuState(null); }}></div>
           <div 
              className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[150px] text-sm text-gray-700"
-             style={{ left: colContextMenuState.x, top: colContextMenuState.y }}
+             style={colContextMenuState.y + 280 > window.innerHeight ? { left: colContextMenuState.x, bottom: window.innerHeight - colContextMenuState.y, top: 'auto' } : { left: colContextMenuState.x, top: colContextMenuState.y }}
           >
              <button 
                 className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
@@ -3145,7 +3308,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           <div className="fixed inset-0 z-40" onClick={() => setCellContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setCellContextMenuState(null); }}></div>
           <div 
              className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[200px] text-sm text-gray-700"
-             style={{ left: cellContextMenuState.x, top: cellContextMenuState.y }}
+             style={cellContextMenuState.y + 200 > window.innerHeight ? { left: cellContextMenuState.x, bottom: window.innerHeight - cellContextMenuState.y, top: 'auto' } : { left: cellContextMenuState.x, top: cellContextMenuState.y }}
           >
              <button 
                 className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between pointer-events-auto text-blue-600 hover:text-blue-700 border-b border-gray-100"
@@ -3274,7 +3437,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                       if (!record || !field) return;
                       const val = record[field.id];
                       
-                      if ((field.type === 'aiImage' || field.type === 'attachment') && val) {
+                      if ((field.type === 'aiImage' || field.type === 'aiVideo' || field.type === 'attachment') && val) {
                          let items: any[] = [];
                          if (Array.isArray(val)) items = val;
                          else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map(s => ({ url: s.trim() }));
@@ -3351,8 +3514,10 @@ const FIELD_TYPES: { type: FieldType, label: string, labelZh: string }[] = [
   { type: 'url', label: 'URL', labelZh: '链接' },
   { type: 'attachment', label: 'Attachment', labelZh: '附件' },
   { type: 'formula', label: 'Formula', labelZh: '公式' },
+  { type: 'rating', label: 'Rating', labelZh: '评分' },
   { type: 'aiText', label: 'Smart Text', labelZh: '智能文本' },
   { type: 'aiImage', label: 'AI Image', labelZh: '智能图片' },
+  { type: 'aiVideo', label: 'AI Video', labelZh: '智能视频' },
 ];
 
 function HeaderCell({ 
@@ -3366,6 +3531,7 @@ function HeaderCell({
   const [draftPrompt, setDraftPrompt] = useState(field.prompt || '');
   const [draftRefs, setDraftRefs] = useState<string[]>(field.refFields || []);
   const [draftAiImageConfig, setDraftAiImageConfig] = useState(field.aiImageConfig || { count: 1, size: '1024x1024' });
+  const [draftAiVideoConfig, setDraftAiVideoConfig] = useState(field.aiVideoConfig || { duration: '10', resolution: '1080P', ratio: '16:9', sound: 'false', mode: 'fast' });
   const [draftAiTextConfig, setDraftAiTextConfig] = useState(field.aiTextConfig || {});
   const [showPromptRefs, setShowPromptRefs] = useState(false);
 
@@ -3377,6 +3543,8 @@ function HeaderCell({
     }
   }, [showMenu, field.prompt, field.refFields, field.aiImageConfig]);
 
+  const [localWidth, setLocalWidth] = useState<number | null>(null);
+
   const ref = useClickOutside(() => setIsEditing(false));
   const menuRef = useClickOutside(() => setShowMenu(false));
   const actionMenuRef = useClickOutside(() => setShowActionMenu(false));
@@ -3386,22 +3554,31 @@ function HeaderCell({
     e.preventDefault();
     const startX = e.pageX;
     const startWidth = field.width || 150;
+    
+    let latestWidth = startWidth;
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       requestAnimationFrame(() => {
         const diff = moveEvent.pageX - startX;
-        onResize(Math.max(60, startWidth + diff));
+        latestWidth = Math.max(60, startWidth + diff);
+        setLocalWidth(latestWidth);
       });
     };
 
     const onMouseUp = () => {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
+      setLocalWidth(null);
+      if (latestWidth !== startWidth) {
+         onResize(latestWidth);
+      }
     };
 
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
   };
+
+  const currentWidth = localWidth !== null ? localWidth : (field.width || 150);
 
   return (
     <th 
@@ -3420,7 +3597,7 @@ function HeaderCell({
         frozenLeftOffset !== undefined ? "sticky z-[41]" : "",
         isFrozenLast && frozenLeftOffset !== undefined ? "shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" : ""
       )}
-      style={{ width: field.width || 150, left: frozenLeftOffset }}
+      style={{ width: currentWidth, minWidth: currentWidth, maxWidth: currentWidth, left: frozenLeftOffset }}
     >
       <div 
         className="flex items-center px-2 h-8 cursor-pointer"
@@ -3569,9 +3746,9 @@ function HeaderCell({
              </div>
            )}
 
-           {(field.type === 'aiText' || field.type === 'aiImage') && (
+           {(field.type === 'aiText' || field.type === 'aiImage' || field.type === 'aiVideo') && (
              <div className="border-t border-gray-100 pt-3">
-               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{lang === 'en' ? (field.type === 'aiText' ? 'Smart Text Setup' : 'AI Image Setup') : (field.type === 'aiText' ? '智能文本设置' : '智能图片设置')}</div>
+               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{lang === 'en' ? (field.type === 'aiVideo' ? 'AI Video Setup' : field.type === 'aiText' ? 'Smart Text Setup' : 'AI Image Setup') : (field.type === 'aiVideo' ? '智能视频设置' : field.type === 'aiText' ? '智能文本设置' : '智能图片设置')}</div>
                <div className="space-y-3">
                  <div>
                                        <div className="flex items-center justify-between mb-1 relative">
@@ -3643,7 +3820,7 @@ function HeaderCell({
                              }}
                            >
                              <option value="">+ 引用</option>
-                             {allFields.filter(f => f.id !== field.id && (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'url')).map(f => (
+                             {allFields.filter(f => f.id !== field.id && (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo' || f.type === 'url')).map(f => (
                                <option key={f.id} value={f.name}>{f.name}</option>
                              ))}
                            </select>
@@ -3814,6 +3991,257 @@ function HeaderCell({
                        </div>
                      </div>
                    )}
+                   {field.type === 'aiVideo' && (
+                     <div className="mt-2 space-y-2">
+                       <div>
+                         <label className="block text-[10px] text-gray-500 mb-1">参考图片/视频</label>
+                         <div className="relative">
+                           <textarea
+                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none"
+                             value={draftAiVideoConfig.sourceImageTemplate || ''}
+                             placeholder="{Image 1} {Video 1}"
+                             onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, sourceImageTemplate: e.target.value }))}
+                             onMouseDown={e => e.stopPropagation()}
+                           />
+                           <select 
+                             className="absolute bottom-1 right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px]"
+                             value=""
+                             onChange={e => {
+                               if (!e.target.value) return;
+                               const curTpl = draftAiVideoConfig.sourceImageTemplate || '';
+                               setDraftAiVideoConfig(prev => ({ ...prev, sourceImageTemplate: curTpl + `{${e.target.value}}` }));
+                             }}
+                           >
+                             <option value="">+ 引用</option>
+                             {allFields.filter(f => f.id !== field.id && (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo' || f.type === 'url')).map(f => (
+                               <option key={f.id} value={f.name}>{f.name}</option>
+                             ))}
+                           </select>
+                         </div>
+                       </div>
+                       
+                       <div className="grid grid-cols-2 gap-2">
+                         <div className="flex flex-col">
+                            <label className="block text-[10px] text-gray-500 mb-1">分辨率/FPS (选)</label>
+                            <div className="flex items-stretch border border-gray-300 bg-white rounded">
+                              <div className="relative flex-1 w-0">
+                                <select 
+                                   className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
+                                   value={draftAiVideoConfig.resolution || '1080P'}
+                                   onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, resolution: e.target.value }))}
+                                >
+                                   {!['720p', '1080p', '2k', '4k'].includes((draftAiVideoConfig.resolution || '1080P').toLowerCase()) && (
+                                      <option value={draftAiVideoConfig.resolution}>{draftAiVideoConfig.resolution}</option>
+                                   )}
+                                   <option value="720P">720P</option>
+                                   <option value="1080P">1080P</option>
+                                   <option value="2K">2K</option>
+                                   <option value="4K">4K</option>
+                                </select>
+                                <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none">
+                                  <ChevronDown className="w-3 h-3 text-gray-500" />
+                                </div>
+                              </div>
+                              <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
+                                 <Plus className="w-3 h-3 text-gray-500" />
+                                 <select className="absolute inset-0 opacity-0 cursor-pointer text-[10px]" value="" onChange={e => { if(e.target.value) { setDraftAiVideoConfig(prev => ({...prev, resolution: `{${e.target.value}}`})); } }}>
+                                    <option value="">+ 引用</option>
+                                    {allFields.length > 0 && <optgroup label="所有列">
+                                      {allFields.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                                    </optgroup>}
+                                 </select>
+                              </div>
+                            </div>
+                          </div>
+                         <div className="flex flex-col">
+                            <label className="block text-[10px] text-gray-500 mb-1">比例 (Aspect Ratio)</label>
+                            <div className="flex items-stretch border border-gray-300 bg-white rounded">
+                              <div className="relative flex-1 w-0">
+                                <select 
+                                   className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
+                                   value={draftAiVideoConfig.ratio || '16:9'}
+                                   onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, ratio: e.target.value }))}
+                                >
+                                   {!['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '2:3', '3:2'].includes(String(draftAiVideoConfig.ratio || '16:9')) && (
+                                      <option value={draftAiVideoConfig.ratio}>{draftAiVideoConfig.ratio}</option>
+                                   )}
+                                   <option value="16:9">16:9</option>
+                                   <option value="9:16">9:16</option>
+                                   <option value="1:1">1:1</option>
+                                   <option value="4:3">4:3</option>
+                                   <option value="3:4">3:4</option>
+                                   <option value="21:9">21:9</option>
+                                   <option value="2:3">2:3</option>
+                                   <option value="3:2">3:2</option>
+                                </select>
+                                <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none">
+                                  <ChevronDown className="w-3 h-3 text-gray-500" />
+                                </div>
+                              </div>
+                              <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
+                                 <Plus className="w-3 h-3 text-gray-500" />
+                                 <select className="absolute inset-0 opacity-0 cursor-pointer text-[10px]" value="" onChange={e => { if(e.target.value) { setDraftAiVideoConfig(prev => ({...prev, ratio: `{${e.target.value}}`})); } }}>
+                                    <option value="">+ 引用</option>
+                                    {allFields.length > 0 && <optgroup label="所有列">
+                                      {allFields.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                                    </optgroup>}
+                                 </select>
+                              </div>
+                            </div>
+                          </div>
+                         <div className="flex flex-col">
+                            <label className="block text-[10px] text-gray-500 mb-1">生成模式 (Mode)</label>
+                            <div className="flex items-stretch border border-gray-300 bg-white rounded">
+                              <div className="relative flex-1 w-0">
+                                <select 
+                                   className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
+                                   value={draftAiVideoConfig.mode || 'fast'}
+                                   onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, mode: e.target.value }))}
+                                >
+                                   {!['fast', 'quality'].includes((draftAiVideoConfig.mode || 'fast').toLowerCase()) && (
+                                      <option value={draftAiVideoConfig.mode}>{draftAiVideoConfig.mode}</option>
+                                   )}
+                                   <option value="fast">fast</option>
+                                   <option value="quality">quality</option>
+                                </select>
+                                <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none">
+                                  <ChevronDown className="w-3 h-3 text-gray-500" />
+                                </div>
+                              </div>
+                              <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
+                                 <Plus className="w-3 h-3 text-gray-500" />
+                                 <select className="absolute inset-0 opacity-0 cursor-pointer text-[10px]" value="" onChange={e => { if(e.target.value) { setDraftAiVideoConfig(prev => ({...prev, mode: `{${e.target.value}}`})); } }}>
+                                    <option value="">+ 引用</option>
+                                    {allFields.length > 0 && <optgroup label="所有列">
+                                      {allFields.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                                    </optgroup>}
+                                 </select>
+                              </div>
+                            </div>
+                          </div>
+                         <div className="flex flex-col">
+                            <label className="block text-[10px] text-gray-500 mb-1">时长 (秒)</label>
+                            <div className="flex items-stretch border border-gray-300 bg-white rounded">
+                              <div className="relative flex-1 w-0">
+                                <select 
+                                   className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
+                                   value={draftAiVideoConfig.duration || '10'}
+                                   onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, duration: e.target.value }))}
+                                >
+                                   {!['5', '10', '15', '20', '25', '30'].includes(String(draftAiVideoConfig.duration || '10')) && (
+                                      <option value={draftAiVideoConfig.duration}>{draftAiVideoConfig.duration}</option>
+                                   )}
+                                   <option value="5">5</option>
+                                   <option value="10">10</option>
+                                   <option value="15">15</option>
+                                   <option value="20">20</option>
+                                   <option value="25">25</option>
+                                   <option value="30">30</option>
+                                </select>
+                                <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none">
+                                  <ChevronDown className="w-3 h-3 text-gray-500" />
+                                </div>
+                              </div>
+                              <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
+                                 <Plus className="w-3 h-3 text-gray-500" />
+                                 <select className="absolute inset-0 opacity-0 cursor-pointer text-[10px]" value="" onChange={e => { if(e.target.value) { setDraftAiVideoConfig(prev => ({...prev, duration: `{${e.target.value}}`})); } }}>
+                                    <option value="">+ 引用</option>
+                                    {allFields.length > 0 && <optgroup label="所有列">
+                                      {allFields.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                                    </optgroup>}
+                                 </select>
+                              </div>
+                            </div>
+                          </div>
+                       </div>
+                       
+                       <div className="grid grid-cols-2 gap-2">
+                         <div className="flex items-center justify-between border border-gray-300 rounded p-1 px-2">
+                           <label className="text-[10px] text-gray-700">伴随声音</label>
+                           <input type="checkbox" checked={draftAiVideoConfig.sound === 'true'} onChange={e => setDraftAiVideoConfig(prev => ({...prev, sound: e.target.checked ? 'true' : 'false'}))} />
+                         </div>
+                         <div className="flex items-center justify-between border border-gray-300 rounded p-1 px-2">
+                           <label className="text-[10px] text-gray-700">优化提示词</label>
+                           <input type="checkbox" checked={draftAiVideoConfig.enhancePrompt === 'true'} onChange={e => setDraftAiVideoConfig(prev => ({...prev, enhancePrompt: e.target.checked ? 'true' : 'false'}))} />
+                         </div>
+                       </div>
+                       
+                       <div className="relative mt-2">
+                           <label className="block text-[10px] text-gray-500 mb-1">保存的文件名</label>
+                           <input 
+                             type="text" 
+                             className="w-full text-xs border border-gray-300 rounded p-1 pr-[70px] outline-none placeholder:text-gray-300"
+                             placeholder="例如: {Task}_{Date}"
+                             value={draftAiVideoConfig.filenameTemplate || ''}
+                             onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, filenameTemplate: e.target.value }))}
+                             onMouseDown={e => e.stopPropagation()}
+                           />
+                           <select 
+                              className="absolute bottom-1 right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px] h-6 cursor-pointer hover:bg-gray-100"
+                              value=""
+                              onChange={e => {
+                                if (!e.target.value) return;
+                                const curTpl = draftAiVideoConfig.filenameTemplate || '';
+                                setDraftAiVideoConfig(prev => ({ ...prev, filenameTemplate: curTpl + `{${e.target.value}}` }));
+                              }}
+                            >
+                              <option value="">+ 引用</option>
+                              {allFields.filter(f => f.id !== field.id).map(f => (
+                                <option key={f.id} value={f.name}>{f.name}</option>
+                              ))}
+                            </select>
+                        </div>
+                       
+                       <div className="relative mt-2">
+                           <label className="block text-[10px] text-gray-500 mb-1">模型 (Model)</label>
+                           <div className="flex border border-gray-300 rounded overflow-hidden">
+                             <input 
+                               type="text" 
+                               list={`model-suggestions-${field.id}`}
+                               className="w-full text-xs p-1 outline-none placeholder:text-gray-300"
+                               placeholder="例如: video-v1"
+                               value={draftAiVideoConfig.modelTemplate || ''}
+                               onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, modelTemplate: e.target.value }))}
+                               onMouseDown={e => e.stopPropagation()}
+                             />
+                             <datalist id={`model-suggestions-${field.id}`}>
+                               {(Array.isArray(modelSettings?.video) ? modelSettings.video : [modelSettings?.video]).flatMap((s: any) => s?.modelName ? s.modelName.split(',') : []).map((m: string) => m?.trim()).filter(Boolean).map((m: string) => (
+                                 <option key={m} value={m} />
+                               ))}
+                             </datalist>
+                             <div className="relative border-l border-gray-200 shrink-0">
+                                <select 
+                                   className="appearance-none bg-gray-50 text-[10px] outline-none px-2 h-full cursor-pointer pr-5 hover:bg-gray-100 transition-colors"
+                                   value=""
+                                   onChange={e => {
+                                     if (!e.target.value) return;
+                                     const curTpl = draftAiVideoConfig.modelTemplate || '';
+                                     setDraftAiVideoConfig(prev => ({ ...prev, modelTemplate: curTpl + `{${e.target.value}}` }));
+                                   }}
+                                 >
+                                   <option value="">+ 引用</option>
+                                   {allFields.filter(f => f.id !== field.id).map(f => (
+                                     <option key={f.id} value={f.name}>{f.name}</option>
+                                   ))}
+                                 </select>
+                                 <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                             </div>
+                           </div>
+                        </div>
+                       
+                       <div>
+                          <label className="block text-[10px] text-gray-500 mb-1">保存目录 (文件夹)</label>
+                          <input 
+                            type="text" 
+                            className="w-full text-xs border border-gray-300 rounded p-1 outline-none placeholder:text-gray-300"
+                            placeholder="C:\videos"
+                            value={draftAiVideoConfig.folderPath || ''}
+                            onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, folderPath: e.target.value }))}
+                            onMouseDown={e => e.stopPropagation()}
+                          />
+                       </div>
+                     </div>
+                   )}
                    {field.type === 'aiText' && (
                      <div className="mt-2 space-y-2">
                        <div>
@@ -3836,7 +4264,7 @@ function HeaderCell({
                              }}
                            >
                              <option value="">+ 引用</option>
-                             {allFields.filter(f => f.id !== field.id && (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'url')).map(f => (
+                             {allFields.filter(f => f.id !== field.id && (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo' || f.type === 'url')).map(f => (
                                <option key={f.id} value={f.name}>{f.name}</option>
                              ))}
                            </select>
@@ -3889,7 +4317,7 @@ function HeaderCell({
                      <button 
                        className="text-xs bg-blue-600 text-white px-3 flex items-center h-7 rounded hover:bg-blue-700 transition-colors shadow-sm"
                        onClick={() => {
-                         onUpdateField({ prompt: draftPrompt, refFields: draftRefs, aiImageConfig: draftAiImageConfig, aiTextConfig: draftAiTextConfig });
+                         onUpdateField({ prompt: draftPrompt, refFields: draftRefs, aiImageConfig: draftAiImageConfig, aiTextConfig: draftAiTextConfig, aiVideoConfig: draftAiVideoConfig });
                          setShowMenu(false);
                        }}
                      >
@@ -4214,7 +4642,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
           </div>
         );
       }
-      if (field.type === 'attachment' || field.type === 'aiImage') {
+      if (field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') {
         return (
           <AttachmentCellEditor 
             value={value} 
@@ -4281,6 +4709,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                             onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems)); 
                           }}
                         />
+                        {(field.type === 'aiVideo' || item.url.match(/\.(mp4|webm|mov)$/i)) && (
+                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20 rounded">
+                              <Play className="w-4 h-4 text-white/90 drop-shadow-md fill-white/90" />
+                           </div>
+                        )}
                         {(pendingCount > 0 || resolvedCount > 0 || approvedCount > 0) && (
                           <div className="absolute -top-1 -right-1 flex gap-0.5 z-10 pointer-events-none drop-shadow-md">
                              {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
@@ -4311,6 +4744,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
           </div>
         );
       }
+      case 'aiVideo':
       case 'aiImage': {
         let fileItems: any[] = [];
         if (Array.isArray(value)) {
@@ -4364,6 +4798,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                             onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems)); 
                           }}
                         />
+                        {(field.type === 'aiVideo' || item.url.match(/\.(mp4|webm|mov)$/i)) && (
+                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20 rounded">
+                              <Play className="w-4 h-4 text-white/90 drop-shadow-md fill-white/90" />
+                           </div>
+                        )}
                         {(pendingCount > 0 || resolvedCount > 0 || approvedCount > 0) && (
                           <div className="absolute -top-1 -right-1 flex gap-0.5 z-10 pointer-events-none drop-shadow-md">
                              {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
@@ -4403,6 +4842,20 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                   <Sparkles className="w-3.5 h-3.5" />
                 </button>
              )}
+          </div>
+        );
+      }
+      case 'rating': {
+        const rating = parseInt(value) || 0;
+        return (
+          <div className="flex h-full items-center justify-start px-2 cursor-pointer gap-0.5" onClick={(e) => { e.stopPropagation(); onActivate(); }}>
+            {[1, 2, 3, 4, 5].map(v => (
+              <Star 
+                key={v} 
+                className={cn("w-4 h-4 transition-colors", rating >= v ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300 hover:text-gray-400')} 
+                onClick={(e) => { e.stopPropagation(); onChange(rating === v ? 0 : v); onActivate(); }}
+              />
+            ))}
           </div>
         );
       }
@@ -4626,17 +5079,17 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onDragOver={(e) => {
-         if (field.type === 'attachment' && (isActive || isSelectedBox)) {
+         if ((field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') && (isActive || isSelectedBox)) {
            e.preventDefault();
            e.stopPropagation();
          }
       }}
       onDrop={(e) => {
-         if (field.type === 'attachment' && (isActive || isSelectedBox)) {
+         if ((field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') && (isActive || isSelectedBox)) {
            e.preventDefault();
            e.stopPropagation();
            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-             const files = Array.from(e.dataTransfer.files).filter((f: any) => f.type.startsWith('image/'));
+             const files = Array.from(e.dataTransfer.files).filter((f: any) => f.type.startsWith('image/') || f.type.startsWith('video/') || f.type.startsWith('audio/'));
              if (files.length > 0) {
                let existingItems: any[] = [];
                if (Array.isArray(value)) {
@@ -4967,7 +5420,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
     }
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const files = Array.from(e.dataTransfer.files).filter((f: any) => f.type.startsWith('image/'));
+      const files = Array.from(e.dataTransfer.files).filter((f: any) => f.type.startsWith('image/') || f.type.startsWith('video/') || f.type.startsWith('audio/'));
       if (files.length > 0) {
         const newItems = files.map((file: any) => {
           // Add support for window.electronAPI.getPathForFile if exposed in preload
@@ -5031,6 +5484,11 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                }), (newItems) => onChange(newItems))}
              >
                <ThumbnailImage path={path} className="w-full h-full object-cover cursor-pointer" alt="attachment" />
+               {(item.url.match(/\.(mp4|webm|mov)$/i)) && (
+                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20">
+                      <Play className="w-10 h-10 text-white/90 drop-shadow-md fill-white/90" />
+                   </div>
+               )}
                <div 
                  className="absolute top-1 right-1 bg-black/60 text-white rounded p-1 opacity-0 group-hover/attachment:opacity-100 cursor-pointer flex items-center gap-1.5 transition-opacity"
                >
@@ -5059,7 +5517,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
       <input 
         type="file" 
         multiple 
-        accept="image/*" 
+        accept="image/*,video/*" 
         className="hidden" 
         ref={fileInputRef} 
         onChange={handleFileChange} 

@@ -1,5 +1,5 @@
 import { FieldType } from '../types';
-import { AlignLeft, Hash, ChevronDownSquare, Calendar, CheckSquare, User, Link as LinkIcon, HelpCircle, Image as ImageIcon, Sparkles, Tags, Calculator, Bot } from 'lucide-react';
+import { AlignLeft, Hash, ChevronDownSquare, Calendar, CheckSquare, User, Link as LinkIcon, HelpCircle, Image as ImageIcon, Sparkles, Tags, Calculator, Bot, Star, Video } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export function FieldIcon({ type, className }: { type: FieldType, className?: string }) {
@@ -17,6 +17,8 @@ export function FieldIcon({ type, className }: { type: FieldType, className?: st
     case 'aiText': return <Sparkles {...props} />;
     case 'formula': return <Calculator {...props} />;
     case 'aiImage': return <Bot {...props} />;
+    case 'rating': return <Star {...props} />;
+    case 'aiVideo': return <Video {...props} />;
     default: return <HelpCircle {...props} />;
   }
 }

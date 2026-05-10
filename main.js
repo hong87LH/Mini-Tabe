@@ -217,6 +217,137 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('generate-lingwu-video', async (event, options) => {
+    try {
+       const { prompt, model, params, images, videos, audio, apiKey, endpoint, ossConfig } = options;
+       
+       let uploader = null;
+       if (ossConfig && ossConfig.accessKeyId) {
+          const { OssImageUploader } = await import('./oss_uploader.js');
+          uploader = new OssImageUploader(ossConfig);
+       }
+
+       const uploadMediaList = async (mediaList) => {
+         if (!mediaList || !Array.isArray(mediaList)) return [];
+         let out = [];
+         for (const itemUrl of mediaList) {
+            let actualUrl = itemUrl;
+            if (actualUrl.startsWith('file://')) actualUrl = fileURLToPath(actualUrl);
+            else if (actualUrl.startsWith('local-img://')) actualUrl = decodeURIComponent(actualUrl.replace('local-img://', ''));
+            else if (actualUrl.startsWith('local-video://')) actualUrl = decodeURIComponent(actualUrl.replace('local-video://', ''));
+
+            if (uploader && (actualUrl.startsWith('data:') || fs.existsSync(actualUrl))) {
+                if (actualUrl.startsWith('data:')) {
+                   const matches = actualUrl.match(/^data:(\w+\/\w+);base64,(.+)$/);
+                   if (matches && matches.length === 3) {
+                       const ext = matches[1].split('/')[1] || 'bin';
+                       const buffer = Buffer.from(matches[2], 'base64');
+                       const { app } = await import('electron');
+                       const tempPath = path.join(app.getPath('temp'), `temp_upload_${Date.now()}.${ext}`);
+                       fs.writeFileSync(tempPath, buffer);
+                       try {
+                          const record = await uploader.upload(tempPath);
+                          out.push(record.cloud_url);
+                       } catch(e) { console.error(e); }
+                   } else out.push(itemUrl);
+                } else {
+                   try {
+                      const record = await uploader.upload(actualUrl);
+                      out.push(record.cloud_url);
+                   } catch(e) { console.error('Upload fail:', actualUrl, e); }
+                }
+            } else {
+               out.push(itemUrl);
+            }
+         }
+         return out;
+       };
+
+       const payload = { model, prompt };
+       const uploadedImages = await uploadMediaList(images);
+       const uploadedVideos = await uploadMediaList(videos);
+       const uploadedAudio = await uploadMediaList(audio);
+       
+       if (uploadedImages.length > 0) params.images = uploadedImages;
+       if (uploadedVideos.length > 0) params.videos = uploadedVideos;
+       if (uploadedAudio.length > 0) params.audio = uploadedAudio;
+       
+       if (params && Object.keys(params).length > 0) {
+           const { mapVideoParams } = await import('./video_param_mapper.js');
+           payload.params = mapVideoParams(model, params);
+       }
+
+       const fetch = (await import('node-fetch')).default || globalThis.fetch;
+       
+       let baseUrl = endpoint || 'https://api.ai6700.com/api';
+       baseUrl = baseUrl.replace(/\/+$/, ''); // Strip trailing slash
+       
+       const reqHeaders = {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+       };
+
+       console.log('generate-lingwu-video request:', JSON.stringify(payload));
+       const startResp = await fetch(`${baseUrl}/v1/media/generate`, {
+         method: 'POST',
+         headers: reqHeaders,
+         body: JSON.stringify(payload)
+       });
+       const startData = await startResp.json();
+       
+       let dataObj = startData.data || startData;
+       const taskId = (dataObj['任务ids'] && dataObj['任务ids'][0]) || dataObj['任务id'] || dataObj['task_id'];
+
+       if (!taskId) {
+           console.log('Failed startResp:', startData);
+          throw new Error("Failed to get task ID: " + JSON.stringify(startData));
+       }
+
+       // Polling
+       const startTime = Date.now();
+       const timeout = 600 * 1000 * 3; // 30 minutes timeout for video
+       
+       // sleep 10s initially
+       await new Promise(r => setTimeout(r, 10000));
+       
+       while (Date.now() - startTime < timeout) {
+          const urlObj = new URL(`${baseUrl}/v1/skills/task-status`);
+          urlObj.searchParams.append('task_id', taskId);
+          
+          const statResp = await fetch(urlObj.toString(), {
+             method: 'GET',
+             headers: reqHeaders
+          });
+          const statDataRow = await statResp.json();
+          const status = statDataRow.data || statDataRow;
+          
+          const state = status.state || status.status;
+
+          if (state === 'success' || state === 'completed' || status.is_final) {
+             const resultOutput = status.result_url || status.url || status.output || (status.result && status.result.video) || (status.result && status.result.videos && status.result.videos[0]) || (status.result_urls && status.result_urls[0]);
+             if (resultOutput) {
+                 return resultOutput; // Could be string or array
+             }
+             if (status.is_final && !resultOutput) {
+                 throw new Error(status.error || status.message || status.msg || "Generation failed without error message");
+             }
+          }
+          
+          if (state === 'failed' || state === 'error') {
+              throw new Error(status.error || status.message || status.msg || "Generation failed");
+          }
+          
+          await new Promise(r => setTimeout(r, 5000));
+       }
+       
+       throw new Error("Polling timeout");
+
+    } catch (err) {
+       console.error("generate-lingwu-video error:", err);
+       throw err;
+    }
+  });
+
   ipcMain.handle('read-local-file', async (event, filePath, options = {}) => {
     try {
       if (filePath.startsWith('file://')) {
