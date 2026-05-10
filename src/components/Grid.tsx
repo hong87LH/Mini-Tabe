@@ -28,8 +28,63 @@ function HighlightedText({ text, query }: { text: string; query?: string }) {
   return <>{parts}</>;
 }
 
+function encodeTSV(val: string): string {
+    if (val.includes('\n') || val.includes('\t') || val.includes('"') || val.includes('\r')) {
+        return '"' + val.replace(/"/g, '""') + '"';
+    }
+    return val;
+}
+
+function parseTSV(text: string): string[][] {
+    const rows: string[][] = [];
+    let currentRow: string[] = [];
+    let currentCell = "";
+    let inQuotes = false;
+    
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (inQuotes) {
+            if (char === '"') {
+                if (i + 1 < text.length && text[i + 1] === '"') {
+                    currentCell += '"';
+                    i++;
+                } else {
+                    inQuotes = false;
+                }
+            } else {
+                currentCell += char;
+            }
+        } else {
+            if (char === '"') {
+                inQuotes = true;
+            } else if (char === '\t') {
+                currentRow.push(currentCell);
+                currentCell = "";
+            } else if (char === '\n') {
+                currentRow.push(currentCell);
+                rows.push(currentRow);
+                currentRow = [];
+                currentCell = "";
+            } else if (char === '\r') {
+                // ignore
+            } else {
+                currentCell += char;
+            }
+        }
+    }
+    currentRow.push(currentCell);
+    if (currentRow.length > 0 || rows.length === 0) {
+        rows.push(currentRow);
+    }
+    
+    if (rows.length > 1 && rows[rows.length - 1].length === 1 && rows[rows.length - 1][0] === "") {
+        rows.pop();
+    }
+    return rows;
+}
+
 const copyImageToClipboardMagic = (path: string) => {
-   navigator.clipboard.writeText(`IMG_COPY_MAGIC:${path}`);
+   navigator.clipboard.writeText(path);
 };
 
 const zoomLevels = [0.125, 0.25, 0.5, 0.707, 1, 1.414, 2, 2.828, 4, 5.656, 8];
@@ -1503,6 +1558,33 @@ const scrollCache = new Map<string, number>();
 export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
+  const globalAttachmentPropsMap = useMemo(() => {
+     const map = new Map<string, any>();
+     data.records.forEach((rec) => {
+         data.fields.forEach((f) => {
+             if (f.type === 'attachment' || f.type === 'aiImage') {
+                 const val = rec[f.id];
+                 if (val) {
+                     let items: any[] = [];
+                     if (Array.isArray(val)) items = val;
+                     else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
+                     else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
+
+                     items.forEach(item => {
+                         const url = typeof item === 'string' ? item : item.url;
+                         if (url && typeof item !== 'string' && item.annotations && item.annotations.length > 0) {
+                             const existing = map.get(url);
+                             if (!existing || existing.annotations.length < item.annotations.length) {
+                                 map.set(url, { annotations: item.annotations, status: item.status, rating: item.rating });
+                             }
+                         }
+                     });
+                 }
+             }
+         });
+     });
+     return map;
+  }, [data.records, data.fields]);
   const [activeCell, setActiveCell] = useState<{ recordId: string; fieldId: string } | null>(null);
   const [forceEdit, setForceEdit] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
@@ -1696,13 +1778,18 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       const maxC = Math.max(...selectedArr.map(x => x.c));
 
       const rows: string[] = [];
+      const rawRows: any[][] = [];
+      
       for (let r = minR; r <= maxR; r++) {
           const colVals: string[] = [];
+          const rawColVals: any[] = [];
           for (let c = minC; c <= maxC; c++) {
               if (allSelectedCells.has(`${r},${c}`)) {
                   const record = data.records[r];
                   const field = visibleFields[c];
                   let val = record[field.id];
+                  rawColVals.push(val);
+                  
                   if (field.type === 'attachment' || field.type === 'aiImage') {
                      if (Array.isArray(val)) {
                        val = val.map((a: any) => a.url || a).join(',');
@@ -1716,15 +1803,18 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                   } else if (typeof val === 'object' && val !== null) {
                      val = JSON.stringify(val);
                   }
-                  colVals.push(val || '');
+                  colVals.push(encodeTSV(String(val || '')));
               } else {
                   colVals.push('');
+                  rawColVals.push(null);
               }
           }
           rows.push(colVals.join('\t'));
+          rawRows.push(rawColVals);
       }
 
       e.clipboardData?.setData('text/plain', rows.join('\n'));
+      e.clipboardData?.setData('application/x-bitable-copy', JSON.stringify({ rawRows }));
       e.preventDefault();
       if (cutBox) setCutBox(null);
     };
@@ -1734,10 +1824,27 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       if (!selectionStart) return;
       
       e.preventDefault();
-      const text = e.clipboardData?.getData('text/plain');
-      if (!text) return;
       
-      const rows = text.split(/\r?\n/).map(row => row.split('\t'));
+      let rows: any[][] = [];
+      let isRaw = false;
+      
+      const customDataStr = e.clipboardData?.getData('application/x-bitable-copy');
+      if (customDataStr) {
+          try {
+              const parsed = JSON.parse(customDataStr);
+              if (parsed && parsed.rawRows) {
+                  rows = parsed.rawRows;
+                  isRaw = true;
+              }
+          } catch (err) {}
+      }
+      
+      if (!isRaw) {
+          const text = e.clipboardData?.getData('text/plain');
+          if (!text) return;
+          rows = parseTSV(text);
+      }
+      
       if (rows.length === 0) return;
 
       const allSelectedCells = new Set<string>();
@@ -1760,7 +1867,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       if (selectedArr.length > 1) {
           // Map to multiple selected cells with tiling relative to minR, minC
           for (const { r, c } of selectedArr) {
-             const val = rows[(r - minR) % rows.length][(c - minC) % rows[0].length];
+             const val = rows[(r - minR) % rows.length]?.[(c - minC) % (rows[0]?.length || 1)];
              pasteCells.push({ rIdx: r, cIdx: c, val });
           }
       } else {
@@ -1768,7 +1875,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           for (let i = 0; i < rows.length; i++) {
              const rIdx = minR + i;
              if (rIdx >= data.records.length) break;
-             for (let j = 0; j < rows[0].length; j++) {
+             for (let j = 0; j < rows[i].length; j++) {
                 const cIdx = minC + j;
                 if (cIdx >= visibleFields.length) break;
                 pasteCells.push({ rIdx, cIdx, val: rows[i][j] });
@@ -1777,35 +1884,39 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       }
 
       for (const { rIdx, cIdx, val: rawVal } of pasteCells) {
+          if (rawVal === undefined) continue;
+          
           const record = data.records[rIdx];
           const field = visibleFields[cIdx];
           let val = rawVal;
           
           if (field.type === 'attachment' || field.type === 'aiImage') {
-               let pathToAdd = val || '';
-               if (pathToAdd.startsWith('IMG_COPY_MAGIC:')) {
-                  pathToAdd = pathToAdd.substring('IMG_COPY_MAGIC:'.length);
-                  const existing = record[field.id] || [];
-                  const existingArr = Array.isArray(existing) ? existing : (typeof existing === 'string' && existing ? existing.split(',').map(s=>({url: s.trim()})) : []);
-                  if (pathToAdd) {
-                      val = [...existingArr, {url: pathToAdd.trim()}];
-                  } else {
-                      val = existingArr;
-                  }
+                if (isRaw) {
+                   // Internal paste handles full items array natively
+                   val = rawVal;
                } else {
-                  val = pathToAdd;
+                   let pathToAdd = val || '';
+                   if (typeof pathToAdd === 'string' && pathToAdd) {
+                      // external text paste for attachments (append mode)
+                      const existing = record[field.id] || [];
+                      const existingArr = Array.isArray(existing) ? existing : (typeof existing === 'string' && existing ? existing.split(',').map(s=>({url: s.trim()})) : []);
+                      const newItems = pathToAdd.split(',').map(s => ({ url: s.trim() })).filter(s => s.url);
+                      val = [...existingArr, ...newItems];
+                   } else {
+                      val = pathToAdd;
+                   }
                }
           } else if (field.type === 'number') {
              val = val ? Number(val) : null;
           } else if (field.type === 'checkbox') {
              val = val === 'true' || val === '1';
-          } else if (field.type === 'singleSelect') {
-             if (val) {
+          } else if (!isRaw && field.type === 'singleSelect') {
+             if (val && typeof val === 'string') {
                  const match = field.options?.find(o => o.name === val.trim() || o.id === val.trim());
                  val = match ? match.id : val;
              }
-          } else if (field.type === 'multiSelect') {
-             if (val) {
+          } else if (!isRaw && field.type === 'multiSelect') {
+             if (val && typeof val === 'string') {
                  const parts = val.split(',').map((s: string) => s.trim());
                  val = parts.map((part: string) => {
                      const match = field.options?.find(o => o.name === part || o.id === part);
@@ -2695,6 +2806,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                     modelSettings={modelSettings}
                     heightClass={heightClass}
                     lang={lang}
+                    globalAttachmentPropsMap={globalAttachmentPropsMap}
                     onUpdateField={(updates) => onUpdateField(field.id, updates)}
                     isSelectedBox={isSelectedBox}
                     isCutBox={isCutBox}
@@ -3837,9 +3949,10 @@ interface CellProps {
   frozenLeftOffset?: number;
   isFrozenLast?: boolean;
   lang?: 'en' | 'zh';
+  globalAttachmentPropsMap?: Map<string, any>;
 }
 
-function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh' }: CellProps) {
+function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh', globalAttachmentPropsMap }: CellProps) {
   const value = record[field.id];
   
   const [isEditingMode, setIsEditingMode] = useState(false);
@@ -4119,12 +4232,18 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
         let fileItems: any[] = [];
         if (Array.isArray(value)) {
           fileItems = value.map((v: any) => {
-             if (typeof v === 'string') return { url: v };
-             const { mappedUrl, ...cleanV } = v;
-             return cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+             const base = typeof v === 'string' ? { url: v } : v;
+             const { mappedUrl, ...cleanV } = base;
+             const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+             const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+             return globalProps ? { ...itemObj, ...globalProps } : itemObj;
           });
         } else if (typeof value === 'string' && value.trim() !== '') {
-          fileItems = value.split(',').map(s => ({ url: s.trim() }));
+          fileItems = value.split(',').map(s => {
+             const url = s.trim();
+             const globalProps = globalAttachmentPropsMap?.get(url);
+             return globalProps ? { url, ...globalProps } : { url };
+          });
         }
         
         let imgSizeClass = 'h-[24px] w-[24px]';
@@ -4196,12 +4315,18 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
         let fileItems: any[] = [];
         if (Array.isArray(value)) {
           fileItems = value.map((v: any) => {
-             if (typeof v === 'string') return { url: v };
-             const { mappedUrl, ...cleanV } = v;
-             return cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+             const base = typeof v === 'string' ? { url: v } : v;
+             const { mappedUrl, ...cleanV } = base;
+             const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+             const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+             return globalProps ? { ...itemObj, ...globalProps } : itemObj;
           });
         } else if (typeof value === 'string' && value.trim() !== '') {
-          fileItems = value.split(',').map(s => ({ url: s.trim() }));
+          fileItems = value.split(',').map(s => {
+             const url = s.trim();
+             const globalProps = globalAttachmentPropsMap?.get(url);
+             return globalProps ? { url, ...globalProps } : { url };
+          });
         }
         
         let imgSizeClass = 'h-[24px] w-[24px]';
@@ -4775,16 +4900,22 @@ function SelectCellEditor({ field, ids, isMulti, onChange, onClose, onUpdateFiel
   );
 }
 
-function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: any, onChange: (v: any) => void, onClose: () => void, onPreview: (url: string, allUrls?: {url: string, annotations?: any[]}[], onUpdate?: (items: any[]) => void) => void }) {
+function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttachmentPropsMap }: { value: any, onChange: (v: any) => void, onClose: () => void, onPreview: (url: string, allUrls?: {url: string, annotations?: any[]}[], onUpdate?: (items: any[]) => void) => void, globalAttachmentPropsMap?: Map<string, any> }) {
   let fileItems: any[] = [];
   if (Array.isArray(value)) {
     fileItems = value.map((v: any) => {
-       if (typeof v === 'string') return { url: v };
-       const { mappedUrl, ...cleanV } = v;
-       return cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+       const base = typeof v === 'string' ? { url: v } : v;
+       const { mappedUrl, ...cleanV } = base;
+       const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+       const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+       return globalProps ? { ...itemObj, ...globalProps } : itemObj;
     });
   } else if (typeof value === 'string' && value.trim() !== '') {
-    fileItems = value.split(',').map(s => ({ url: s.trim() }));
+    fileItems = value.split(',').map(s => {
+       const url = s.trim();
+       const globalProps = globalAttachmentPropsMap?.get(url);
+       return globalProps ? { url, ...globalProps } : { url };
+    });
   }
 
   const ref = useClickOutside(onClose);
@@ -4903,7 +5034,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview }: { value: 
                <div 
                  className="absolute top-1 right-1 bg-black/60 text-white rounded p-1 opacity-0 group-hover/attachment:opacity-100 cursor-pointer flex items-center gap-1.5 transition-opacity"
                >
-                 <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
+                 <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(item); }} title="Copy">
                     <Copy className="w-3.5 h-3.5 hover:text-blue-300" />
                  </button>
                  <button onClick={(e) => { e.stopPropagation(); triggerDownload(path, path.split('/').pop()?.split('\\').pop() || 'download.png'); }} title="Download">
