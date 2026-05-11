@@ -617,7 +617,7 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
   if (thumbnailCache.has(pathStr)) return thumbnailCache.get(pathStr)!;
 
   const w = window as any;
-  const isElectronPath = pathStr.startsWith('/') || pathStr.match(/^[a-zA-Z]:\\/);
+  const isElectronPath = pathStr.startsWith('/') || pathStr.match(/^[a-zA-Z]:\\/) || pathStr.startsWith('\\\\');
 
   if (isElectronPath && w.electronAPI && w.electronAPI.getThumbnail) {
     try {
@@ -1554,7 +1554,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
                  <div className="flex flex-wrap gap-4">
                      {displayImages.map((img, idx) => {
                          const path = img.url;
-                         let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
+                         let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
                          const infoTexts = displayFieldIds.map(id => {
                              const f = data.fields.find((f: any) => f.id === id);
                              const val = img.record[id];
@@ -1576,7 +1576,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
                                              if (items.length > 0) {
                                                  const u = typeof items[0] === 'string' ? items[0] : items[0].url;
                                                  if (u) {
-                                                     const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) ? `file://${u}` : u);
+                                                     const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
                                                      refUrls.push(mappedU);
                                                  }
                                              }
@@ -1709,7 +1709,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       let parsedItems = allItems.map(it => typeof it === 'string' ? { url: it } : { ...it });
       parsedItems = parsedItems.map(it => {
           const itemUrl = it.url;
-          const mappedUrl = fullImageBlobCache.get(itemUrl) || ((itemUrl.startsWith('/') || itemUrl.match(/^[a-zA-Z]:\\/)) ? `file://${itemUrl}` : itemUrl);
+          const mappedUrl = fullImageBlobCache.get(itemUrl) || ((itemUrl.startsWith('/') || itemUrl.match(/^[a-zA-Z]:\\/) || itemUrl.startsWith('\\\\')) ? `file://${itemUrl}` : itemUrl);
           it.mappedUrl = it.mappedUrl || mappedUrl;
           
           if (!it.refUrls && refFieldIds.length > 0) {
@@ -1747,7 +1747,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                                items.forEach((curIt: any) => {
                                    const u = typeof curIt === 'string' ? curIt : curIt.url;
                                    if (u) {
-                                       const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) ? `file://${u}` : u);
+                                       const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
                                        refUrls.push(mappedU as string);
                                    }
                                });
@@ -4589,14 +4589,24 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
             autoFocus
             type="number"
             className="w-full h-full px-2 outline-none bg-white text-right absolute z-30 shadow-[0_4px_6px_-1px_rgb(0,0,0,0.1),0_2px_4px_-2px_rgb(0,0,0,0.1)] border-none ring-[1.5px] ring-blue-500 ring-inset"
-            defaultValue={value}
-            onBlur={(e) => {
+            value={value !== null && value !== undefined ? value : ''}
+            onChange={(e) => {
               const val = e.target.value === '' ? null : Number(e.target.value);
               onChange(val);
             }}
+            onBlur={(e) => {
+              const val = e.target.value === '' ? null : Number(e.target.value);
+              onChange(val);
+              setIsEditingMode(false);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
+                e.preventDefault();
+                const val = (e.target as HTMLInputElement).value === '' ? null : Number((e.target as HTMLInputElement).value);
+                onChange(val);
                 setIsEditingMode(false);
+                onActivateNextRow();
+                e.stopPropagation();
               } else if (e.key === 'Escape') {
                 setIsEditingMode(false);
                 e.stopPropagation();
@@ -4612,8 +4622,24 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
             autoFocus
             type="date"
             className="w-full h-full px-2 outline-none bg-white absolute z-30 shadow-[0_4px_6px_-1px_rgb(0,0,0,0.1),0_2px_4px_-2px_rgb(0,0,0,0.1)] border-none ring-[1.5px] ring-blue-500 ring-inset"
-            defaultValue={value || ''}
-            onBlur={(e) => onChange(e.target.value)}
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value)}
+            onBlur={(e) => {
+              onChange(e.target.value);
+              setIsEditingMode(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                onChange((e.target as HTMLInputElement).value);
+                setIsEditingMode(false);
+                onActivateNextRow();
+                e.stopPropagation();
+              } else if (e.key === 'Escape') {
+                setIsEditingMode(false);
+                e.stopPropagation();
+              }
+            }}
             style={{ left: -1, right: -1, top: -1, height: 'calc(100% + 2px)' }}
           />
         );
@@ -4692,7 +4718,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                <div className={`flex items-center gap-1 overflow-hidden w-full ${containerHeightClass}`}>
                   {fileItems.map((item, i) => {
                     const path = item.url;
-                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
+                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
                     const pendingCount = item.annotations?.filter((a: any) => a.status === 'pending').length || 0;
                     const resolvedCount = item.annotations?.filter((a: any) => a.status === 'resolved').length || 0;
                     const approvedCount = item.annotations?.filter((a: any) => a.status === 'approved').length || 0;
@@ -4781,7 +4807,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                <div className={`flex items-center gap-1 overflow-hidden w-full ${containerHeightClass}`}>
                   {fileItems.map((item, i) => {
                     const path = item.url;
-                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
+                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
                     const pendingCount = item.annotations?.filter((a: any) => a.status === 'pending').length || 0;
                     const resolvedCount = item.annotations?.filter((a: any) => a.status === 'resolved').length || 0;
                     const approvedCount = item.annotations?.filter((a: any) => a.status === 'approved').length || 0;
@@ -5101,7 +5127,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                const fileObjects = files.map((file: any) => {
                  const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
                  getOrGenerateThumbnail(pathStr, file);
-                 if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/)) {
+                 if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/) && !pathStr.startsWith('\\\\')) {
                    fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
                  }
                  return { url: pathStr };
@@ -5383,7 +5409,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
       const newItems = files.map((file: any) => {
         const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
         getOrGenerateThumbnail(pathStr, file);
-        if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/)) {
+        if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/) && !pathStr.startsWith('\\\\')) {
           fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
         }
         return { url: pathStr };
@@ -5426,7 +5452,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
           // Add support for window.electronAPI.getPathForFile if exposed in preload
           const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
           getOrGenerateThumbnail(pathStr, file);
-          if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/)) {
+          if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/) && !pathStr.startsWith('\\\\')) {
             fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
           }
           return { url: pathStr };
@@ -5454,7 +5480,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
       <div className="flex flex-wrap gap-2 w-[340px]">
         {fileItems.map((item, index) => {
            let path = item.url;
-           let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) ? `file://${path}` : path);
+           let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
            
            return (
              <div 
@@ -5479,7 +5505,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                onDrop={(e) => handleDrop(e, index)}
                onDragEnd={() => { setDraggedImgIndex(null); setDragOverImgIndex(null); }}
                onClick={() => onPreview(fullUrl, fileItems.map(p => {
-                 const mappedUrl = fullImageBlobCache.get(p.url) || (p.url.startsWith('/') || p.url.match(/^[a-zA-Z]:\\/) ? `file://${p.url}` : p.url);
+                 const mappedUrl = fullImageBlobCache.get(p.url) || (p.url.startsWith('/') || p.url.match(/^[a-zA-Z]:\\/) || p.url.startsWith('\\\\') ? `file://${p.url}` : p.url);
                  return { ...p, mappedUrl };
                }), (newItems) => onChange(newItems))}
              >

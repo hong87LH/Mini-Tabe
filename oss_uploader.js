@@ -7,11 +7,39 @@ import OSS from 'ali-oss';
 import sharp from 'sharp';
 import dotenv from 'dotenv';
 
+function safeFileURLToPath(urlStr) {
+  try {
+     return fileURLToPath(urlStr);
+  } catch(e) {
+     if (typeof urlStr === 'string' && urlStr.startsWith('file://')) {
+        let p = decodeURIComponent(urlStr.substring(7));
+        if (process.platform === 'win32') {
+            if (p.startsWith('/')) {
+                // handle /C:/... -> C:/
+                if (p.length > 2 && p[2] === ':') {
+                   p = p.substring(1);
+                } else if (!p.startsWith('//')) {
+                   // if it's a UNC path that was prefixed with /, make it //
+                   p = '/' + p;
+                }
+            } else if (!p.match(/^[a-zA-Z]:/) && !p.startsWith('\\\\')) {
+                // if it doesn't start with / or \\ and isn't a drive letter, it's likely a UNC path missing //
+                p = '//' + p;
+            }
+            // Ensure backslashes for Windows
+            p = p.replace(/\//g, '\\');
+        }
+        return p;
+     }
+     return urlStr;
+  }
+}
+
 // ============================================================
 //  路径与常量
 // ============================================================
 
-const __filename = fileURLToPath(import.meta.url);
+const __filename = safeFileURLToPath(import.meta.url);
 const SCRIPT_DIR = path.dirname(__filename);
 
 // 加载 .env（优先脚本目录，回退 CWD）
@@ -316,17 +344,7 @@ class OssImageUploader {
     const { force = false, threshold = DHASH_THRESHOLD } = options;
     let absPath = filePath;
     if (filePath.startsWith('file://')) {
-      try {
-        absPath = fileURLToPath(filePath);
-      } catch (err) {
-        absPath = decodeURIComponent(filePath.replace(/^file:\/\//i, ''));
-        if (absPath.startsWith('/')) {
-          absPath = absPath.substring(1);
-        }
-        if (!/^[a-zA-Z]:/.test(absPath) && !absPath.startsWith('\\\\') && !absPath.startsWith('/')) {
-          absPath = '\\\\' + absPath;
-        }
-      }
+      absPath = safeFileURLToPath(filePath);
     } else if (filePath.startsWith('local-img://')) {
       absPath = decodeURIComponent(filePath.replace('local-img://', ''));
     } else {

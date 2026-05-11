@@ -6,7 +6,35 @@ import isDev from 'electron-is-dev';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
+function safeFileURLToPath(urlStr) {
+  try {
+     return fileURLToPath(urlStr);
+  } catch(e) {
+     if (typeof urlStr === 'string' && urlStr.startsWith('file://')) {
+        let p = decodeURIComponent(urlStr.substring(7));
+        if (process.platform === 'win32') {
+            if (p.startsWith('/')) {
+                // handle /C:/... -> C:/
+                if (p.length > 2 && p[2] === ':') {
+                   p = p.substring(1);
+                } else if (!p.startsWith('//')) {
+                   // if it's a UNC path that was prefixed with /, make it //
+                   p = '/' + p;
+                }
+            } else if (!p.match(/^[a-zA-Z]:/) && !p.startsWith('\\\\')) {
+                // if it doesn't start with / or \\ and isn't a drive letter, it's likely a UNC path missing //
+                p = '//' + p;
+            }
+            // Ensure backslashes for Windows
+            p = p.replace(/\//g, '\\');
+        }
+        return p;
+     }
+     return urlStr;
+  }
+}
+
+const __filename = safeFileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ▼▼▼ 核心算法：检查重名，如果存在则自动增加后缀 -1, -2 ▼▼▼
@@ -232,7 +260,7 @@ app.whenReady().then(() => {
          let out = [];
          for (const itemUrl of mediaList) {
             let actualUrl = itemUrl;
-            if (actualUrl.startsWith('file://')) actualUrl = fileURLToPath(actualUrl);
+            if (actualUrl.startsWith('file://')) actualUrl = safeFileURLToPath(actualUrl);
             else if (actualUrl.startsWith('local-img://')) actualUrl = decodeURIComponent(actualUrl.replace('local-img://', ''));
             else if (actualUrl.startsWith('local-video://')) actualUrl = decodeURIComponent(actualUrl.replace('local-video://', ''));
 
@@ -351,7 +379,7 @@ app.whenReady().then(() => {
   ipcMain.handle('read-local-file', async (event, filePath, options = {}) => {
     try {
       if (filePath.startsWith('file://')) {
-        filePath = fileURLToPath(filePath);
+        filePath = safeFileURLToPath(filePath);
       } else if (filePath.startsWith('local-img://')) {
         filePath = decodeURIComponent(filePath.replace('local-img://', ''));
       }
@@ -436,7 +464,7 @@ app.whenReady().then(() => {
         const buffer = Buffer.from(base64Data, 'base64');
         await fs.promises.writeFile(finalTargetPath, buffer);
       } else if (url.startsWith('file://')) {
-        let srcPath = fileURLToPath(url);
+        let srcPath = safeFileURLToPath(url);
         await fs.promises.copyFile(srcPath, finalTargetPath);
       } else if (url.startsWith('local-img://')) {
         let srcPath = decodeURIComponent(url.replace('local-img://', ''));
