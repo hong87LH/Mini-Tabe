@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
-import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Crop, Expand } from 'lucide-react';
+import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Crop, Expand, Palette } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -165,14 +165,25 @@ const ZoomableImage = ({
     const img = imgRef.current;
     const unscaledW = (img.getBoundingClientRect().width || 1) / scale;
     const unscaledH = (img.getBoundingClientRect().height || 1) / scale;
-    const maskW = ratio <= 1 ? 650 * ratio : 650;
-    const maskH = ratio > 1 ? 650 / ratio : 650;
+    const maskW = ratio <= 1 ? 845 * ratio : 845;
+    const maskH = ratio > 1 ? 845 / ratio : 845;
 
     const minScale = Math.min(maskW / unscaledW, maskH / unscaledH);
+    const scaledW = unscaledW * minScale;
     const scaledH = unscaledH * minScale;
     
     setScale(minScale);
-    setPos({ x: 0, y: (scaledH - maskH) / 2 });
+    
+    // Check which way we are expanding
+    if (Math.abs(scaledW - maskW) < 1) {
+       // Expanding vertically (height is smaller than mask)
+       // Snap to TOP
+       setPos({ x: 0, y: (scaledH - maskH) / 2 });
+    } else {
+       // Expanding horizontally (width is smaller than mask)
+       // Snap to LEFT
+       setPos({ x: (scaledW - maskW) / 2, y: 0 });
+    }
   };
 
   const handleCropRatioChange = (ratio: number) => {
@@ -194,8 +205,8 @@ const ZoomableImage = ({
         const img = imgRef.current;
         const unscaledW = (img.getBoundingClientRect().width || 1) / scale;
         const unscaledH = (img.getBoundingClientRect().height || 1) / scale;
-        const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
-        const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+        const maskW = cropRatio <= 1 ? 845 * cropRatio : 845;
+        const maskH = cropRatio > 1 ? 845 / cropRatio : 845;
         const minScale = Math.max(maskW / unscaledW, maskH / unscaledH);
         
         let newScale = scale;
@@ -393,8 +404,8 @@ const ZoomableImage = ({
                 const imgRect = imgRef.current.getBoundingClientRect();
                 const unscaledW = imgRect.width / s;
                 const unscaledH = imgRect.height / s;
-                const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
-                const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+                const maskW = cropRatio <= 1 ? 845 * cropRatio : 845;
+                const maskH = cropRatio > 1 ? 845 / cropRatio : 845;
                 const minScale = Math.max(maskW / unscaledW, maskH / unscaledH);
                 if (newScale < minScale) {
                    newScale = minScale;
@@ -411,14 +422,19 @@ const ZoomableImage = ({
                   const unscaledH = imgRect.height / s;
                   const scaledW = unscaledW * newScale;
                   const scaledH = unscaledH * newScale;
-                  const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
-                  const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+                  const maskW = cropRatio <= 1 ? 845 * cropRatio : 845;
+                  const maskH = cropRatio > 1 ? 845 / cropRatio : 845;
                   
                   if (!isOutpaintMode) {
                       const maxPosX = Math.max(0, (scaledW - maskW) / 2);
                       const maxPosY = Math.max(0, (scaledH - maskH) / 2);
                       newX = Math.max(-maxPosX, Math.min(maxPosX, newX));
                       newY = Math.max(-maxPosY, Math.min(maxPosY, newY));
+                  } else {
+                      const limitX = Math.abs(scaledW - maskW) / 2;
+                      const limitY = Math.abs(scaledH - maskH) / 2;
+                      newX = Math.max(-limitX, Math.min(limitX, newX));
+                      newY = Math.max(-limitY, Math.min(limitY, newY));
                   }
               }
               return { x: newX, y: newY };
@@ -437,8 +453,8 @@ const ZoomableImage = ({
             <div 
                className="border border-white border-dashed relative pointer-events-none" 
                style={{ 
-                  width: cropRatio <= 1 ? 650 * cropRatio : 650, 
-                  height: cropRatio > 1 ? 650 / cropRatio : 650, 
+                  width: cropRatio <= 1 ? 845 * cropRatio : 845, 
+                  height: cropRatio > 1 ? 845 / cropRatio : 845, 
                   boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)' 
                }}
             >
@@ -468,8 +484,8 @@ const ZoomableImage = ({
                      const naturalH = imgRef.current?.naturalHeight || 1;
                      const unscaledW = (rect?.width || 1) / scale;
                      const unscaledH = (rect?.height || 1) / scale;
-                     const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
-                     const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+                     const maskW = cropRatio <= 1 ? 845 * cropRatio : 845;
+                     const maskH = cropRatio > 1 ? 845 / cropRatio : 845;
                      onUpdateItem?.({ ...item, cropData: { 
                         scale, x: pos.x, y: pos.y, ratio: cropRatio, 
                         imgW: unscaledW, imgH: unscaledH, 
@@ -580,8 +596,8 @@ const ZoomableImage = ({
                  const unscaledH = rect.height / scale;
                  const scaledW = unscaledW * scale;
                  const scaledH = unscaledH * scale;
-                 const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
-                 const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+                 const maskW = cropRatio <= 1 ? 845 * cropRatio : 845;
+                 const maskH = cropRatio > 1 ? 845 / cropRatio : 845;
                  
                  if (!isOutpaintMode) {
                      const maxPosX = Math.max(0, (scaledW - maskW) / 2);
@@ -614,6 +630,12 @@ const ZoomableImage = ({
                          newX = pos.x; // freeze both until intent determined
                          newY = pos.y;
                      }
+                     
+                     // Keep bounded within the mask even while outpainting!
+                     const limitX = Math.abs(scaledW - maskW) / 2;
+                     const limitY = Math.abs(scaledH - maskH) / 2;
+                     newX = Math.max(-limitX, Math.min(limitX, newX));
+                     newY = Math.max(-limitY, Math.min(limitY, newY));
                  }
               }
               setPos({ x: newX, y: newY }); 
@@ -993,6 +1015,7 @@ interface GridProps {
   onUpdateGlobalAttachment?: (url: string, updatedProps: any) => void;
   onUpdateRecord: (recordId: string, fieldId: string, value: any) => void;
   onUpdateRecordsBatch?: (updates: { recordId: string, fieldId: string, value: any }[]) => void;
+  onPasteRecordsBatch?: (updates: { recordId: string, fieldId: string, value: any }[], newRecords: any[]) => void;
   onDeleteRecords?: (recordIds: string[]) => void;
   onAddRecord: () => void;
   onInsertRecords?: (index: number, count: number) => void;
@@ -1880,7 +1903,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
 const scrollCache = new Map<string, number>();
 
-export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange }: GridProps) {
+export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const globalAttachmentPropsMap = useMemo(() => {
@@ -2188,6 +2211,8 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
       const minC = Math.min(...selectedArr.map(x => x.c));
 
       const pasteCells: { rIdx: number, cIdx: number, val: any }[] = [];
+      let newRecords: any[] = [];
+      let neededRows = 0;
 
       if (selectedArr.length > 1) {
           // Map to multiple selected cells with tiling relative to minR, minC
@@ -2196,10 +2221,14 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              pasteCells.push({ rIdx: r, cIdx: c, val });
           }
       } else {
+          neededRows = Math.max(0, minR + rows.length - data.records.length);
+          if (neededRows > 0) {
+              newRecords = Array.from({ length: neededRows }, (_, i) => ({ id: `rec_${Date.now()}_${i}` }));
+          }
+          
           // Map to a block expanding right and down
           for (let i = 0; i < rows.length; i++) {
              const rIdx = minR + i;
-             if (rIdx >= data.records.length) break;
              for (let j = 0; j < rows[i].length; j++) {
                 const cIdx = minC + j;
                 if (cIdx >= visibleFields.length) break;
@@ -2208,12 +2237,15 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           }
       }
 
+      const allRecords = [...data.records, ...newRecords];
       const batchUpdates = [];
 
       for (const { rIdx, cIdx, val: rawVal } of pasteCells) {
           if (rawVal === undefined) continue;
           
-          const record = data.records[rIdx];
+          const record = allRecords[rIdx];
+          if (!record) continue; // safety check
+          
           const field = visibleFields[cIdx];
           let val = rawVal;
           
@@ -2268,7 +2300,9 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
          setCutBox(null);
       }
       
-      if (onUpdateRecordsBatch && batchUpdates.length > 0) {
+      if (neededRows > 0 && onPasteRecordsBatch) {
+          onPasteRecordsBatch(batchUpdates, newRecords);
+      } else if (onUpdateRecordsBatch && batchUpdates.length > 0) {
           onUpdateRecordsBatch(batchUpdates);
       } else {
           batchUpdates.forEach(u => onUpdateRecord(u.recordId, u.fieldId, u.value));
@@ -4757,6 +4791,7 @@ interface CellProps {
 
 function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh', globalAttachmentPropsMap }: CellProps) {
   const value = record[field.id];
+  const isElectron = !!((window as any).electronAPI || (window as any).electron);
   
   const [isEditingMode, setIsEditingMode] = useState(false);
 
@@ -5111,7 +5146,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           }}
                         />
                         {item.cropData && (
-                          <div className="absolute top-0.5 right-0.5 bg-blue-500/80 text-white rounded-[2px] p-[2px] text-[10px] flex items-center justify-center pointer-events-none drop-shadow-md">
+                          <div className="absolute top-0.5 right-0.5 bg-black/40 backdrop-blur-sm text-white/90 rounded-[2px] p-[2px] text-[10px] flex items-center justify-center pointer-events-none">
                             {item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
                           </div>
                         )}
@@ -5122,12 +5157,29 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                         )}
                         {(pendingCount > 0 || resolvedCount > 0 || approvedCount > 0) && (
                           <div className="absolute -top-1 -right-1 flex gap-0.5 z-10 pointer-events-none drop-shadow-md">
-                             {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
-                             {resolvedCount > 0 && <span className="bg-yellow-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
-                             {approvedCount > 0 && <span className="bg-green-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
+                             {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
+                             {resolvedCount > 0 && <span className="bg-yellow-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
+                             {approvedCount > 0 && <span className="bg-green-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
+                          </div>
+                        )}
+                        {item.rating > 0 && (
+                          <div className="absolute bottom-0 left-0 flex items-center gap-0.5 z-10 pointer-events-none bg-black/40 backdrop-blur-sm rounded-tr px-1 py-0.5">
+                             <Star className="w-2.5 h-2.5 fill-yellow-400 text-yellow-400" />
+                             <span className="text-[10px] text-white font-bold leading-none">{item.rating}</span>
                           </div>
                         )}
                         <div className="absolute top-0.5 right-0.5 bg-white/80 text-gray-700 rounded p-0.5 opacity-0 group-hover/img-item:opacity-100 flex items-center gap-1 shadow-sm z-10 transition-opacity">
+                          {isElectron && (
+                             <button onClick={(e) => {
+                               e.stopPropagation();
+                               const psPath = localStorage.getItem('bitable_ps_path');
+                               const localPath = path.startsWith('file://') ? decodeURIComponent(path.replace('file://', '')) :
+                                                path.startsWith('local-img://') ? decodeURIComponent(path.replace('local-img://', '')) : path;
+                               (window as any).electronAPI?.openInPhotoshop?.(localPath, psPath);
+                             }} title="Edit in Photoshop">
+                                <Palette className="w-3.5 h-3.5 hover:text-indigo-500 text-gray-500" />
+                             </button>
+                          )}
                           <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
                              <Copy className="w-3.5 h-3.5 hover:text-blue-500" />
                           </button>
@@ -5205,7 +5257,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           }}
                         />
                         {item.cropData && (
-                          <div className="absolute top-0.5 right-0.5 bg-blue-500/80 text-white rounded-[2px] p-[2px] text-[10px] flex items-center justify-center pointer-events-none drop-shadow-md">
+                          <div className="absolute top-0.5 right-0.5 bg-black/40 backdrop-blur-sm text-white/90 rounded-[2px] p-[2px] text-[10px] flex items-center justify-center pointer-events-none">
                             {item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
                           </div>
                         )}
@@ -5216,12 +5268,29 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                         )}
                         {(pendingCount > 0 || resolvedCount > 0 || approvedCount > 0) && (
                           <div className="absolute -top-1 -right-1 flex gap-0.5 z-10 pointer-events-none drop-shadow-md">
-                             {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
-                             {resolvedCount > 0 && <span className="bg-yellow-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
-                             {approvedCount > 0 && <span className="bg-green-500 rounded-full w-2.5 h-2.5 shadow-sm border border-white"></span>}
+                             {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
+                             {resolvedCount > 0 && <span className="bg-yellow-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
+                             {approvedCount > 0 && <span className="bg-green-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
+                          </div>
+                        )}
+                        {item.rating > 0 && (
+                          <div className="absolute bottom-0 left-0 flex items-center gap-0.5 z-10 pointer-events-none bg-black/40 backdrop-blur-sm rounded-tr px-1 py-0.5">
+                             <Star className="w-2.5 h-2.5 fill-yellow-400 text-yellow-400" />
+                             <span className="text-[10px] text-white font-bold leading-none">{item.rating}</span>
                           </div>
                         )}
                         <div className="absolute top-0.5 right-0.5 bg-white/80 text-gray-700 rounded p-0.5 opacity-0 group-hover/img-item:opacity-100 flex items-center gap-1 shadow-sm z-10 transition-opacity">
+                          {isElectron && (
+                             <button onClick={(e) => {
+                               e.stopPropagation();
+                               const psPath = localStorage.getItem('bitable_ps_path');
+                               const localPath = path.startsWith('file://') ? decodeURIComponent(path.replace('file://', '')) :
+                                                path.startsWith('local-img://') ? decodeURIComponent(path.replace('local-img://', '')) : path;
+                               (window as any).electronAPI?.openInPhotoshop?.(localPath, psPath);
+                             }} title="Edit in Photoshop">
+                                <Palette className="w-3.5 h-3.5 hover:text-indigo-500 text-gray-500" />
+                             </button>
+                          )}
                           <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
                              <Copy className="w-3.5 h-3.5 hover:text-blue-500" />
                           </button>
@@ -5867,11 +5936,15 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
            let path = item.url;
            let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
            
+           const pendingCount = item.annotations?.filter((a: any) => a.status === 'pending').length || 0;
+           const resolvedCount = item.annotations?.filter((a: any) => a.status === 'resolved').length || 0;
+           const approvedCount = item.annotations?.filter((a: any) => a.status === 'approved').length || 0;
+
            return (
              <div 
                key={`${path}_${index}`} 
                className={cn(
-                 "relative group/attachment cursor-grab active:cursor-grabbing w-[108px] h-[108px] border rounded bg-gray-50 flex items-center justify-center overflow-hidden",
+                 "relative group/attachment cursor-grab active:cursor-grabbing w-[108px] h-[108px] border rounded bg-gray-50 flex items-center justify-center",
                  draggedImgIndex === index ? "opacity-30" : "",
                  dragOverImgIndex === index ? "ring-2 ring-blue-500" : "border-gray-200"
                )}
@@ -5894,9 +5967,22 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                  return { ...p, mappedUrl };
                }), (newItems) => onChange(newItems))}
              >
-               <ThumbnailImage path={path} className="w-full h-full object-cover cursor-pointer" alt="attachment" />
+               <ThumbnailImage path={path} className="w-full h-full object-cover cursor-pointer rounded" alt="attachment" />
+                {(pendingCount > 0 || resolvedCount > 0 || approvedCount > 0) && (
+                  <div className="absolute -top-1 -right-1 flex gap-0.5 z-20 pointer-events-none drop-shadow-md">
+                     {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
+                     {resolvedCount > 0 && <span className="bg-yellow-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
+                     {approvedCount > 0 && <span className="bg-green-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
+                  </div>
+                )}
+                {item.rating > 0 && (
+                  <div className="absolute bottom-0 left-0 flex items-center gap-0.5 z-20 pointer-events-none bg-black/40 backdrop-blur-sm rounded-tr px-1 py-0.5">
+                     <Star className="w-2.5 h-2.5 fill-yellow-400 text-yellow-400" />
+                     <span className="text-[10px] text-white font-bold leading-none">{item.rating}</span>
+                  </div>
+                )}
                {item.cropData && (
-                 <div className="absolute top-0.5 right-0.5 bg-blue-500/80 text-white rounded-[2px] p-[2px] text-[10px] flex items-center justify-center pointer-events-none">
+                 <div className="absolute top-0.5 right-0.5 bg-black/40 backdrop-blur-sm text-white/90 rounded-[2px] p-[2px] text-[10px] flex items-center justify-center pointer-events-none">
                    {item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
                  </div>
                )}

@@ -3,6 +3,7 @@ import { Plus, Trash2, ChevronDown, ChevronUp, Database, Server, Image as ImageI
 
 export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
+  const [psPath, setPsPath] = useState(localStorage.getItem('bitable_ps_path') || '');
 
   const toggleExpand = (id: string) => {
     setExpandedSections(prev => ({ ...prev, [id]: !prev[id] }));
@@ -326,6 +327,30 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
             className="col-span-2 w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-400 font-mono text-gray-600"
             value={ossConfig.domain}
             onChange={e => updateOss({ domain: e.target.value })}
+          />
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
+        <h3 className="text-sm font-semibold text-gray-800 mb-4 flex items-center">
+          <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded mr-2 uppercase text-[10px]">{lang === 'en' ? 'App' : '应用'}</span>
+          {lang === 'en' ? 'Local App Settings' : '本地应用设置'}
+        </h3>
+        <div className="grid grid-cols-1 gap-3">
+          <input 
+            type="text" 
+            placeholder={lang === 'en' ? 'Local Photoshop Path (e.g. C:\\Program Files\\...\\Photoshop.exe)' : '本地 Photoshop 路径 (例如 C:\\Program Files\\...\\Photoshop.exe)'} 
+            className="w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-mono text-gray-600"
+            value={psPath}
+            onChange={(e) => {
+              const val = e.target.value;
+              setPsPath(val);
+              if (val) {
+                 localStorage.setItem('bitable_ps_path', val);
+              } else {
+                 localStorage.removeItem('bitable_ps_path');
+              }
+            }}
           />
         </div>
       </div>

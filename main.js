@@ -1,10 +1,11 @@
 // main.js （ES Module 版本）
 process.noDeprecation = true; // 忽略 Node.js 废弃警告 (如 punycode)
-import { app, BrowserWindow, protocol, ipcMain, nativeImage, dialog } from 'electron';
+import { app, BrowserWindow, protocol, ipcMain, nativeImage, dialog, shell } from 'electron';
 import path from 'path';
 import isDev from 'electron-is-dev';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
 
 function safeFileURLToPath(urlStr) {
   try {
@@ -487,6 +488,46 @@ app.whenReady().then(() => {
     }
   });
   // ▲▲▲ ▲▲▲
+
+  ipcMain.handle('open-in-photoshop', async (event, filePath, psPath) => {
+    try {
+      if (!fs.existsSync(filePath)) return false;
+      let command = '';
+      if (process.platform === 'darwin') {
+         if (psPath && fs.existsSync(psPath)) {
+            command = `open -a "${psPath}" "${filePath}"`;
+         } else {
+             await shell.openPath(filePath);
+             return true;
+         }
+      } else if (process.platform === 'win32') {
+         if (psPath && fs.existsSync(psPath)) {
+            command = `"${psPath}" "${filePath}"`;
+         } else {
+             // Let the shell open it or somehow find PS. Let's just open without specific app if not provided
+            await shell.openPath(filePath);
+            return true;
+         }
+      } else {
+         await shell.openPath(filePath);
+         return true;
+      }
+      
+      return new Promise((resolve, reject) => {
+         exec(command, (error) => {
+             if (error) {
+                 console.error('Error opening with specified app:', error);
+                 resolve(false);
+             } else {
+                 resolve(true);
+             }
+         });
+      });
+    } catch (e) {
+      console.error('Failed to open in Photoshop:', e);
+      return false;
+    }
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

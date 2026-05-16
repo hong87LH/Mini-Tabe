@@ -1028,6 +1028,27 @@ export default function App() {
     });
   };
 
+  const handlePasteRecordsBatch = (updates: { recordId: string, fieldId: string, value: any }[], newRecords: any[]) => {
+    setData((prev: GridData) => {
+      let records = [...prev.records, ...newRecords];
+      const recordsToUpdate = new Map<string, any>();
+      for (const update of updates) {
+        if (!recordsToUpdate.has(update.recordId)) {
+            recordsToUpdate.set(update.recordId, { [update.fieldId]: update.value });
+        } else {
+            recordsToUpdate.get(update.recordId)[update.fieldId] = update.value;
+        }
+      }
+      records = records.map(rec => {
+        if (recordsToUpdate.has(rec.id)) {
+            return { ...rec, ...recordsToUpdate.get(rec.id) };
+        }
+        return rec;
+      });
+      return { ...prev, records };
+    });
+  };
+
   const handleDeleteRecords = (recordIds: string[]) => {
     setData(prev => ({
       ...prev,
@@ -1261,7 +1282,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'bitable_data.json';
+    a.download = `${activeTableName}.json`;
     a.click();
     setShowExportMenu(false);
   };
@@ -1400,7 +1421,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'bitable_data.csv';
+    a.download = `${activeTableName}.csv`;
     a.click();
     setShowExportMenu(false);
   };
@@ -2243,6 +2264,7 @@ export default function App() {
             }}
             onUpdateRecord={handleUpdateRecord}
             onUpdateRecordsBatch={handleUpdateRecordsBatch}
+            onPasteRecordsBatch={handlePasteRecordsBatch}
             onAddRecord={handleAddRecord}
             onInsertRecords={handleInsertRecords}
             onDeleteRecords={handleDeleteRecords}
