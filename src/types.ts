@@ -37,6 +37,9 @@ export interface Field {
     modelTemplate?: string;
     sourceImageTemplate?: string;
     sourceImageFields?: string[]; // Legacy
+    isRetouchMode?: boolean;
+    saveToSourceFolder?: boolean;
+    scaleToSource?: boolean;
   };
   aiVideoConfig?: {
     duration?: string;

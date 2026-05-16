@@ -41,7 +41,13 @@ The engine dynamically computes fields whenever a record changes.
 ### 4.3 Animation & Splash Screen
 The initial splash screen uses SVG drawing animations (`stroke-dasharray/offset`) combined with CSS `fractalNoise` displacement filters to create a rough, hand-drawn paper look. React detects when the component mounts and dispatches `window.removeInitialSplash()` to unmount the CSS layer smoothly once the JS engine is fully initialized.
 
-### 4.4 Desktop & Electron Integration
+### 4.4 Image Annotation, Cropping, & Outpainting Engine
+The platform includes an advanced spatial rendering layer within `Grid.tsx` for complex image manipulation:
+- **Review Markers**: Converts continuous `X/Y` coordinate clicks into visual markers overlaying the `ZoomableImage` component. Review threads map back to record IDs.
+- **Cropping Mathematics**: Standard cropping relies on CSS mask boundaries. The engine calculates precise drag-and-drop deltas clamped strictly against image bounds (`maxPosX/Y`), mathematically refusing drags that would expose negative space. The engine translates visible crops onto a temporary HTML `<canvas>` to generate final Base64 representations.
+- **Outpaint Bypass**: When `isOutpaintMode` is toggled true, the clamping logic is deliberately removed. The engine permits the drag vectors to move beyond the image's coordinate limits, drawing explicit black fill (`ctx.fillRect(0, 0, targetW, targetH)`) over the newly exposed canvas area. This prepares composite negative-space templates directly injectable into an upstream AI-Generative Stable Diffusion model.
+
+### 4.5 Desktop & Electron Integration
 If embedded within an Electron environment (such as `main.js` execution):
 - **Local File System Parsing via Direct Paths**: The image processing engine effortlessly bridges the gap between web URLs and absolute system paths. Paste an absolute path (`C:\` / `/Users/`) and the UI renders it as a `file://` protocol dynamically without demanding traditional file blob uploads.
 - **IPC File Downloader**: Instead of relying on jarring HTML file-save dialogues, the system integrates seamlessly with `electronAPI.downloadFile` using IPC. This allows background downloading and continuous caching integrations without interrupting the user.

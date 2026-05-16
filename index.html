@@ -2,12 +2,13 @@
 <html lang="zh-CN">
   <head>
     <script>
-      // Fix for 'Cannot set property fetch of #<Window> which has only a getter' in some environments
+      // Fix for 'Cannot set property fetch of #<Window> which has only a getter'
       try {
-        const _fetch = window.fetch;
+        const _originalFetch = window.fetch;
+        let _customFetch = _originalFetch;
         Object.defineProperty(window, 'fetch', {
-          value: _fetch,
-          writable: true,
+          get: function() { return _customFetch; },
+          set: function(val) { _customFetch = val; },
           configurable: true,
           enumerable: true
         });

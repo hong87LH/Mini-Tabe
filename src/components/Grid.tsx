@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
-import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play } from 'lucide-react';
+import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Crop, Expand } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -116,8 +116,11 @@ const ZoomableImage = ({
   // Defaults to true if launched from gallery (Review Mode), false if from table (Normal Default View).
   const [isRefMode, setIsRefMode] = useState(sourceViewMode === 'gallery');
 
-  const [scale, setScale] = useState(1);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [scale, setScale] = useState(item.cropData?.scale || 1);
+  const [pos, setPos] = useState({ x: item.cropData?.x || 0, y: item.cropData?.y || 0 });
+  const [isCropMode, setIsCropMode] = useState(!!item.cropData);
+  const [isOutpaintMode, setIsOutpaintMode] = useState(item.cropData?.isOutpaint || false);
+  const [cropRatio, setCropRatio] = useState<number>(item.cropData?.ratio || 1);
   
   const [refScales, setRefScales] = useState<number[]>([1, 1]);
   const [refPos, setRefPos] = useState<{x: number, y: number}[]>([{x: 0, y: 0}, {x: 0, y: 0}]);
@@ -128,6 +131,8 @@ const ZoomableImage = ({
 
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [dragInitialMouse, setDragInitialMouse] = useState({ x: 0, y: 0 });
+  const [dragIntent, setDragIntent] = useState<'none' | 'vertical' | 'horizontal' | 'free'>('none');
   const [draggedAnnId, setDraggedAnnId] = useState<string | null>(null);
   const [annotationViewState, setAnnotationViewState] = useState<0 | 1 | 2>(2); // 0: hidden, 1: visible, 2: visible with capsules
   
@@ -136,6 +141,11 @@ const ZoomableImage = ({
   const [newComment, setNewComment] = useState("");
   
   const imgRef = useRef<HTMLImageElement>(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+
+  useEffect(() => {
+    setImageLoaded(false);
+  }, [src]);
 
   useEffect(() => {
     setAnnotations(item.annotations || []);
@@ -143,7 +153,68 @@ const ZoomableImage = ({
 
   useEffect(() => {
     setActiveAnnotationId(null);
+    setScale(item.cropData?.scale || 1);
+    setPos({ x: item.cropData?.x || 0, y: item.cropData?.y || 0 });
+    setCropRatio(item.cropData?.ratio || 1);
+    setIsCropMode(!!item.cropData);
+    setIsOutpaintMode(item.cropData?.isOutpaint || false);
   }, [item.url, item.mappedUrl]);
+
+  const applyOutpaintTopStrategy = (ratio: number) => {
+    if (!imgRef.current) return;
+    const img = imgRef.current;
+    const unscaledW = (img.getBoundingClientRect().width || 1) / scale;
+    const unscaledH = (img.getBoundingClientRect().height || 1) / scale;
+    const maskW = ratio <= 1 ? 650 * ratio : 650;
+    const maskH = ratio > 1 ? 650 / ratio : 650;
+
+    const minScale = Math.min(maskW / unscaledW, maskH / unscaledH);
+    const scaledH = unscaledH * minScale;
+    
+    setScale(minScale);
+    setPos({ x: 0, y: (scaledH - maskH) / 2 });
+  };
+
+  const handleCropRatioChange = (ratio: number) => {
+      setCropRatio(ratio);
+      if (isOutpaintMode) {
+          applyOutpaintTopStrategy(ratio);
+      }
+  };
+
+  const handleOutpaintToggle = (checked: boolean) => {
+      setIsOutpaintMode(checked);
+      if (checked) {
+          applyOutpaintTopStrategy(cropRatio);
+      }
+  };
+
+  useEffect(() => {
+    if (isCropMode && !isOutpaintMode && imgRef.current && imageLoaded) {
+        const img = imgRef.current;
+        const unscaledW = (img.getBoundingClientRect().width || 1) / scale;
+        const unscaledH = (img.getBoundingClientRect().height || 1) / scale;
+        const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
+        const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+        const minScale = Math.max(maskW / unscaledW, maskH / unscaledH);
+        
+        let newScale = scale;
+        if (newScale < minScale) {
+            newScale = minScale;
+            setScale(newScale);
+        }
+        
+        const scaledW = unscaledW * newScale;
+        const scaledH = unscaledH * newScale;
+        const maxPosX = Math.max(0, (scaledW - maskW) / 2);
+        const maxPosY = Math.max(0, (scaledH - maskH) / 2);
+        
+        setPos(prev => ({
+            x: Math.max(-maxPosX, Math.min(maxPosX, prev.x)),
+            y: Math.max(-maxPosY, Math.min(maxPosY, prev.y))
+        }));
+    }
+  }, [cropRatio, isOutpaintMode, isCropMode]);
 
   const saveAnnotations = (newAnnotations: any[]) => {
     setAnnotations(newAnnotations);
@@ -300,28 +371,116 @@ const ZoomableImage = ({
           e.preventDefault();
           const s = scale;
           let newScale = s;
-          if (e.deltaY > 0) {
-             newScale = [...zoomLevels].reverse().find(l => l < s - 0.01) || zoomLevels[0];
-          } else if (e.deltaY < 0) {
-             newScale = zoomLevels.find(l => l > s + 0.01) || zoomLevels[zoomLevels.length - 1];
+          
+          if (isOutpaintMode) {
+             const step = 0.05;
+             if (e.deltaY > 0) newScale = Math.max(0.1, s - step);
+             else if (e.deltaY < 0) newScale = Math.min(10, s + step);
+          } else {
+             if (e.deltaY > 0) {
+                newScale = [...zoomLevels].reverse().find(l => l < s - 0.01) || zoomLevels[0];
+             } else if (e.deltaY < 0) {
+                newScale = zoomLevels.find(l => l > s + 0.01) || zoomLevels[zoomLevels.length - 1];
+             }
           }
+          
           if (newScale !== s) {
             const rect = e.currentTarget.getBoundingClientRect();
             const mouseX = e.clientX - rect.left - rect.width / 2;
             const mouseY = e.clientY - rect.top - rect.height / 2;
-            setPos(prev => ({
-              x: mouseX - (mouseX - prev.x) * (newScale / s),
-              y: mouseY - (mouseY - prev.y) * (newScale / s)
-            }));
+            
+            if (isCropMode && !isOutpaintMode && imgRef.current && imageLoaded) {
+                const imgRect = imgRef.current.getBoundingClientRect();
+                const unscaledW = imgRect.width / s;
+                const unscaledH = imgRect.height / s;
+                const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
+                const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+                const minScale = Math.max(maskW / unscaledW, maskH / unscaledH);
+                if (newScale < minScale) {
+                   newScale = minScale;
+                }
+            }
+
+            setPos(prev => {
+              let newX = mouseX - (mouseX - prev.x) * (newScale / s);
+              let newY = mouseY - (mouseY - prev.y) * (newScale / s);
+              
+              if (isCropMode && imgRef.current && imageLoaded) {
+                  const imgRect = imgRef.current.getBoundingClientRect();
+                  const unscaledW = imgRect.width / s;
+                  const unscaledH = imgRect.height / s;
+                  const scaledW = unscaledW * newScale;
+                  const scaledH = unscaledH * newScale;
+                  const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
+                  const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+                  
+                  if (!isOutpaintMode) {
+                      const maxPosX = Math.max(0, (scaledW - maskW) / 2);
+                      const maxPosY = Math.max(0, (scaledH - maskH) / 2);
+                      newX = Math.max(-maxPosX, Math.min(maxPosX, newX));
+                      newY = Math.max(-maxPosY, Math.min(maxPosY, newY));
+                  }
+              }
+              return { x: newX, y: newY };
+            });
             setScale(newScale);
           }
         }}
         onClick={(e) => {
            if ((e.target as HTMLElement).closest('.annotation-popup')) return;
            if ((e.target as HTMLElement).closest('.annotation-marker')) return;
-           if (e.target === e.currentTarget) onClose();
+           if (e.target === e.currentTarget && !isCropMode) onClose();
         }}
       >
+        {isCropMode && (
+         <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-40 overflow-hidden">
+            <div 
+               className="border border-white border-dashed relative pointer-events-none" 
+               style={{ 
+                  width: cropRatio <= 1 ? 650 * cropRatio : 650, 
+                  height: cropRatio > 1 ? 650 / cropRatio : 650, 
+                  boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)' 
+               }}
+            >
+               <div className="absolute -top-12 left-1/2 -translate-x-1/2 flex justify-center gap-2 pointer-events-auto w-max text-sm">
+                  <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(1); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${cropRatio === 1 ? 'border border-blue-500' : ''}`}>1:1</button>
+                  <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(3/4); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${cropRatio === 0.75 ? 'border border-blue-500' : ''}`}>3:4</button>
+                  <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(4/3); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${Math.abs(cropRatio - 4/3) < 0.01 ? 'border border-blue-500' : ''}`}>4:3</button>
+                  <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(9/16); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${cropRatio === 9/16 ? 'border border-blue-500' : ''}`}>9:16</button>
+                  <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(16/9); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${Math.abs(cropRatio - 16/9) < 0.01 ? 'border border-blue-500' : ''}`}>16:9</button>
+                  <label className="flex items-center gap-1.5 ml-1 px-3 py-1 rounded bg-black/50 text-white/80 cursor-pointer">
+                      <input type="checkbox" checked={isOutpaintMode} onChange={(e) => handleOutpaintToggle(e.target.checked)} />
+                      {lang === 'en' ? 'Outpaint' : '扩图'}
+                  </label>
+                  {item.cropData && (
+                     <button onClick={(e) => { 
+                        e.stopPropagation(); 
+                        onUpdateItem?.({ ...item, cropData: null });
+                        setIsCropMode(false);
+                        setScale(1);
+                        setPos({x: 0, y: 0});
+                     }} className="ml-1 px-3 py-1 rounded bg-red-600/80 text-white hover:bg-red-500">{lang === 'en' ? 'Delete Crop' : '删除裁切'}</button>
+                  )}
+                  <button onClick={(e) => { 
+                     e.stopPropagation(); 
+                     const rect = imgRef.current?.getBoundingClientRect();
+                     const naturalW = imgRef.current?.naturalWidth || 1;
+                     const naturalH = imgRef.current?.naturalHeight || 1;
+                     const unscaledW = (rect?.width || 1) / scale;
+                     const unscaledH = (rect?.height || 1) / scale;
+                     const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
+                     const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+                     onUpdateItem?.({ ...item, cropData: { 
+                        scale, x: pos.x, y: pos.y, ratio: cropRatio, 
+                        imgW: unscaledW, imgH: unscaledH, 
+                        naturalW, naturalH, maskW, maskH, isOutpaint: isOutpaintMode
+                     } });
+                     setIsCropMode(false);
+                  }} className="ml-2 px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-500">{lang === 'en' ? 'Save Crop' : '保存取景'}</button>
+               </div>
+            </div>
+         </div>
+        )}
         <div className="absolute top-4 right-4 flex items-center gap-4 z-50">
          {annotations.length > 0 && (
            <div className="relative group/clear-ann">
@@ -380,6 +539,9 @@ const ZoomableImage = ({
                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
             )}
          </button>
+         <button onClick={(e) => { e.stopPropagation(); setIsCropMode(prev => !prev); }} title={lang === 'en' ? "Crop Mode" : "局部修图模式"} className={`p-2 rounded-full transition-colors flex items-center justify-center relative ${isCropMode ? 'bg-blue-600 text-white' : 'bg-black/50 text-white/70 hover:text-white'}`}>
+             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>
+         </button>
          <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(src); }} title="Copy Image" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
             <Copy className="w-5 h-5" />
          </button>
@@ -397,8 +559,10 @@ const ZoomableImage = ({
         style={{ transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`, transition: isDragging || draggedAnnId ? 'none' : 'transform 0.1s' }}
         onMouseDown={e => { 
            if ((e.target as HTMLElement).closest('.annotation-popup') || (e.target as HTMLElement).closest('.annotation-marker')) return;
-           setIsDragging(true); 
-           setDragStart({ x: e.clientX - pos.x, y: e.clientY - pos.y }); 
+           setIsDragging(true);
+            setDragStart({ x: e.clientX - pos.x, y: e.clientY - pos.y });
+            setDragInitialMouse({ x: e.clientX, y: e.clientY });
+            setDragIntent('none'); 
            e.stopPropagation(); 
         }}
         onMouseMove={e => { 
@@ -408,7 +572,51 @@ const ZoomableImage = ({
               const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
               setAnnotations(annotations.map(a => a.id === draggedAnnId ? { ...a, x, y } : a));
            } else if (isDragging) { 
-              setPos({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }); 
+              let newX = e.clientX - dragStart.x;
+              let newY = e.clientY - dragStart.y;
+              if (isCropMode && imgRef.current && imageLoaded) {
+                 const rect = imgRef.current.getBoundingClientRect();
+                 const unscaledW = rect.width / scale;
+                 const unscaledH = rect.height / scale;
+                 const scaledW = unscaledW * scale;
+                 const scaledH = unscaledH * scale;
+                 const maskW = cropRatio <= 1 ? 650 * cropRatio : 650;
+                 const maskH = cropRatio > 1 ? 650 / cropRatio : 650;
+                 
+                 if (!isOutpaintMode) {
+                     const maxPosX = Math.max(0, (scaledW - maskW) / 2);
+                     const maxPosY = Math.max(0, (scaledH - maskH) / 2);
+                     newX = Math.max(-maxPosX, Math.min(maxPosX, newX));
+                     newY = Math.max(-maxPosY, Math.min(maxPosY, newY));
+                 } else {
+                     const deltaMouseX = e.clientX - dragInitialMouse.x;
+                     const deltaMouseY = e.clientY - dragInitialMouse.y;
+                     let currentIntent = dragIntent;
+                     
+                     if (currentIntent === 'none') {
+                         if (Math.abs(deltaMouseX) > 10 || Math.abs(deltaMouseY) > 10) {
+                             if (Math.abs(deltaMouseX) > Math.abs(deltaMouseY) * 1.5) {
+                                 currentIntent = 'horizontal';
+                             } else if (Math.abs(deltaMouseY) > Math.abs(deltaMouseX) * 1.5) {
+                                 currentIntent = 'vertical';
+                             } else {
+                                 currentIntent = 'free';
+                             }
+                             setDragIntent(currentIntent as any);
+                         }
+                     }
+                     
+                     if (currentIntent === 'vertical') {
+                         newX = pos.x; // freeze horizontal position
+                     } else if (currentIntent === 'horizontal') {
+                         newY = pos.y; // freeze vertical position
+                     } else if (currentIntent === 'none') {
+                         newX = pos.x; // freeze both until intent determined
+                         newY = pos.y;
+                     }
+                 }
+              }
+              setPos({ x: newX, y: newY }); 
            } 
         }}
         onMouseUp={() => {
@@ -433,6 +641,7 @@ const ZoomableImage = ({
              className="max-w-[90vw] max-h-[90vh] object-contain pointer-events-auto bg-black rounded" 
              controls
              autoPlay
+             onLoadedData={() => setImageLoaded(true)}
              onDoubleClick={(e) => {
                 e.stopPropagation();
                 handleImageClick(e);
@@ -444,6 +653,7 @@ const ZoomableImage = ({
              src={src} 
              className="max-w-[90vw] max-h-[90vh] object-contain pointer-events-auto" 
              draggable={false} 
+             onLoad={() => setImageLoaded(true)}
              onDoubleClick={(e) => {
                 e.stopPropagation();
                 handleImageClick(e);
@@ -1103,7 +1313,7 @@ const BatchDownloadPopup = ({
   );
 };
 
-const getBase64ImageParts = async (templateStr: string, fields: Field[], record: any) => {
+const getBase64ImageParts = async (templateStr: string, fields: Field[], record: any, aiOptions: any = null) => {
   const parts: any[] = [];
   const dataUrlsOut: string[] = [];
   const originalUrlsOut: string[] = [];
@@ -1116,22 +1326,25 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
       let val = record[f.id];
       if (f.type === 'attachment' || f.type === 'aiImage') {
         const urls: string[] = [];
+        const items: any[] = [];
         if (Array.isArray(val)) {
-          val.forEach((v: any) => urls.push(String(v?.url || v)));
+          val.forEach((v: any) => { urls.push(String(v?.url || v)); items.push(v); });
         } else if (typeof val === 'string') {
-          val.split(',').forEach(v => urls.push(v.trim()));
+          val.split(',').forEach(v => { urls.push(v.trim()); items.push(null); });
         } else if (val) {
-          urls.push(String(val?.url || val));
+          urls.push(String(val?.url || val)); items.push(val);
         }
         
         const dataUrls: string[] = [];
-        for (let u of urls) {
+        for (let i = 0; i < urls.length; i++) {
+          const u = urls[i];
+          const item = items[i];
           if (!u.trim()) continue;
           
           let fetchUrl = u;
           if (fullImageBlobCache.has(u)) {
              fetchUrl = fullImageBlobCache.get(u)!;
-          } else if (!u.startsWith('data:') && !u.startsWith('http') && !u.startsWith('blob:')) {
+          } else if (!u.startsWith('data:') && !u.startsWith('http') && !u.startsWith('blob:') && !u.startsWith('file:')) {
              fetchUrl = `file://${u.replace(/\\\\/g, '/')}`;
           }
 
@@ -1251,6 +1464,52 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
                }
             }
             
+            if (b64 && aiOptions?.isRetouchMode && item?.cropData) {
+               try {
+                  const crop = item.cropData;
+                  const cropped = await new Promise<{b64:string, mime:string}>((resolve) => {
+                     const img = new Image();
+                     img.onload = () => {
+                        if (!crop.imgW || !crop.imgH || !crop.naturalW || !crop.naturalH || !crop.scale || !crop.maskW || !crop.maskH) {
+                           resolve({b64: b64 as string, mime});
+                           return;
+                        }
+                        
+                        const cropX = crop.imgW * crop.scale / 2 - crop.x - crop.maskW / 2;
+                        const cropY = crop.imgH * crop.scale / 2 - crop.y - crop.maskH / 2;
+                        
+                        const naturalCropX = (cropX / crop.scale) * (crop.naturalW / crop.imgW);
+                        const naturalCropY = (cropY / crop.scale) * (crop.naturalH / crop.imgH);
+                        const naturalCropW = (crop.maskW / crop.scale) * (crop.naturalW / crop.imgW);
+                        const naturalCropH = (crop.maskH / crop.scale) * (crop.naturalH / crop.imgH);
+
+                        const targetW = naturalCropW;
+                        const targetH = naturalCropH;
+                        
+                        const cvs = document.createElement('canvas');
+                        cvs.width = targetW;
+                        cvs.height = targetH;
+                        const ctx = cvs.getContext('2d');
+                        if (ctx) {
+                           ctx.fillStyle = '#000';
+                           ctx.fillRect(0, 0, targetW, targetH);
+                           ctx.drawImage(img, naturalCropX, naturalCropY, naturalCropW, naturalCropH, 0, 0, targetW, targetH);
+                           const dUrl = cvs.toDataURL('image/jpeg', 0.95);
+                           resolve({ b64: dUrl.split(',')[1], mime: 'image/jpeg' });
+                        } else {
+                           resolve({ b64: b64 as string, mime });
+                        }
+                     };
+                     img.onerror = () => resolve({b64: b64 as string, mime});
+                     img.src = `data:${mime};base64,${b64}`;
+                  });
+                  b64 = cropped.b64;
+                  mime = cropped.mime;
+               } catch (e) {
+                  console.error("Retouch crop failed:", e);
+               }
+            }
+
             if (b64) {
                parts.push({ inlineData: { mimeType: mime, data: b64 } });
                const finalDataUrl = `data:${mime};base64,${b64}`;
@@ -2171,7 +2430,8 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         let promptOriginalUrls: string[] = [];
         
         if (field.type === 'aiImage' || field.type === 'aiVideo') {
-           const { cleanString, parts, dataUrls, originalUrls } = await getBase64ImageParts(promptString, data.fields, record);
+           const cfg: any = field.type === 'aiVideo' ? (field.aiVideoConfig || {}) : (field.aiImageConfig || {});
+           const { cleanString, parts, dataUrls, originalUrls } = await getBase64ImageParts(promptString, data.fields, record, cfg);
            promptString = cleanString;
            promptImageParts = parts;
            promptDataUrls = dataUrls;
@@ -2183,6 +2443,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         }
         
         let resultParams: any = '';
+        let finalOriginalUrls: string[] = [];
 
         if (field.type === 'aiImage') {
           const cfg = field.aiImageConfig || {};
@@ -2190,6 +2451,35 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           
           let ratioRaw = resolveTemplateString(cfg.ratio || "1:1", data.fields, record);
           let ratio = ratioRaw.replace(/：/g, ':').trim();
+          
+          if (cfg.isRetouchMode) {
+              for (let f of data.fields) {
+                const marker = `{${f.name}}`;
+                if ((cfg.sourceImageTemplate || '').includes(marker)) {
+                    let val = record[f.id];
+                    if (val) {
+                       const arr = Array.isArray(val) ? val : (typeof val==='string' ? val.split(',') : [val]);
+                       const first = arr[0];
+                       if (first && typeof first === 'object' && first.cropData && first.cropData.ratio) {
+                           const r = first.cropData.ratio;
+                           const standards = [
+                             { r: 1, s: '1:1' },
+                             { r: 16/9, s: '16:9' },
+                             { r: 9/16, s: '9:16' },
+                             { r: 4/3, s: '4:3' },
+                             { r: 3/4, s: '3:4' },
+                             { r: 3/2, s: '3:2' },
+                             { r: 2/3, s: '2:3' },
+                             { r: 21/9, s: '21:9' }
+                           ];
+                           const closest = standards.reduce((prev, curr) => Math.abs(curr.r - r) < Math.abs(prev.r - r) ? curr : prev);
+                           ratio = closest.s;
+                       }
+                    }
+                    break;
+                }
+              }
+          }
           
           let resolutionRaw = resolveTemplateString(cfg.resolution || "1024x1024", data.fields, record);
           let resolution = resolutionRaw.trim().toLowerCase();
@@ -2237,9 +2527,9 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           let finalPrompt = promptString;
           let imageParts: any[] = [...promptImageParts];
           let finalDataUrls: string[] = [...promptDataUrls];
-          let finalOriginalUrls: string[] = [...promptOriginalUrls];
+          finalOriginalUrls = [...promptOriginalUrls];
           if (cfg.sourceImageTemplate) {
-             const { parts, dataUrls, originalUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record);
+             const { parts, dataUrls, originalUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record, cfg);
              imageParts = [...imageParts, ...parts];
              finalDataUrls = [...finalDataUrls, ...dataUrls];
              finalOriginalUrls = [...finalOriginalUrls, ...(originalUrls || [])];
@@ -2381,9 +2671,9 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
            let duration = parseInt(durationRaw) || 10;
            
            // Collect reference images or videos
-           let finalOriginalUrls: string[] = [...promptOriginalUrls];
+           finalOriginalUrls = [...promptOriginalUrls];
            if (cfg.sourceImageTemplate) {
-              const { originalUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record);
+              const { originalUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record, cfg);
               finalOriginalUrls = [...finalOriginalUrls, ...(originalUrls || [])];
            }
            
@@ -2476,7 +2766,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           
           let textParts: any[] = [{ text: promptString }];
           if (cfg.sourceImageTemplate) {
-             const { parts } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record);
+             const { parts } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record, cfg);
              textParts = [...parts, ...textParts];
           }
 
@@ -2544,20 +2834,86 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
            let downloadedUrls: string[] = [...(resultParams || [])];
            
            if (resultParams && Array.isArray(resultParams)) {
-              const cfg = field.type === 'aiVideo' ? (field.aiVideoConfig || {}) : (field.aiImageConfig || {});
-              if (cfg.filenameTemplate || cfg.folderPath) {
-                 const { filename: finalFilename, folderPath: finalFolderPath } = resolveFilenameAndFolder(cfg.filenameTemplate || (field.type === 'aiVideo' ? 'video' : 'image'), cfg.folderPath || '', data.fields, record);
+              const cfg: any = field.type === 'aiVideo' ? (field.aiVideoConfig || {}) : (field.aiImageConfig || {});
+              if (cfg.filenameTemplate || cfg.folderPath || cfg.isRetouchMode) {
+                 const { filename: defaultFilename, folderPath: defaultFolderPath } = resolveFilenameAndFolder(cfg.filenameTemplate || (field.type === 'aiVideo' ? 'video' : 'image'), cfg.folderPath || '', data.fields, record);
+                 
+                 let finalFilename = defaultFilename;
+                 let finalFolderPath = defaultFolderPath;
+                 
+                 if (cfg.isRetouchMode && field.type === 'aiImage' && finalOriginalUrls.length > 0) {
+                     const firstUrl = finalOriginalUrls[0];
+                     let match = firstUrl.match(/^file:\/\/(.*)[\/\\]([^\/\\]+)$/);
+                     if (!match) match = firstUrl.match(/^(.*)[\/\\]([^\/\\]+)$/);
+                     if (!firstUrl.startsWith('data:') && !firstUrl.startsWith('blob:') && match) {
+                         if (cfg.saveToSourceFolder) {
+                             let p = match[1];
+                             if (p.startsWith('/') && p[2] === ':') p = p.substring(1); // handle file:///C:/...
+                             finalFolderPath = p;
+                         }
+                         const originalNameBase = match[2].split('.').slice(0, -1).join('.') || match[2];
+                         finalFilename = `${originalNameBase}-gan`;
+                     }
+                 }
+                 
+                 let targetW = 0;
+                 let targetH = 0;
+                 if (cfg.isRetouchMode && field.type === 'aiImage' && cfg.scaleToSource !== false) {
+                     for (let f of data.fields) {
+                        const marker = `{${f.name}}`;
+                        if ((cfg.sourceImageTemplate || '').includes(marker)) {
+                            let val = record[f.id];
+                            if (val) {
+                               const arr = Array.isArray(val) ? val : (typeof val==='string' ? val.split(',') : [val]);
+                               const first = arr[0];
+                               if (first && typeof first === 'object' && first.cropData) {
+                                   const cr = first.cropData;
+                                   if (cr.imgW && cr.imgH && cr.naturalW && cr.naturalH && cr.scale && cr.maskW && cr.maskH) {
+                                      targetW = Math.round((cr.maskW / cr.scale) * (cr.naturalW / cr.imgW));
+                                      targetH = Math.round((cr.maskH / cr.scale) * (cr.naturalH / cr.imgH));
+                                   }
+                               }
+                            }
+                            break;
+                        }
+                     }
+                 }
                  
                  const savedUrls: string[] = [];
                  for (let i = 0; i < resultParams.length; i++) {
-                     const url = resultParams[i];
+                     let urlToDownload = resultParams[i];
                      let ext = field.type === 'aiVideo' ? '.mp4' : '.png'; // default fallback
-                     if (url.includes('.mp4')) ext = '.mp4';
-                     else if (url.includes('.mov')) ext = '.mov';
-                     else if (url.includes('.webm')) ext = '.webm';
+                     if (urlToDownload.includes('.mp4')) ext = '.mp4';
+                     else if (urlToDownload.includes('.mov')) ext = '.mov';
+                     else if (urlToDownload.includes('.webm')) ext = '.webm';
                      
-                     const savedPath = await triggerDownload(url, finalFilename + (resultParams.length > 1 ? `_${i+1}` : '') + ext, finalFolderPath);
-                     savedUrls.push(savedPath || url);
+                     if (targetW > 0 && targetH > 0) {
+                         try {
+                              const resizedUrl = await new Promise<string>((resolve) => {
+                                   const img = new Image();
+                                   img.crossOrigin = "anonymous";
+                                   img.onload = () => {
+                                        const cvs = document.createElement('canvas');
+                                        cvs.width = targetW;
+                                        cvs.height = targetH;
+                                        const ctx = cvs.getContext('2d');
+                                        if (ctx) {
+                                            ctx.drawImage(img, 0, 0, targetW, targetH);
+                                            resolve(cvs.toDataURL('image/png'));
+                                        } else resolve(urlToDownload);
+                                   };
+                                   img.onerror = () => resolve(urlToDownload);
+                                   // Try to handle mixed content or missing cors header by fetching as blob locally if possible
+                                   // but generic images should load if crossOrigin is set properly on OSS
+                                   img.src = urlToDownload;
+                              });
+                              urlToDownload = resizedUrl;
+                              ext = '.png';
+                         } catch(e) { console.error("Resize failed", e); }
+                     }
+                     
+                     const savedPath = await triggerDownload(urlToDownload, finalFilename + (resultParams.length > 1 ? `_${i+1}` : '') + ext, finalFolderPath);
+                     savedUrls.push(savedPath || urlToDownload);
                  }
                  downloadedUrls = savedUrls;
               }
@@ -3082,8 +3438,9 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                    previewImageState.onUpdate(cleanedItems);
                 }
                 if (onUpdateGlobalAttachment) {
-                   const { url, mappedUrl, ...updatedProps } = newItem;
+                   const { url, mappedUrl, cropData, ...updatedProps } = newItem;
                    if (url) {
+                       // Do not send cropData globally, only annotations and status/rating
                        onUpdateGlobalAttachment(url, updatedProps);
                    }
                 }
@@ -3825,6 +4182,24 @@ function HeaderCell({
                              ))}
                            </select>
                          </div>
+                       </div>
+                       <div className="flex flex-col gap-1 mt-1">
+                         <label className="flex items-center gap-1 cursor-pointer w-max">
+                           <input type="checkbox" checked={!!draftAiImageConfig.isRetouchMode} onChange={e => setDraftAiImageConfig(prev => ({ ...prev, isRetouchMode: e.target.checked }))} onMouseDown={e=>e.stopPropagation()} />
+                           <span className="text-[10px] text-gray-600">开启局部修图模式 (引用裁切数据)</span>
+                         </label>
+                         {draftAiImageConfig.isRetouchMode && (
+                           <div className="pl-4 flex flex-col gap-1 mb-1">
+                             <label className="flex items-center gap-1 cursor-pointer w-max">
+                               <input type="checkbox" checked={!!draftAiImageConfig.saveToSourceFolder} onChange={e => setDraftAiImageConfig(prev => ({ ...prev, saveToSourceFolder: e.target.checked }))} onMouseDown={e=>e.stopPropagation()} />
+                               <span className="text-[10px] text-gray-600">保存到原图同级目录并加 -gan 后缀</span>
+                             </label>
+                             <label className="flex items-center gap-1 cursor-pointer w-max">
+                               <input type="checkbox" checked={draftAiImageConfig.scaleToSource !== false} onChange={e => setDraftAiImageConfig(prev => ({ ...prev, scaleToSource: e.target.checked }))} onMouseDown={e=>e.stopPropagation()} />
+                               <span className="text-[10px] text-gray-600">保持实际被裁切区域像素尺寸保存</span>
+                             </label>
+                           </div>
+                         )}
                        </div>
                        <div className="grid grid-cols-3 gap-2">
                          <div className="flex flex-col">
@@ -4735,6 +5110,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                             onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems)); 
                           }}
                         />
+                        {item.cropData && (
+                          <div className="absolute top-0.5 right-0.5 bg-blue-500/80 text-white rounded-[2px] p-[2px] text-[10px] flex items-center justify-center pointer-events-none drop-shadow-md">
+                            {item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
+                          </div>
+                        )}
                         {(field.type === 'aiVideo' || item.url.match(/\.(mp4|webm|mov)$/i)) && (
                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20 rounded">
                               <Play className="w-4 h-4 text-white/90 drop-shadow-md fill-white/90" />
@@ -4824,6 +5204,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                             onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems)); 
                           }}
                         />
+                        {item.cropData && (
+                          <div className="absolute top-0.5 right-0.5 bg-blue-500/80 text-white rounded-[2px] p-[2px] text-[10px] flex items-center justify-center pointer-events-none drop-shadow-md">
+                            {item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
+                          </div>
+                        )}
                         {(field.type === 'aiVideo' || item.url.match(/\.(mp4|webm|mov)$/i)) && (
                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20 rounded">
                               <Play className="w-4 h-4 text-white/90 drop-shadow-md fill-white/90" />
@@ -5510,6 +5895,11 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                }), (newItems) => onChange(newItems))}
              >
                <ThumbnailImage path={path} className="w-full h-full object-cover cursor-pointer" alt="attachment" />
+               {item.cropData && (
+                 <div className="absolute top-0.5 right-0.5 bg-blue-500/80 text-white rounded-[2px] p-[2px] text-[10px] flex items-center justify-center pointer-events-none">
+                   {item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
+                 </div>
+               )}
                {(item.url.match(/\.(mp4|webm|mov)$/i)) && (
                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20">
                       <Play className="w-10 h-10 text-white/90 drop-shadow-md fill-white/90" />

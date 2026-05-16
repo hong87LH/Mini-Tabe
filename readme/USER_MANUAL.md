@@ -27,12 +27,19 @@ If you create a **Formula** column, you can reference other columns by putting t
 - **Example (Excel Mode)**: Start your formula with an equal sign `=`. E.g., `={Inventory} - {Sold}`.
 If you rename a referenced column, make sure to update your formula so it points to the correct new name.
 
-### Image Review & Callout Annotations
+### Image Review, Cropping & Callout Annotations
 When viewing images within an attachment column or generative image field:
-- **View Fullscreen**: Click the image to open the immersive Zoom Viewer.
+- **View Fullscreen**: Click the image to open the immersive Zoom Viewer. You can also use your mouse wheel to zoom continuously and drag to pan around the image for a comprehensive inspection.
 - **Add Annotations**: **Double-Click** anywhere directly on the image to drop a "Review Marker" (Annotation Pin).
 - **Manage Feedback**: You can define the state of an annotation marker (e.g., "Pending", "Resolved", or "Approved"). 
 - **Discussion Threads**: Reply inside an annotation pin to leave notes for tracking iterative design changes or QA tracking.
+- **Cropping & Composition Limits**: Switch to "Crop Mode" to pull up an aspect ratio reticle. Pan and zoom your master image freely behind the bounds and save the final crop to your record. The system supports full **editing and deletion** of any existing crops. The thumbnail will feature a specific "Crop" badge to easily distinguish it on your grid. *(Note: While in Standard Crop mode, bounding-box physics are enforced; you cannot drag the image out of bounds and accidentally expose negative space.)*
+- **Advanced Outpaint Mode**: Toggling the "Outpaint" checkbox unlocking the restrictive bounds and dropping you into an **Intelligent Intent-Recognizing** outpaint engine:
+    - **Auto Top-Aligned Strategy**: Every time you switch ratios or enter Outpaint mode, the system auto-calculates the relative dimensions of your image vs the target frame. It strategically defaults to a "Top-Aligned" position out of the box. This saves massive amounts of manual adjusting, particularly optimized for the frequent portrait/character "chest-up to full-body" expansions. 
+    - **Intelligent Intent Tracking**: While panning, the engine interprets your dragging pattern. If you drag vertically, it rigidly locks horizontal drifting, clamping you neatly to the center for up/down compositions. Similarly, dragging horizontally locks your vertical axis. Diagonal motion breaks these locks entirely, offering absolute freedom of movement over the background.
+    - **Pixel-Perfect Freedom**: By eliminating all previously forced 15px magnetic edge-snaps, you can define negative space and offset coordinates down to the precise pixel.
+    - An Outpaint configuration yields an **"Expand" badge** instead of a regular Crop pin! A saved outpaint image natively functions as a compositional base template, ready to be driven into Generative AI flows.
+    - (Note: Mouse-wheel zooming step sensitivity has been fine-tuned for Outpaint scenarios to provide a gentle, hyper-controlled zoom behavior against extreme boundary manipulations.)
 
 ### Desktop-First Local File Routing
 If you are running this application comprehensively as a desktop-installed app:

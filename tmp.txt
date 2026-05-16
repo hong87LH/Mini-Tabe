@@ -1,0 +1,59 @@
+1146-    </div>,
+1147-    document.body
+1148-  );
+1149-};
+1150-
+1151:const getBase64ImageParts = async (templateStr: string, fields: Field[], record: any, aiOptions: any = null) => {
+1152-  const parts: any[] = [];
+1153-  const dataUrlsOut: string[] = [];
+1154-  const originalUrlsOut: string[] = [];
+1155-  if (!templateStr) return { cleanString: '', parts, dataUrls: dataUrlsOut, originalUrls: originalUrlsOut };
+1156-  let str = templateStr;
+--
+2215-        let promptDataUrls: string[] = [];
+2216-        let promptOriginalUrls: string[] = [];
+2217-        
+2218-        if (field.type === 'aiImage' || field.type === 'aiVideo') {
+2219-           const cfg = field.type === 'aiVideo' ? (field.aiVideoConfig || {}) : (field.aiImageConfig || {});
+2220:           const { cleanString, parts, dataUrls, originalUrls } = await getBase64ImageParts(promptString, data.fields, record, cfg);
+2221-           promptString = cleanString;
+2222-           promptImageParts = parts;
+2223-           promptDataUrls = dataUrls;
+2224-           promptOriginalUrls = originalUrls || [];
+2225-        } else {
+--
+2283-          let finalPrompt = promptString;
+2284-          let imageParts: any[] = [...promptImageParts];
+2285-          let finalDataUrls: string[] = [...promptDataUrls];
+2286-          let finalOriginalUrls: string[] = [...promptOriginalUrls];
+2287-          if (cfg.sourceImageTemplate) {
+2288:             const { parts, dataUrls, originalUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record, cfg);
+2289-             imageParts = [...imageParts, ...parts];
+2290-             finalDataUrls = [...finalDataUrls, ...dataUrls];
+2291-             finalOriginalUrls = [...finalOriginalUrls, ...(originalUrls || [])];
+2292-          }
+2293-
+--
+2427-           let duration = parseInt(durationRaw) || 10;
+2428-           
+2429-           // Collect reference images or videos
+2430-           let finalOriginalUrls: string[] = [...promptOriginalUrls];
+2431-           if (cfg.sourceImageTemplate) {
+2432:              const { originalUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record, cfg);
+2433-              finalOriginalUrls = [...finalOriginalUrls, ...(originalUrls || [])];
+2434-           }
+2435-           
+2436-           const vidSetList = Array.isArray(modelSettings.video) ? modelSettings.video : [modelSettings.video || {}];
+2437-           const defaultVidSet = vidSetList[0] || {};
+--
+2520-             }
+2521-          }
+2522-          
+2523-          let textParts: any[] = [{ text: promptString }];
+2524-          if (cfg.sourceImageTemplate) {
+2525:             const { parts } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record);
+2526-             textParts = [...parts, ...textParts];
+2527-          }
+2528-
+2529-          if (txtSet.provider === 'gemini' || txtSet.provider === 'gemini-custom') {
+2530-            if (!txtSet.key) throw new Error("Gemini API Key is required");
