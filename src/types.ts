@@ -18,6 +18,7 @@ export interface Field {
   id: string;
   name: string;
   type: FieldType;
+  color?: string;
   options?: SelectOption[];
   width?: number; // width in pixels
   hidden?: boolean;
@@ -67,5 +68,6 @@ export interface GridData {
   fields: Field[];
   records: BaseRecord[];
   frozenColId?: string | null;
+  cellLinks?: Record<string, string>;
 }
 

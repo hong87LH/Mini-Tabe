@@ -46,6 +46,12 @@ If you are running this application comprehensively as a desktop-installed app:
 - **Do Not Upload, Just Link**: You do not have to manually click and upload images taking up memory. You can directly paste the physical path of the image sitting on your computer (e.g., `C:\Users\YourName\Pictures\design.png`).
 - The system will intelligently mount these system paths and read them instantly, keeping your local performance perfectly sharp and bridging the gap between web capabilities and your desktop environment.
 
+### Data Link & Sync Between Cells
+When you select continuous vertical cells of the same column, you can establish a linkage between them:
+- **Establish Link**: Select two or more continuous vertical cells, right-click, and choose **Link cells**. When linked, a light purple border with a link icon will visually indicate the grouped status.
+- **Shared Data Engine**: Editing any cell within the linked group will simultaneously and automatically update all the other cells chained within that specific linkage.
+- **Unlink Content**: Right-click the linked group and select **Unlink cells** to break the bond, allowing cells to hold independent distinct data moving forward.
+
 ### AI Workflows & Batch Generation
 If your table features columns specifically geared towards artificial intelligence (like **Smart Text** or **AI Image** field types):
 - **Sequential Row Processing**: You can select one or multiple rows, right-click, and choose **Run Workflow**.
@@ -65,6 +71,7 @@ If you provide an OSS (Aliyun Object Storage) configuration through the settings
 ### Drag and Drop
 - **Columns**: Click and hold a column header to drag it left or right, reordering the grid.
 - **Rows**: Use the grip handle located at the far left edge of any row to reorder the row structure vertically.
+- **Column Coloring**: You can visually highlight columns by assigning a custom top border color to the header. Right-click the column header and select "Set field title color" or use the top edge option in the column dropdown menu, making crucial columns stand out instantly on the grid.
 - **Tables**: You can drag and drop table names in the left sidebar to sort them by relevance.
 
 ## 4. Advanced: Auto-Save & Backup Settings

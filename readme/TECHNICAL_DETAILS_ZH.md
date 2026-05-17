@@ -53,6 +53,12 @@ Hong's AI Table Studio 是一个响应式、纯前端渲染、运行在浏览器
 ### 4.5 开屏动画机制
 应用启动的开屏使用了 SVG 路径动画（结合 `stroke-dasharray/offset`）与 CSS 属性的 `fractalNoise` 位移滤镜融合，呈现出极其逼真的手绘纸张效果。在 React 完成渲染以及初始化 JS 引擎后，将会调度 `window.removeInitialSplash()` 以丝滑的显隐过渡剥离该片动画图层。
 
+### 4.6 单元格联动同步机制 (Cell Linking)
+在 `Grid` 组件内提供的数据逻辑分组交互功能，称之为 "联动单元格"。
+- **底层追踪策略**: 联动连接关系被记录和储存于 `GridData.cellLinks` 属性字典内。以 `recordId-fieldId` 为索引键指向专属的 `groupId`（例如：`group_16843232...`）。
+- **级联广播更新**: 在系统核心进行 `handleUpdateRecord` 和 `handleUpdateRecordsBatch` 操作下放时，会动态进行拦截侦测判断：一旦发现被更改内容的单元格携带 `groupId` 参数属性，便会将相同的 `[fieldId]: value` 属性变化同时广播扩散并赋值给所有同处于该群组的相邻记录节点。
+- **渲染层视觉处理**: 联动单元格在 `Cell` 的渲染架构中通过智能应用 border/shadow 边框及阴影投射（`inset 1px 0 0 0 #c084fc`）在 DOM 层面上进行原生的群组框选描绘，这一做法不仅免去了插入多余冗余 DOM 节点带来的卡顿，更保留了与常规蓝框拖拽选中状态的清晰视觉区分。
+
 ## 5. 部署细节
 因为项目的主要逻辑处于客户端层面，代码将被编译构建为纯静态资源（存放于 `dist` 目录）。
 - **构建 Web 静态代码**: 运行 `npm run build` 生成生产所需的 HTML/JS/CSS 等静态数据至 `dist/`。

@@ -972,11 +972,24 @@ export default function App() {
     setData((prev: GridData) => {
       const record = prev.records.find((r: any) => r.id === recordId);
       if (!record || isValueEqual(record[fieldId], value)) return prev;
+      
+      const newRecords = [...prev.records];
+      const groupId = prev.cellLinks?.[`${recordId}-${fieldId}`];
+      if (groupId) {
+         const linkedPairs = Object.entries(prev.cellLinks || {}).filter(([k, g]) => g === groupId).map(([k]) => k.split('-')[0]);
+         newRecords.forEach((rec, idx) => {
+             if (linkedPairs.includes(rec.id)) {
+                 newRecords[idx] = { ...newRecords[idx], [fieldId]: value };
+             }
+         });
+      } else {
+         const idx = newRecords.findIndex(r => r.id === recordId);
+         if (idx >= 0) newRecords[idx] = { ...newRecords[idx], [fieldId]: value };
+      }
+
       return {
         ...prev,
-        records: prev.records.map((rec: any) => 
-          rec.id === recordId ? { ...rec, [fieldId]: value } : rec
-        )
+        records: newRecords
       };
     });
   };
@@ -989,10 +1002,23 @@ export default function App() {
         const rec = prev.records.find((r: any) => r.id === update.recordId);
         if (rec && !isValueEqual(rec[update.fieldId], update.value)) {
             hasChanges = true;
-            if (!recordsToUpdate.has(update.recordId)) {
-                recordsToUpdate.set(update.recordId, { [update.fieldId]: update.value });
+            
+            const groupId = prev.cellLinks?.[`${update.recordId}-${update.fieldId}`];
+            if (groupId) {
+                const linkedPairs = Object.entries(prev.cellLinks || {}).filter(([k, g]) => g === groupId).map(([k]) => k.split('-')[0]);
+                linkedPairs.forEach(rid => {
+                    if (!recordsToUpdate.has(rid)) {
+                        recordsToUpdate.set(rid, { [update.fieldId]: update.value });
+                    } else {
+                        recordsToUpdate.get(rid)[update.fieldId] = update.value;
+                    }
+                });
             } else {
-                recordsToUpdate.get(update.recordId)[update.fieldId] = update.value;
+                if (!recordsToUpdate.has(update.recordId)) {
+                    recordsToUpdate.set(update.recordId, { [update.fieldId]: update.value });
+                } else {
+                    recordsToUpdate.get(update.recordId)[update.fieldId] = update.value;
+                }
             }
         }
       }
@@ -1033,10 +1059,22 @@ export default function App() {
       let records = [...prev.records, ...newRecords];
       const recordsToUpdate = new Map<string, any>();
       for (const update of updates) {
-        if (!recordsToUpdate.has(update.recordId)) {
-            recordsToUpdate.set(update.recordId, { [update.fieldId]: update.value });
+        const groupId = prev.cellLinks?.[`${update.recordId}-${update.fieldId}`];
+        if (groupId) {
+            const linkedPairs = Object.entries(prev.cellLinks || {}).filter(([k, g]) => g === groupId).map(([k]) => k.split('-')[0]);
+            linkedPairs.forEach(rid => {
+                if (!recordsToUpdate.has(rid)) {
+                    recordsToUpdate.set(rid, { [update.fieldId]: update.value });
+                } else {
+                    recordsToUpdate.get(rid)[update.fieldId] = update.value;
+                }
+            });
         } else {
-            recordsToUpdate.get(update.recordId)[update.fieldId] = update.value;
+            if (!recordsToUpdate.has(update.recordId)) {
+                recordsToUpdate.set(update.recordId, { [update.fieldId]: update.value });
+            } else {
+                recordsToUpdate.get(update.recordId)[update.fieldId] = update.value;
+            }
         }
       }
       records = records.map(rec => {
@@ -1054,6 +1092,51 @@ export default function App() {
       ...prev,
       records: prev.records.filter(rec => !recordIds.includes(rec.id))
     }));
+  };
+
+  const handleDuplicateField = (fieldId: string) => {
+    setData((prev: any) => {
+      if (!prev) return prev;
+      const fieldIndex = prev.fields.findIndex((f: any) => f.id === fieldId);
+      if (fieldIndex < 0) return prev;
+      
+      const fieldToCopy = prev.fields[fieldIndex];
+      const existingNames = new Set(prev.fields.map((f: any) => f.name));
+      let name = `${fieldToCopy.name} (${lang === 'en' ? 'Copy' : '副本'})`;
+      let counter = 1;
+      while (existingNames.has(name)) {
+        name = `${fieldToCopy.name} (${lang === 'en' ? 'Copy' : '副本'} ${counter})`;
+        counter++;
+      }
+
+      const newFieldId = `fld_${Date.now()}`;
+      const newField = { ...fieldToCopy, id: newFieldId, name };
+      
+      const newFields = [...prev.fields];
+      newFields.splice(fieldIndex + 1, 0, newField);
+
+      let newCellLinks = prev.cellLinks ? { ...prev.cellLinks } : {};
+
+      const newRecords = prev.records.map((record: any) => {
+        let copiedValue = record[fieldId];
+        if (typeof copiedValue === 'object' && copiedValue !== null) {
+            copiedValue = JSON.parse(JSON.stringify(copiedValue));
+        }
+        
+        if (prev.cellLinks && prev.cellLinks[`${record.id}-${fieldId}`]) {
+            newCellLinks[`${record.id}-${newFieldId}`] = prev.cellLinks[`${record.id}-${fieldId}`];
+        }
+
+        return { ...record, [newFieldId]: copiedValue };
+      });
+
+      return {
+        ...prev,
+        fields: newFields,
+        records: newRecords,
+        cellLinks: newCellLinks
+      };
+    });
   };
 
   const handleAddField = () => {
@@ -2222,6 +2305,7 @@ export default function App() {
             filterConfig={filterConfig}
             foldedGroups={foldedGroups}
             onFoldedGroupsChange={setFoldedGroups}
+            onUpdateCellLinks={(links) => setData((prev: GridData) => ({ ...prev, cellLinks: links }))}
             gallerySettings={gallerySettings}
             onGallerySettingsChange={setGallerySettings}
             onUpdateGlobalAttachment={(url: string, updatedProps: any) => {
@@ -2270,6 +2354,7 @@ export default function App() {
             onDeleteRecords={handleDeleteRecords}
             onAddField={handleAddField}
             onInsertField={handleInsertField}
+            onDuplicateField={handleDuplicateField}
             onFreezeColumn={handleFreezeColumn}
             onDeleteField={handleDeleteField}
             onRenameField={handleRenameField}

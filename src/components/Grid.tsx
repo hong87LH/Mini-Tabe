@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
-import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Crop, Expand, Palette } from 'lucide-react';
+import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -1021,6 +1021,7 @@ interface GridProps {
   onInsertRecords?: (index: number, count: number) => void;
   onAddField: () => void;
   onInsertField?: (index: number, count?: number) => void;
+  onDuplicateField?: (fieldId: string) => void;
   onFreezeColumn?: (fieldId: string | null) => void;
   onDeleteField?: (fieldId: string) => void;
   onRenameField: (fieldId: string, name: string) => void;
@@ -1042,6 +1043,7 @@ interface GridProps {
   onGallerySettingsChange?: (settings: any) => void;
   foldedGroups?: string[];
   onFoldedGroupsChange?: (groups: string[]) => void;
+  onUpdateCellLinks?: (links: Record<string, string>) => void;
 }
 
 export const resolveFieldValueForAI = (val: any, refField: Field, record: any, allFields: Field[]) => {
@@ -1903,7 +1905,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
 const scrollCache = new Map<string, number>();
 
-export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange }: GridProps) {
+export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const globalAttachmentPropsMap = useMemo(() => {
@@ -1968,6 +1970,8 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
   const [colContextMenuState, setColContextMenuState] = useState<{ x: number, y: number, fieldId?: string } | null>(null);
   const [cellContextMenuState, setCellContextMenuState] = useState<{ x: number, y: number } | null>(null);
   const [insertRowCount, setInsertRowCount] = useState(1);
+  const [showColColorMenu, setShowColColorMenu] = useState(false);
+  const [copiedFieldAttrStr, setCopiedFieldAttrStr] = useState<string | null>(() => localStorage.getItem('copiedFieldAttr'));
   const [insertColCount, setInsertColCount] = useState(1);
   const [showClearAnnotationsConfirm, setShowClearAnnotationsConfirm] = useState(false);
   const [showBatchDownloadDialog, setShowBatchDownloadDialog] = useState<Set<string> | null>(null);
@@ -3285,7 +3289,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               }}
             >
               <td 
-                className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 w-16 z-30 transition-colors p-0 select-none cursor-grab active:cursor-grabbing relative"
+                className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 w-16 z-[35] transition-colors p-0 select-none cursor-grab active:cursor-grabbing relative"
                 draggable
                 onDragStart={(e) => handleDragStartRow(e, record.id)}
                 onDragEnd={() => { setDraggedRowId(null); setDragOverRowId(null); }}
@@ -3359,6 +3363,9 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                     heightClass={heightClass}
                     lang={lang}
                     globalAttachmentPropsMap={globalAttachmentPropsMap}
+                    isLinked={!!data.cellLinks?.[`${record.id}-${field.id}`]}
+                    isLinkedTop={!!data.cellLinks?.[`${record.id}-${field.id}`] && (index === 0 || data.cellLinks?.[`${data.records[index - 1].id}-${field.id}`] !== data.cellLinks?.[`${record.id}-${field.id}`])}
+                    isLinkedBottom={!!data.cellLinks?.[`${record.id}-${field.id}`] && (index === data.records.length - 1 || data.cellLinks?.[`${data.records[index + 1].id}-${field.id}`] !== data.cellLinks?.[`${record.id}-${field.id}`])}
                     onUpdateField={(updates) => onUpdateField(field.id, updates)}
                     isSelectedBox={isSelectedBox}
                     isCutBox={isCutBox}
@@ -3438,7 +3445,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           })}
           {/* Add New Row Button */}
           <tr>
-            <td className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 z-30 p-0 select-none transition-colors" style={{ width: 64, minWidth: 64, maxWidth: 64 }}>
+            <td className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 z-[35] p-0 select-none transition-colors" style={{ width: 64, minWidth: 64, maxWidth: 64 }}>
               <div className={cn("flex items-center justify-center font-bold text-lg", heightClass)}>+</div>
             </td>
             <td colSpan={visibleFields.length + 2} className="border-b border-gray-200 bg-white hover:bg-gray-50 cursor-pointer transition-colors p-0" onClick={onAddRecord}>
@@ -3487,7 +3494,10 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           <div className="fixed inset-0 z-40" onClick={() => setContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenuState(null); }}></div>
           <div 
              className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[150px] text-sm text-gray-700"
-             style={contextMenuState.y + 160 > window.innerHeight ? { left: contextMenuState.x, bottom: window.innerHeight - contextMenuState.y, top: 'auto' } : { left: contextMenuState.x, top: contextMenuState.y }}
+             style={{
+                ...(contextMenuState.y + 160 > window.innerHeight ? { bottom: window.innerHeight - contextMenuState.y, top: 'auto' } : { top: contextMenuState.y }),
+                ...(typeof window !== 'undefined' && contextMenuState.x + 220 > window.innerWidth ? { right: Math.max(10, window.innerWidth - contextMenuState.x), left: 'auto' } : { left: Math.max(10, contextMenuState.x) })
+             }}
           >
              <button 
                 className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
@@ -3568,9 +3578,70 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         <>
           <div className="fixed inset-0 z-40" onClick={() => setColContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setColContextMenuState(null); }}></div>
           <div 
-             className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[150px] text-sm text-gray-700"
-             style={colContextMenuState.y + 280 > window.innerHeight ? { left: colContextMenuState.x, bottom: window.innerHeight - colContextMenuState.y, top: 'auto' } : { left: colContextMenuState.x, top: colContextMenuState.y }}
+             className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[150px] whitespace-nowrap text-sm text-gray-700 w-max"
+             style={{
+                ...(colContextMenuState.y + 280 > window.innerHeight ? { bottom: window.innerHeight - colContextMenuState.y, top: 'auto' } : { top: colContextMenuState.y }),
+                ...(typeof window !== 'undefined' && colContextMenuState.x + 260 > window.innerWidth ? { right: Math.max(10, window.innerWidth - colContextMenuState.x), left: 'auto' } : { left: Math.max(10, colContextMenuState.x) })
+             }}
           >
+             <div 
+                className="relative w-full group/color"
+                onMouseEnter={() => setShowColColorMenu(true)}
+                onMouseLeave={() => setShowColColorMenu(false)}
+             >
+                <button className="w-full text-left px-4 py-2 hover:bg-gray-100 transition-colors flex items-center justify-between">
+                   <div className="flex items-center">
+                      <Palette className="w-4 h-4 mr-2" />
+                      {lang === 'en' ? 'Set field title color' : '设置字段标题颜色'}
+                   </div>
+                   <ChevronRight className="w-4 h-4 text-gray-400 ml-4" />
+                </button>
+                {showColColorMenu && (
+                   <div className={cn("absolute top-0 w-max bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-50 cursor-auto", (typeof window !== 'undefined' && colContextMenuState.x > window.innerWidth / 2) ? "right-full mr-1" : "left-full ml-1")} onClick={(e) => e.stopPropagation()}>
+                      <button 
+                         className="flex items-center w-full px-2 py-1.5 hover:bg-gray-100 rounded text-sm text-gray-700 transition-colors mb-3"
+                         onClick={() => {
+                            if (colContextMenuState.fieldId && onUpdateField) {
+                               onUpdateField(colContextMenuState.fieldId, { color: undefined });
+                            }
+                            setColContextMenuState(null);
+                            setShowColColorMenu(false);
+                         }}
+                      >
+                         <div className="w-4 h-4 border border-red-500 rounded-sm mr-2 flex items-center justify-center bg-white overflow-hidden relative">
+                           <div className="absolute w-[18px] border-b border-red-500 -rotate-45" />
+                         </div>
+                         {lang === 'en' ? 'No fill color' : '无填充颜色'}
+                      </button>
+                      <div className="flex flex-col gap-1.5">
+                         {FIELD_COLORS.map((row, i) => (
+                           <div key={i} className="flex justify-between gap-1">
+                             {row.map(color => {
+                               const currentField = data.fields.find(f => f.id === colContextMenuState.fieldId);
+                               const isActive = currentField?.color === color;
+                               return (
+                                 <button 
+                                   key={color}
+                                   className={cn("w-5 h-5 rounded-sm hover:scale-110 transition-all", isActive ? "ring-2 ring-blue-500 ring-offset-1 scale-110 border-white border z-10" : "shadow-sm")}
+                                   style={{ backgroundColor: color }}
+                                   onClick={() => {
+                                      if (colContextMenuState.fieldId && onUpdateField) {
+                                         onUpdateField(colContextMenuState.fieldId, { color });
+                                      }
+                                      setColContextMenuState(null);
+                                      setShowColColorMenu(false);
+                                   }}
+                                 />
+                               );
+                             })}
+                           </div>
+                         ))}
+                      </div>
+                   </div>
+                )}
+             </div>
+             <div className="border-t border-gray-100 my-1"></div>
+             
              <button 
                 className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
                 onClick={() => {
@@ -3641,6 +3712,62 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              <button 
                 className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center"
                 onClick={() => {
+                   if (colContextMenuState.fieldId && onDuplicateField) {
+                      onDuplicateField(colContextMenuState.fieldId);
+                   }
+                   setColContextMenuState(null);
+                }}
+             >
+                <Copy className="w-4 h-4 mr-2" />
+                {lang === 'en' ? 'Duplicate field' : '复制字段'}
+             </button>
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center"
+                onClick={() => {
+                   if (colContextMenuState.fieldId) {
+                      const field = data.fields.find(f => f.id === colContextMenuState.fieldId);
+                      if (field) {
+                         const attr = {
+                            type: field.type,
+                            options: field.options,
+                            prompt: field.prompt,
+                            refFields: field.refFields,
+                            aiTextConfig: field.aiTextConfig,
+                            aiImageConfig: field.aiImageConfig,
+                            aiVideoConfig: field.aiVideoConfig,
+                            color: field.color
+                         };
+                         const str = JSON.stringify(attr);
+                         localStorage.setItem('copiedFieldAttr', str);
+                         setCopiedFieldAttrStr(str);
+                      }
+                   }
+                   setColContextMenuState(null);
+                }}
+             >
+                <ClipboardCopy className="w-4 h-4 mr-2" />
+                {lang === 'en' ? 'Copy field properties' : '复制字段属性'}
+             </button>
+             <button 
+                className={cn("w-full text-left px-4 py-2 transition-colors flex items-center", copiedFieldAttrStr ? "hover:bg-blue-50" : "opacity-30 cursor-not-allowed")}
+                onClick={() => {
+                   if (!copiedFieldAttrStr) return;
+                   if (colContextMenuState.fieldId && onUpdateField) {
+                      try {
+                         const attr = JSON.parse(copiedFieldAttrStr);
+                         onUpdateField(colContextMenuState.fieldId, attr);
+                      } catch (e) {}
+                   }
+                   setColContextMenuState(null);
+                }}
+                disabled={!copiedFieldAttrStr}
+             >
+                <ClipboardPaste className="w-4 h-4 mr-2" />
+                {lang === 'en' ? 'Paste field properties' : '粘贴字段属性'}
+             </button>
+             <button 
+                className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center"
+                onClick={() => {
                    if (colContextMenuState.fieldId && onUpdateField) {
                       let idsToHide = [colContextMenuState.fieldId];
                       if (selectionBox && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1) {
@@ -3694,13 +3821,101 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
         </>
       )}
 
-      {cellContextMenuState && (
+      {cellContextMenuState && (() => {
+        const isVerticalSelection = selectionBox && selectionBox.maxR > selectionBox.minR && selectionBox.minC === selectionBox.maxC && extraSelectedCells.length === 0;
+        
+        let hasAnyLink = false;
+        const allSelectedCellsList = [];
+        if (selectionBox) {
+            for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+                for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
+                    allSelectedCellsList.push({r, c});
+                }
+            }
+        }
+        extraSelectedCells.forEach(cell => allSelectedCellsList.push(cell));
+
+        if (allSelectedCellsList.length === 0 && activeCell) {
+            const r = data.records.findIndex(rec => rec.id === activeCell.recordId);
+            const c = visibleFields.findIndex(f => f.id === activeCell.fieldId);
+            if (r >= 0 && c >= 0) allSelectedCellsList.push({r, c});
+        }
+
+        for (const cell of allSelectedCellsList) {
+            const recordId = data.records[cell.r]?.id;
+            const fieldId = visibleFields[cell.c]?.id;
+            if (recordId && fieldId && data.cellLinks?.[`${recordId}-${fieldId}`]) {
+                hasAnyLink = true;
+                break;
+            }
+        }
+        
+        return (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setCellContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setCellContextMenuState(null); }}></div>
           <div 
              className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[200px] text-sm text-gray-700"
-             style={cellContextMenuState.y + 200 > window.innerHeight ? { left: cellContextMenuState.x, bottom: window.innerHeight - cellContextMenuState.y, top: 'auto' } : { left: cellContextMenuState.x, top: cellContextMenuState.y }}
+             style={{
+                ...(cellContextMenuState.y + 200 > window.innerHeight ? { bottom: window.innerHeight - cellContextMenuState.y, top: 'auto' } : { top: cellContextMenuState.y }),
+                ...(typeof window !== 'undefined' && cellContextMenuState.x + 220 > window.innerWidth ? { right: Math.max(10, window.innerWidth - cellContextMenuState.x), left: 'auto' } : { left: Math.max(10, cellContextMenuState.x) })
+             }}
           >
+             {isVerticalSelection && onUpdateCellLinks && (
+                <button 
+                   className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between pointer-events-auto text-blue-600 hover:text-blue-700 border-b border-gray-100"
+                   onClick={() => {
+                      const newLinks = { ...(data.cellLinks || {}) };
+                      const groupId = `group_${Date.now()}`;
+                      const updates = [];
+                      const fieldId = visibleFields[selectionBox!.minC]?.id;
+                      const masterValue = data.records[selectionBox!.minR][fieldId];
+                      
+                      for (let r = selectionBox!.minR; r <= selectionBox!.maxR; r++) {
+                          const recordId = data.records[r]?.id;
+                          if (recordId && fieldId) {
+                             newLinks[`${recordId}-${fieldId}`] = groupId;
+                             if (r > selectionBox!.minR) {
+                               updates.push({ recordId, fieldId, value: masterValue });
+                             }
+                          }
+                      }
+                      onUpdateCellLinks(newLinks);
+                      if (updates.length > 0 && onUpdateRecordsBatch) {
+                        onUpdateRecordsBatch(updates);
+                      }
+                      setCellContextMenuState(null);
+                   }}
+                >
+                   <div className="flex items-center">
+                      <Link className="w-4 h-4 mr-2" />
+                      {lang === 'en' ? 'Link cells' : '联动所选单元格'}
+                   </div>
+                </button>
+             )}
+             
+             {hasAnyLink && onUpdateCellLinks && (
+                <button 
+                   className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between pointer-events-auto text-blue-600 hover:text-blue-700 border-b border-gray-100"
+                   onClick={() => {
+                      const newLinks = { ...(data.cellLinks || {}) };
+                      for (const cell of allSelectedCellsList) {
+                          const recordId = data.records[cell.r]?.id;
+                          const fieldId = visibleFields[cell.c]?.id;
+                          if (recordId && fieldId) {
+                             delete newLinks[`${recordId}-${fieldId}`];
+                          }
+                      }
+                      onUpdateCellLinks(newLinks);
+                      setCellContextMenuState(null);
+                   }}
+                >
+                   <div className="flex items-center">
+                      <Unlink className="w-4 h-4 mr-2" />
+                      {lang === 'en' ? 'Unlink cells' : '取消联动'}
+                   </div>
+                </button>
+             )}
+
              <button 
                 className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between pointer-events-auto text-blue-600 hover:text-blue-700 border-b border-gray-100"
                 onClick={() => {
@@ -3773,7 +3988,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              </button>
           </div>
         </>
-      )}
+      ) })()}
 
       {showBatchDownloadDialog && (
          <BatchDownloadPopup
@@ -3894,6 +4109,14 @@ interface HeaderCellProps {
   lang?: 'en' | 'zh';
 }
 
+const FIELD_COLORS = [
+  ['#f1f5f9', '#dbeafe', '#e0f2fe', '#ccfbf1', '#dcfce3', '#fef3c7', '#ffedd5', '#fee2e2', '#fce7f3', '#f3e8ff'],
+  ['#e2e8f0', '#bfdbfe', '#bae6fd', '#99f6e4', '#bbf7d0', '#fde68a', '#fed7aa', '#fecaca', '#fbcfe8', '#e9d5ff'],
+  ['#94a3b8', '#60a5fa', '#38bdf8', '#2dd4bf', '#4ade80', '#facc15', '#fb923c', '#f87171', '#f472b6', '#c084fc'],
+  ['#475569', '#3b82f6', '#0ea5e9', '#0d9488', '#16a34a', '#eab308', '#f59e0b', '#dc2626', '#db2777', '#a855f7'],
+  ['#1e293b', '#2563eb', '#0284c7', '#0f766e', '#15803d', '#ca8a04', '#d97706', '#b91c1c', '#be185d', '#7e22ce']
+];
+
 const FIELD_TYPES: { type: FieldType, label: string, labelZh: string }[] = [
   { type: 'text', label: 'Text', labelZh: '文本' },
   { type: 'number', label: 'Number', labelZh: '数字' },
@@ -3918,6 +4141,7 @@ function HeaderCell({
   const [isEditing, setIsEditing] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showActionMenu, setShowActionMenu] = useState(false);
+  const [isTypeExpanded, setIsTypeExpanded] = useState(true);
   
   const [draftPrompt, setDraftPrompt] = useState(field.prompt || '');
   const [draftRefs, setDraftRefs] = useState<string[]>(field.refFields || []);
@@ -3931,6 +4155,7 @@ function HeaderCell({
       setDraftPrompt(field.prompt || '');
       setDraftRefs(field.refFields || []);
       setDraftAiImageConfig(field.aiImageConfig || { count: 1, size: '1024x1024' });
+      setIsTypeExpanded(true);
     }
   }, [showMenu, field.prompt, field.refFields, field.aiImageConfig]);
 
@@ -3990,6 +4215,9 @@ function HeaderCell({
       )}
       style={{ width: currentWidth, minWidth: currentWidth, maxWidth: currentWidth, left: frozenLeftOffset }}
     >
+      {field.color && (
+         <div className="absolute top-0 left-0 right-0 h-[3px] z-[5]" style={{ backgroundColor: field.color }} />
+      )}
       <div 
         className="flex items-center px-2 h-8 cursor-pointer"
         onClick={(e) => onSelectCol(e)}
@@ -4055,19 +4283,40 @@ function HeaderCell({
 
       {showMenu && (
         <div ref={menuRef} className="absolute top-full left-0 mt-1 w-64 bg-white rounded-lg shadow-lg border border-gray-200 z-50 p-2" onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
-           <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{lang === 'en' ? 'Change Type' : '修改类型'}</div>
-           <div className="grid grid-cols-2 gap-1 mb-3">
-             {FIELD_TYPES.map(ft => (
-               <div 
-                 key={ft.type} 
-                 className={cn("flex items-center px-2 py-1.5 rounded cursor-pointer text-sm transition-colors", field.type === ft.type ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-100')}
-                 onClick={() => { onChangeType(ft.type); }}
-               >
-                 <FieldIcon type={ft.type} className={cn("w-4 h-4 mr-2", field.type === ft.type ? "text-blue-700" : "")} />
-                 <span className="flex-1 truncate">{lang === 'en' ? ft.label : ft.labelZh}</span>
-               </div>
-             ))}
+           <div className="flex items-center justify-between mb-2">
+             <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{lang === 'en' ? 'Change Type' : '修改类型'}</div>
+             <button onClick={() => setIsTypeExpanded(!isTypeExpanded)} className="text-gray-400 hover:text-gray-600 transition-colors">
+               <ChevronDown className={cn("w-4 h-4 transition-transform", isTypeExpanded ? "" : "-rotate-90")} />
+             </button>
            </div>
+           {isTypeExpanded ? (
+             <div className="grid grid-cols-2 gap-1 mb-3">
+               {FIELD_TYPES.map(ft => (
+                 <div 
+                   key={ft.type} 
+                   className={cn("flex items-center px-2 py-1.5 rounded cursor-pointer text-sm transition-colors", field.type === ft.type ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-100')}
+                   onClick={() => { onChangeType(ft.type); setIsTypeExpanded(false); }}
+                 >
+                   <FieldIcon type={ft.type} className={cn("w-4 h-4 mr-2", field.type === ft.type ? "text-blue-700" : "")} />
+                   <span className="flex-1 truncate">{lang === 'en' ? ft.label : ft.labelZh}</span>
+                 </div>
+               ))}
+             </div>
+           ) : (() => {
+             const currentType = FIELD_TYPES.find(t => t.type === field.type);
+             if (!currentType) return null;
+             return (
+               <div className="mb-3">
+                 <div 
+                   className="flex items-center px-2 py-1.5 rounded cursor-pointer text-sm transition-colors bg-blue-50 text-blue-700 border border-blue-100"
+                   onClick={() => setIsTypeExpanded(true)}
+                 >
+                   <FieldIcon type={currentType.type} className="w-4 h-4 mr-2" />
+                   <span className="flex-1 truncate">{lang === 'en' ? currentType.label : currentType.labelZh}</span>
+                 </div>
+               </div>
+             );
+           })()}
 
            {field.type === 'formula' && (
              <div className="border-t border-gray-100 pt-3">
@@ -4787,9 +5036,12 @@ interface CellProps {
   isFrozenLast?: boolean;
   lang?: 'en' | 'zh';
   globalAttachmentPropsMap?: Map<string, any>;
+  isLinked?: boolean;
+  isLinkedTop?: boolean;
+  isLinkedBottom?: boolean;
 }
 
-function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh', globalAttachmentPropsMap }: CellProps) {
+function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh', globalAttachmentPropsMap, isLinked, isLinkedTop, isLinkedBottom }: CellProps) {
   const value = record[field.id];
   const isElectron = !!((window as any).electronAPI || (window as any).electron);
   
@@ -5621,12 +5873,27 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
         isSearchMatchActive && !isEditingMode && "ring-[2px] ring-blue-400 z-10",
         isCutBox && !isEditingMode && "opacity-50 ring-1 ring-dashed ring-gray-400 ring-inset",
         isActive && !isEditingMode && "ring-[1.5px] ring-blue-500 ring-inset z-20 outline-none",
-        frozenLeftOffset !== undefined ? (isActive ? "sticky z-20" : "sticky z-10") : "",
+        frozenLeftOffset !== undefined ? (isActive ? "sticky z-[32]" : "sticky z-[31]") : "",
         isFrozenLast && frozenLeftOffset !== undefined ? "shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" : ""
       )}
       style={{ left: frozenLeftOffset }}
     >
+      {isLinked && !isEditingMode && !isActive && !isSelectedBox && (
+          <div className="absolute inset-0 pointer-events-none z-[11]" style={{
+             boxShadow: [
+               'inset 1px 0 0 0 #c084fc', 
+               'inset -1px 0 0 0 #c084fc',
+               isLinkedTop ? 'inset 0 1px 0 0 #c084fc' : '',
+               isLinkedBottom ? 'inset 0 -1px 0 0 #c084fc' : ''
+             ].filter(Boolean).join(', ')
+          }}></div>
+      )}
       {renderContent()}
+      {isLinkedTop && (
+         <div className="absolute top-0 left-0 bg-purple-400 text-white rounded-br px-0.5 py-0.5 pointer-events-none z-[12] opacity-80" title={lang === 'en' ? 'Linked cell' : '联动单元格'}>
+            <Link className="w-2.5 h-2.5" />
+         </div>
+      )}
     </td>
   );
 }

@@ -54,6 +54,12 @@ If embedded within an Electron environment (such as `main.js` execution):
 - **Image Annotations & Reviews**: Features an independent overlay matrix tied to the `ZoomableImage` component, converting `X/Y` coordinate clicks into visual markers. These review threads map directly back into the dataset objects, binding design feedback physically to the active cell record.
 - **Ali-OSS Cloud Backup**: Contains an integrated `oss_uploader` utilizing Node's `sharp` library to automatically resize and transcode assets into maximal 3072px width `.webp` resources. The service leverages a Bi-directional CSV synchronization mechanic that continuously checks mapping timestamps to keep cloud and local directories unified.
 
+### 4.6 Cell Linking & Two-Way Sync
+The `Grid` component supports logical data grouping known as "Linked Cells".
+- **Tracking Mechanism**: Link relationships are tracked inside the `GridData.cellLinks` property using a dictionary format mapping `recordId-fieldId` to a unique `groupId` (e.g., `group_16843232...`).
+- **Cascade Updates**: The core `handleUpdateRecord` and `handleUpdateRecordsBatch` logic dynamically detects if a modified cell possesses a `groupId`. If so, it broadcasts identical `[fieldId]: value` property changes to all sibling records mapped to that specific group ID.
+- **Visual Presentation**: Linked cells leverage intelligent border/shadow manipulation (`inset 1px 0 0 0 #c084fc`) within `Cell` rendering to draw grouped bounding boxes natively, reducing unnecessary DOM clutter while retaining pristine visual separation from standard selections.
+
 ## 5. Deployment Details
 Since the primary logic exists on the client side, the project compiles to static assets (`dist` folder). 
 - **Build Web Assets**: `npm run build` generates the required HTML/JS/CSS into the `dist/` folder.
