@@ -1345,7 +1345,12 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
   if (!templateStr) return { cleanString: '', parts, dataUrls: dataUrlsOut, originalUrls: originalUrlsOut };
   let str = templateStr;
   
-  for (let f of fields) {
+  // Sort fields by their first occurrence in the template string to ensure parts are ordered correctly
+  const orderedFields = [...fields].filter(f => str.includes(`{${f.name}}`)).sort((a, b) => {
+    return str.indexOf(`{${a.name}}`) - str.indexOf(`{${b.name}}`);
+  });
+
+  for (let f of orderedFields) {
     const marker = `{${f.name}}`;
     if (str.includes(marker)) {
       let val = record[f.id];
@@ -1370,7 +1375,7 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
           if (fullImageBlobCache.has(u)) {
              fetchUrl = fullImageBlobCache.get(u)!;
           } else if (!u.startsWith('data:') && !u.startsWith('http') && !u.startsWith('blob:') && !u.startsWith('file:')) {
-             fetchUrl = `file://${u.replace(/\\\\/g, '/')}`;
+             fetchUrl = `file://${u.replace(/\\/g, '/')}`;
           }
 
           if (fetchUrl.startsWith('data:')) {
@@ -1661,7 +1666,7 @@ const triggerDownload = async (url: string, filename: string, folderPath?: strin
 
 const gallerySettingsCache = new Map<string, any>();
 
-function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gallerySettings, onGallerySettingsChange }: { tableId?: string, data: any, lang: string, onPreviewImage: (url: string, items: any[]) => void, gallerySettings?: any, onGallerySettingsChange?: (s: any) => void }) {
+function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gallerySettings, onGallerySettingsChange, groupConfig }: { tableId?: string, data: any, lang: string, onPreviewImage: (url: string, items: any[]) => void, gallerySettings?: any, onGallerySettingsChange?: (s: any) => void, groupConfig?: any[] }) {
     const defaultSettings = gallerySettings || gallerySettingsCache.get(tableId) || {
         statusFilter: 'all',
         ratingFilter: 'all',
@@ -1740,6 +1745,134 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
         if (columnFilter !== 'all' && img.fieldId !== columnFilter) return false;
         return true;
     });
+
+    const renderImageCard = (img: any, idx: number | string) => {
+        const path = img.url;
+        let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
+        const infoTexts = displayFieldIds.map(id => {
+            const f = data.fields.find((f: any) => f.id === id);
+            const val = img.record[id];
+            let text = val != null ? String(val) : '';
+            if (f && (f.type === 'singleSelect' || f.type === 'multiSelect') && val) {
+                const valArray = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',').map(s=>s.trim()) : [val]);
+                const mapped = valArray.map(v => f.options?.find((o: any) => o.id === v)?.name || v);
+                text = mapped.length === 1 && !Array.isArray(val) && f.type === 'singleSelect' ? mapped[0] : mapped.join(', ');
+            }
+            return { id, name: f?.name, text };
+        }).filter(t => t.text);
+        const hasInfo = showRating || infoTexts.length > 0;
+        return (
+            <div key={idx} className="relative group w-[200px] h-auto flex flex-col bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex-shrink-0 cursor-pointer hover:shadow-md transition-shadow" onClick={() => {
+                const fileItemsForPreview = displayImages.map(d => {
+                    const refUrls: string[] = [];
+                    refFieldIds.forEach(id => {
+                        const val = d.record[id];
+                        if (val) {
+                            let items: any[] = [];
+                            if (Array.isArray(val)) items = val;
+                            else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
+                            else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
+
+                            if (items.length > 0) {
+                                const u = typeof items[0] === 'string' ? items[0] : items[0].url;
+                                if (u) {
+                                    const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
+                                    refUrls.push(mappedU);
+                                }
+                            }
+                        }
+                    });
+                    return { ...d.item, refUrls };
+                });
+                onPreviewImage(path, fileItemsForPreview);
+            }}>
+                <div className="w-full h-[180px] shrink-0 relative border-b border-gray-100">
+                    <ThumbnailImage path={path} alt={path} className="w-full h-full object-cover" />
+                    {img.status !== 'unannotated' && (
+                        <div className={`absolute top-1 right-1 px-1.5 py-0.5 rounded text-[10px] text-white font-bold shadow-sm ${img.status === 'pending' ? 'bg-red-500' : img.status === 'resolved' ? 'bg-yellow-500' : 'bg-green-500'}`}>
+                            {img.status === 'pending' ? '待处理' : img.status === 'resolved' ? '已处理' : '通过'}
+                        </div>
+                    )}
+                </div>
+                {hasInfo && (
+                    <div className="p-2 h-auto flex flex-col justify-center bg-white shrink-0">
+                        {showRating && img.rating > 0 && (
+                            <div className="flex items-center gap-0.5 mb-1">
+                                {Array.from({length: 5}).map((_, i) => (
+                                   <Star key={i} className={`w-3.5 h-3.5 ${i < img.rating ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`} />
+                                ))}
+                            </div>
+                        )}
+                        {infoTexts.map(info => (
+                            <div key={info.id} className="text-xs text-gray-600 truncate" title={`${info.name}: ${info.text}`}>
+                               {info.text}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    let renderedContent;
+    
+    if (groupConfig && groupConfig.length > 0) {
+        const groups: { groupKey: string, groupLabels: { fieldName: string, value: any }[], images: any[] }[] = [];
+        let currentGroupKey = '';
+        let currentGroup: any = null;
+
+        displayImages.forEach(img => {
+            let key = '';
+            const labels: any[] = [];
+            groupConfig.forEach(g => {
+                const f = data.fields.find((f:any) => f.id === g.fieldId);
+                const val = img.record[g.fieldId];
+                key += g.fieldId + ':' + JSON.stringify(val) + '|';
+                let displayVal = val;
+                if (f && (f.type === 'singleSelect' || f.type === 'multiSelect') && val != null && val !== '') {
+                    const valArray = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',').map(s=>s.trim()) : [val]);
+                    const mapped = valArray.map(v => f.options?.find((o: any) => o.id === v)?.name || v);
+                    displayVal = mapped.length === 1 && !Array.isArray(val) && f.type === 'singleSelect' ? mapped[0] : mapped.join(', ');
+                }
+                labels.push({ fieldName: f?.name || g.fieldId, value: displayVal });
+            });
+            
+            if (key !== currentGroupKey || !currentGroup) {
+                currentGroupKey = key;
+                currentGroup = { groupKey: key, groupLabels: labels, images: [] };
+                groups.push(currentGroup);
+            }
+            currentGroup.images.push(img);
+        });
+
+        renderedContent = (
+             <div className="flex flex-col gap-6 w-full">
+                 {groups.map((g, idx) => (
+                     <div key={idx} className="flex flex-col gap-3 w-full">
+                         <div className="flex items-center gap-2 text-sm font-medium text-gray-700 bg-gray-100/70 py-2 px-3 rounded-md border border-gray-200/60 shadow-sm self-start">
+                             {g.groupLabels.map((lbl, i) => (
+                                 <span key={i} className="flex flex-row items-center">
+                                     {i > 0 && <span className="mx-2 text-gray-400">/</span>}
+                                     <span className="text-gray-500 mr-1">{lbl.fieldName}:</span>
+                                     <span className="font-semibold text-gray-800">{lbl.value !== undefined && lbl.value !== null && lbl.value !== '' ? String(lbl.value) : (lang === 'en' ? '(Empty)' : '(空)')}</span>
+                                 </span>
+                             ))}
+                             <span className="ml-2 px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-600 text-xs">{g.images.length}</span>
+                         </div>
+                         <div className="flex flex-wrap gap-4">
+                             {g.images.map((img, i) => renderImageCard(img, `${idx}-${i}`))}
+                         </div>
+                     </div>
+                 ))}
+             </div>
+        );
+    } else {
+        renderedContent = (
+             <div className="flex flex-wrap gap-4">
+                 {displayImages.map((img, idx) => renderImageCard(img, idx))}
+             </div>
+        );
+    }
 
     return (
         <div className="flex flex-col h-full w-full bg-gray-50 overflow-hidden outline-none">
@@ -1835,69 +1968,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
                  </div>
              </div>
              <div className="flex-1 overflow-y-auto p-4 content-start">
-                 <div className="flex flex-wrap gap-4">
-                     {displayImages.map((img, idx) => {
-                         const path = img.url;
-                         let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
-                         const infoTexts = displayFieldIds.map(id => {
-                             const f = data.fields.find((f: any) => f.id === id);
-                             const val = img.record[id];
-                             return { id, name: f?.name, text: val != null ? String(val) : '' };
-                         }).filter(t => t.text);
-                         const hasInfo = showRating || infoTexts.length > 0;
-                         return (
-                             <div key={idx} className="relative group w-[200px] h-auto flex flex-col bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex-shrink-0 cursor-pointer hover:shadow-md transition-shadow" onClick={() => {
-                                 const fileItemsForPreview = displayImages.map(d => {
-                                     const refUrls: string[] = [];
-                                     refFieldIds.forEach(id => {
-                                         const val = d.record[id];
-                                         if (val) {
-                                             let items: any[] = [];
-                                             if (Array.isArray(val)) items = val;
-                                             else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
-                                             else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
-
-                                             if (items.length > 0) {
-                                                 const u = typeof items[0] === 'string' ? items[0] : items[0].url;
-                                                 if (u) {
-                                                     const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
-                                                     refUrls.push(mappedU);
-                                                 }
-                                             }
-                                         }
-                                     });
-                                     return { ...d.item, refUrls };
-                                 });
-                                 onPreviewImage(path, fileItemsForPreview);
-                             }}>
-                                 <div className="w-full h-[180px] shrink-0 relative border-b border-gray-100">
-                                     <ThumbnailImage path={path} alt={path} className="w-full h-full object-cover" />
-                                     {img.status !== 'unannotated' && (
-                                         <div className={`absolute top-1 right-1 px-1.5 py-0.5 rounded text-[10px] text-white font-bold shadow-sm ${img.status === 'pending' ? 'bg-red-500' : img.status === 'resolved' ? 'bg-yellow-500' : 'bg-green-500'}`}>
-                                             {img.status === 'pending' ? '待处理' : img.status === 'resolved' ? '已处理' : '通过'}
-                                         </div>
-                                     )}
-                                 </div>
-                                 {hasInfo && (
-                                     <div className="p-2 h-auto flex flex-col justify-center bg-white shrink-0">
-                                         {showRating && img.rating > 0 && (
-                                             <div className="flex items-center gap-0.5 mb-1">
-                                                 {Array.from({length: 5}).map((_, i) => (
-                                                    <Star key={i} className={`w-3.5 h-3.5 ${i < img.rating ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`} />
-                                                 ))}
-                                             </div>
-                                         )}
-                                         {infoTexts.map(info => (
-                                             <div key={info.id} className="text-xs text-gray-600 truncate" title={`${info.name}: ${info.text}`}>
-                                                {info.text}
-                                             </div>
-                                         ))}
-                                     </div>
-                                 )}
-                             </div>
-                         );
-                     })}
-                 </div>
+                 {renderedContent}
              </div>
         </div>
     );
@@ -3104,7 +3175,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
   return (
     <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate' }}>
       {viewMode === 'gallery' ? (
-        <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} gallerySettings={gallerySettings} onGallerySettingsChange={onGallerySettingsChange} />
+        <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} gallerySettings={gallerySettings} onGallerySettingsChange={onGallerySettingsChange} groupConfig={groupConfig} />
       ) : (
       <table className="text-left" style={{ tableLayout: 'fixed', width: '100%', minWidth: totalTableWidth + 100, borderCollapse: 'separate', borderSpacing: 0 }}>
         <thead className="sticky top-0 z-40 bg-gray-50 text-sm">
@@ -3246,6 +3317,16 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               <React.Fragment key={record.id}>
                  {groupHeadersToRender.map((gh) => {
                     const isFolded = foldedGroups?.includes(gh.groupKey);
+                    
+                    let displayValue = gh.value;
+                    if ((gh.field?.type === 'singleSelect' || gh.field?.type === 'multiSelect') && gh.field?.options) {
+                      if (Array.isArray(gh.value)) {
+                         displayValue = gh.value.map((v: any) => gh.field.options?.find((o: any) => o.id === v || o.name === v)?.name || v).join(', ');
+                      } else {
+                         displayValue = gh.field.options.find((o: any) => o.id === gh.value || o.name === gh.value)?.name || gh.value;
+                      }
+                    }
+
                     return (
                     <tr key={`gh-${record.id}-${gh.level}`} className="bg-gray-50 border-b border-t border-gray-200 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => {
                         const next = new Set(foldedGroups || []);
@@ -3257,7 +3338,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                         <div className="sticky left-0 flex items-center py-2 text-[13px] font-medium text-gray-800 w-fit" style={{ paddingLeft: `${gh.level * 24 + 16}px` }}>
                           <ChevronDown className={`w-4 h-4 mr-1.5 text-gray-500 transition-transform ${isFolded ? '-rotate-90' : ''}`} />
                           <span className="text-gray-500 mr-1.5">{gh.field?.name}:</span>
-                          <span>{gh.value == null || gh.value === '' ? (lang === 'en' ? '(Empty)' : '(空)') : String(gh.value)}</span>
+                          <span>{displayValue == null || displayValue === '' || (Array.isArray(displayValue) && displayValue.length === 0) ? (lang === 'en' ? '(Empty)' : '(空)') : String(displayValue)}</span>
                         </div>
                       </td>
                     </tr>
