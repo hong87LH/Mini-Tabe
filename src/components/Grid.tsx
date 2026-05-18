@@ -1666,7 +1666,7 @@ const triggerDownload = async (url: string, filename: string, folderPath?: strin
 
 const gallerySettingsCache = new Map<string, any>();
 
-function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gallerySettings, onGallerySettingsChange, groupConfig }: { tableId?: string, data: any, lang: string, onPreviewImage: (url: string, items: any[]) => void, gallerySettings?: any, onGallerySettingsChange?: (s: any) => void, groupConfig?: any[] }) {
+function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gallerySettings, onGallerySettingsChange, groupConfig, foldedGroups, onFoldedGroupsChange }: { tableId?: string, data: any, lang: string, onPreviewImage: (url: string, items: any[]) => void, gallerySettings?: any, onGallerySettingsChange?: (s: any) => void, groupConfig?: any[], foldedGroups?: string[], onFoldedGroupsChange?: (g: string[]) => void }) {
     const defaultSettings = gallerySettings || gallerySettingsCache.get(tableId) || {
         statusFilter: 'all',
         ratingFilter: 'all',
@@ -1847,9 +1847,20 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
         renderedContent = (
              <div className="flex flex-col gap-6 w-full">
-                 {groups.map((g, idx) => (
+                 {groups.map((g, idx) => {
+                     const isFolded = foldedGroups?.includes(g.groupKey);
+                     return (
                      <div key={idx} className="flex flex-col gap-3 w-full">
-                         <div className="flex items-center gap-2 text-sm font-medium text-gray-700 bg-gray-100/70 py-2 px-3 rounded-md border border-gray-200/60 shadow-sm self-start">
+                         <div 
+                            className="flex items-center gap-2 text-sm font-medium text-gray-700 bg-gray-100/70 py-2 px-3 rounded-md border border-gray-200/60 shadow-sm self-start cursor-pointer hover:bg-gray-200/70 transition-colors"
+                            onClick={() => {
+                                const next = new Set(foldedGroups || []);
+                                if (isFolded) next.delete(g.groupKey);
+                                else next.add(g.groupKey);
+                                onFoldedGroupsChange?.(Array.from(next));
+                            }}
+                         >
+                             <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${isFolded ? '-rotate-90' : ''}`} />
                              {g.groupLabels.map((lbl, i) => (
                                  <span key={i} className="flex flex-row items-center">
                                      {i > 0 && <span className="mx-2 text-gray-400">/</span>}
@@ -1859,11 +1870,13 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
                              ))}
                              <span className="ml-2 px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-600 text-xs">{g.images.length}</span>
                          </div>
-                         <div className="flex flex-wrap gap-4">
-                             {g.images.map((img, i) => renderImageCard(img, `${idx}-${i}`))}
-                         </div>
+                         {!isFolded && (
+                             <div className="flex flex-wrap gap-4">
+                                 {g.images.map((img, i) => renderImageCard(img, `${idx}-${i}`))}
+                             </div>
+                         )}
                      </div>
-                 ))}
+                 )})}
              </div>
         );
     } else {
@@ -3175,7 +3188,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
   return (
     <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate' }}>
       {viewMode === 'gallery' ? (
-        <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} gallerySettings={gallerySettings} onGallerySettingsChange={onGallerySettingsChange} groupConfig={groupConfig} />
+        <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} gallerySettings={gallerySettings} onGallerySettingsChange={onGallerySettingsChange} groupConfig={groupConfig} foldedGroups={foldedGroups} onFoldedGroupsChange={onFoldedGroupsChange} />
       ) : (
       <table className="text-left" style={{ tableLayout: 'fixed', width: '100%', minWidth: totalTableWidth + 100, borderCollapse: 'separate', borderSpacing: 0 }}>
         <thead className="sticky top-0 z-40 bg-gray-50 text-sm">
@@ -4699,8 +4712,6 @@ function HeaderCell({
                             {(Array.isArray(modelSettings?.image) ? modelSettings.image : [modelSettings?.image]).flatMap((s: any) => s?.modelName ? s.modelName.split(',') : []).map((m: string) => m?.trim()).filter(Boolean).map((m: string) => (
                                <option key={m} value={m} />
                             ))}
-                            <option value="gemini-3.1-flash-image-preview" />
-                            <option value="gemini-3-pro-image-preview" />
                           </datalist>
                           <select 
                              className="absolute bottom-1 right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px]"
