@@ -2006,10 +2006,22 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
 
                      items.forEach(item => {
                          const url = typeof item === 'string' ? item : item.url;
-                         if (url && typeof item !== 'string' && item.annotations && item.annotations.length > 0) {
+                         if (url && typeof item !== 'string') {
                              const existing = map.get(url);
-                             if (!existing || existing.annotations.length < item.annotations.length) {
-                                 map.set(url, { annotations: item.annotations, status: item.status, rating: item.rating });
+                             const hasAnnotations = item.annotations && item.annotations.length > 0;
+                             const hasRating = (item.rating && item.rating > 0);
+                             const hasStatus = item.status && item.status !== 'unannotated';
+                             
+                             if (hasAnnotations || hasRating || hasStatus) {
+                                 const newAnnotations = (hasAnnotations && (!existing?.annotations || item.annotations.length >= existing.annotations.length)) 
+                                    ? item.annotations 
+                                    : existing?.annotations;
+                                    
+                                 map.set(url, { 
+                                     annotations: newAnnotations, 
+                                     status: item.status || existing?.status, 
+                                     rating: item.rating || existing?.rating 
+                                 });
                              }
                          }
                      });
