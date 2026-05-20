@@ -347,7 +347,7 @@ const GlobalFilterRule = ({ rule, index, data, lang, updateRule, removeRule }: {
                      <div className="relative z-50 flex flex-col h-full max-h-[300px]">
                          <div className="px-2 flex gap-2 border-b border-gray-100 py-1.5 bg-gray-50 flex-wrap shrink-0">
                             <button className="text-xs text-blue-600 hover:text-blue-800" onClick={() => {
-                                 const newSelected = new Set(distinctValues);
+                                 const newSelected = new Set<string>(distinctValues);
                                  if (emptyCount > 0) newSelected.add('__EMPTY__');
                                  handleUpdate(newSelected);
                             }}>{lang === 'en' ? 'Select All' : '全选'}</button>
@@ -360,7 +360,7 @@ const GlobalFilterRule = ({ rule, index, data, lang, updateRule, removeRule }: {
                                  handleUpdate(newSelected);
                             }}>{lang === 'en' ? 'Invert' : '反选'}</button>
                             <button className="text-xs text-gray-500 hover:text-gray-700 ml-auto" onClick={() => {
-                                handleUpdate(new Set());
+                                handleUpdate(new Set<string>());
                             }}>
                                  {lang === 'en' ? 'Clear' : '清空'}
                             </button>
@@ -369,7 +369,7 @@ const GlobalFilterRule = ({ rule, index, data, lang, updateRule, removeRule }: {
                              {emptyCount > 0 && (
                                  <label className="flex items-center space-x-2 py-1 hover:bg-gray-50 rounded cursor-pointer">
                                      <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" checked={draftSelectedValues.has('__EMPTY__')} onChange={(e) => {
-                                         const newSelected = new Set(draftSelectedValues);
+                                         const newSelected = new Set<string>(draftSelectedValues);
                                          if (e.target.checked) newSelected.add('__EMPTY__'); else newSelected.delete('__EMPTY__');
                                          handleUpdate(newSelected);
                                      }} />
@@ -379,7 +379,7 @@ const GlobalFilterRule = ({ rule, index, data, lang, updateRule, removeRule }: {
                              {distinctValues.map(v => (
                                  <label key={v} className="flex items-center space-x-2 py-1 hover:bg-gray-50 rounded cursor-pointer">
                                      <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" checked={draftSelectedValues.has(v)} onChange={(e) => {
-                                         const newSelected = new Set(draftSelectedValues);
+                                         const newSelected = new Set<string>(draftSelectedValues);
                                          if (e.target.checked) newSelected.add(v); else newSelected.delete(v);
                                          handleUpdate(newSelected);
                                      }} />

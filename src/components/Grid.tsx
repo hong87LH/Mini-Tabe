@@ -870,6 +870,21 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
     } catch (e) {}
   }
 
+  const isVideo = pathStr.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/) || file?.type.startsWith('video/');
+
+  if (!isVideo) {
+      let resultUrl = pathStr;
+      if (file) {
+          resultUrl = URL.createObjectURL(file);
+      } else if (fullImageBlobCache.has(pathStr)) {
+          resultUrl = fullImageBlobCache.get(pathStr)!;
+      } else if (isElectronPath) {
+          resultUrl = `file://${pathStr.replace(/\\/g, '/')}`;
+      }
+      thumbnailCache.set(pathStr, resultUrl);
+      return resultUrl;
+  }
+
   return new Promise((resolve) => {
     thumbnailQueue.push(async () => {
       if (thumbnailCache.has(pathStr)) {
@@ -877,15 +892,10 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
          return;
       }
       
-      const isVideo = pathStr.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/) || file?.type.startsWith('video/');
-      const media = isVideo ? document.createElement('video') : new Image();
-      if (!isVideo) {
-         (media as HTMLImageElement).crossOrigin = 'anonymous';
-      } else {
-         (media as HTMLVideoElement).crossOrigin = 'anonymous';
-         (media as HTMLVideoElement).preload = 'metadata';
-         (media as HTMLVideoElement).muted = true;
-      }
+      const media = document.createElement('video');
+      media.crossOrigin = 'anonymous';
+      media.preload = 'metadata';
+      media.muted = true;
       
       let urlToLoad = '';
       let objectUrl = '';
@@ -904,27 +914,15 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
       await new Promise<void>((mediaResolve) => {
         const handleLoad = () => {
           if (objectUrl) URL.revokeObjectURL(objectUrl);
-          
-          if (isVideo) {
-             (media as HTMLVideoElement).currentTime = 1; // Seek to 1s
-          } else {
-             processAndExtract();
-          }
+          media.currentTime = 1; // Seek to 1s
         };
 
         const processAndExtract = () => {
           const MAX_DIM = 256;
-          let w = isVideo ? (media as HTMLVideoElement).videoWidth : (media as HTMLImageElement).width;
-          let h = isVideo ? (media as HTMLVideoElement).videoHeight : (media as HTMLImageElement).height;
+          let w = media.videoWidth;
+          let h = media.videoHeight;
           
           if (!w || !h) {
-            resolve(urlToLoad);
-            mediaResolve();
-            return;
-          }
-
-          if (w <= MAX_DIM && h <= MAX_DIM && !file && !isVideo) {
-            thumbnailCache.set(pathStr, urlToLoad);
             resolve(urlToLoad);
             mediaResolve();
             return;
@@ -943,25 +941,21 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
           canvas.height = vh;
           const ctx = canvas.getContext('2d');
           if (ctx) {
-            if (isVideo) {
-               ctx.fillStyle = '#000';
-               ctx.fillRect(0, 0, canvas.width, canvas.height);
-            }
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(media, 0, 0, vw, vh);
             
-            if (isVideo) {
-               // draw play button overlay
-               ctx.fillStyle = 'rgba(0,0,0,0.5)';
-               ctx.beginPath();
-               ctx.arc(vw/2, vh/2, 20, 0, Math.PI * 2);
-               ctx.fill();
-               ctx.fillStyle = '#fff';
-               ctx.beginPath();
-               ctx.moveTo(vw/2 - 6, vh/2 - 8);
-               ctx.lineTo(vw/2 + 10, vh/2);
-               ctx.lineTo(vw/2 - 6, vh/2 + 8);
-               ctx.fill();
-            }
+            // draw play button overlay
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.beginPath();
+            ctx.arc(vw/2, vh/2, 20, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.moveTo(vw/2 - 6, vh/2 - 8);
+            ctx.lineTo(vw/2 + 10, vh/2);
+            ctx.lineTo(vw/2 - 6, vh/2 + 8);
+            ctx.fill();
             
             try {
               const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
@@ -976,12 +970,8 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
           mediaResolve();
         };
 
-        if (isVideo) {
-           media.onloadeddata = handleLoad;
-           media.onseeked = processAndExtract;
-        } else {
-           media.onload = handleLoad;
-        }
+        media.onloadeddata = handleLoad;
+        media.onseeked = processAndExtract;
 
         media.onerror = () => {
           if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -996,38 +986,78 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
   });
 }
 
+const thumbnailObservers = new Map<Element, () => void>();
+let globalThumbnailObserver: IntersectionObserver | null = null;
+function getGlobalThumbnailObserver() {
+  if (!globalThumbnailObserver) {
+    globalThumbnailObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+           const callback = thumbnailObservers.get(entry.target);
+           if (callback) callback();
+        }
+      });
+    }, { rootMargin: '200px', threshold: 0.01 });
+  }
+  return globalThumbnailObserver;
+}
+
 const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string, alt: string, className: string, title?: string, onClick?: (e: React.MouseEvent) => void }) => {
-  const [src, setSrc] = useState<string>('');
+  const [src, setSrc] = useState<string>(thumbnailCache.get(path) || '');
   const imgRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     let isMounted = true;
     
-    if (thumbnailCache.has(path)) {
-        setSrc(thumbnailCache.get(path)!);
+    if (src || thumbnailCache.has(path)) {
+        if (!src) setSrc(thumbnailCache.get(path)!);
         return;
     }
 
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
+    const isVideo = path.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/);
+    
+    if (!isVideo) {
+       // Images resolve very quickly without blocking now, we rely on native loading="lazy" and decoding="async"
+       getOrGenerateThumbnail(path).then(fetched => {
+         if (isMounted) setSrc(fetched);
+       });
+       return;
+    }
+
+    const observer = getGlobalThumbnailObserver();
+    
+    if (imgRef.current) {
+        thumbnailObservers.set(imgRef.current, () => {
            getOrGenerateThumbnail(path).then(fetched => {
              if (isMounted) setSrc(fetched);
            });
-           observer.disconnect();
-        }
-      });
-    }, { rootMargin: '200px', threshold: 0.01 });
-
-    if (imgRef.current) observer.observe(imgRef.current);
+           if (imgRef.current) {
+              thumbnailObservers.delete(imgRef.current);
+              observer.unobserve(imgRef.current);
+           }
+        });
+        observer.observe(imgRef.current);
+    }
     
     return () => { 
       isMounted = false; 
-      observer.disconnect();
+      if (imgRef.current) {
+         thumbnailObservers.delete(imgRef.current);
+         observer.unobserve(imgRef.current);
+      }
     };
-  }, [path]);
+  }, [path, src]);
 
-  return <img ref={imgRef} src={src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='} alt={alt} className={className} title={title} onClick={onClick} loading="lazy" />;
+  return <img 
+    ref={imgRef} 
+    src={src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='} 
+    alt={alt} 
+    className={className} 
+    title={title} 
+    onClick={onClick} 
+    loading="lazy" 
+    decoding="async"
+  />;
 };
 
 interface GridProps {
@@ -3452,7 +3482,7 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
              }
 
              return (
-              <tbody key={record.id} ref={virtualRow.measureElement as any} data-index={virtualRow.index} className="text-[13px]">
+              <tbody key={record.id} data-index={virtualRow.index} className="text-[13px]">
                  {groupHeadersToRender.map((gh) => {
                     const isFolded = foldedGroups?.includes(gh.groupKey);
                     
@@ -4562,10 +4592,10 @@ function HeaderCell({
                  setColFilterSearch(val);
                  if (val) {
                      const lowerVal = val.toLowerCase();
-                     const newSelected = new Set(distinctValues.filter(v => v.toLowerCase().includes(lowerVal)));
+                     const newSelected = new Set<string>(distinctValues.filter(v => v.toLowerCase().includes(lowerVal)));
                      handleUpdateFilter(newSelected);
                  } else {
-                     const newSelected = new Set(distinctValues);
+                     const newSelected = new Set<string>(distinctValues);
                      if (emptyCount > 0) newSelected.add('__EMPTY__');
                      handleUpdateFilter(newSelected);
                  }
@@ -4577,7 +4607,7 @@ function HeaderCell({
              {colFilterSearch && (
                  <button className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" onClick={() => {
                      setColFilterSearch('');
-                     const newSelected = new Set(distinctValues);
+                     const newSelected = new Set<string>(distinctValues);
                      if (emptyCount > 0) newSelected.add('__EMPTY__');
                      setDraftSelectedValues(newSelected);
                      handleUpdateFilter(newSelected);
