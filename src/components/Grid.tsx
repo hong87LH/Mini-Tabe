@@ -2063,54 +2063,67 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
   const [selectedColIds, setSelectedColIds] = useState<Set<string>>(new Set());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  const estimateSize = React.useCallback((index: number) => {
-      let size = 33;
-      if (rowHeight === 'medium') size = 57;
-      if (rowHeight === 'tall') size = 81;
-      if (rowHeight === 'extra') size = 121;
+  const visibleRowsInfo = React.useMemo(() => {
+      const indices: number[] = [];
+      const cacheMap = new Map<number, { isRowHidden: boolean, headersAdded: number, size: number }>();
       
-      let isRowHidden = false;
-      let hiddenByLevel = -1;
-      let headersAdded = 0;
+      let sizeBase = 33;
+      if (rowHeight === 'medium') sizeBase = 57;
+      if (rowHeight === 'tall') sizeBase = 81;
+      if (rowHeight === 'extra') sizeBase = 121;
+      
+      for (let index = 0; index < data.records.length; index++) {
+          let isRowHidden = false;
+          let hiddenByLevel = -1;
+          let headersAdded = 0;
 
-      if (groupConfig && groupConfig.length > 0) {
-          const record = data.records[index];
-          let changedLevel = -1;
-          for (let level = 0; level < groupConfig.length; level++) {
-              const fieldId = groupConfig[level].fieldId;
-              const prevRecord = index > 0 ? data.records[index - 1] : null;
-              let val1 = prevRecord ? JSON.stringify(prevRecord[fieldId]) : null;
-              let val2 = JSON.stringify(record[fieldId]);
-              
-              if (changedLevel !== -1 || val1 !== val2) {
-                  if (changedLevel === -1) changedLevel = level;
-              }
+          if (groupConfig && groupConfig.length > 0) {
+              const record = data.records[index];
+              let changedLevel = -1;
+              for (let level = 0; level < groupConfig.length; level++) {
+                  const fieldId = groupConfig[level].fieldId;
+                  const prevRecord = index > 0 ? data.records[index - 1] : null;
+                  let val1 = prevRecord ? JSON.stringify(prevRecord[fieldId]) : null;
+                  let val2 = JSON.stringify(record[fieldId]);
+                  
+                  if (changedLevel !== -1 || val1 !== val2) {
+                      if (changedLevel === -1) changedLevel = level;
+                  }
 
-              let key = '';
-              for (let i = 0; i <= level; i++) {
-                  key += String(groupConfig[i].fieldId) + ':' + JSON.stringify(record[groupConfig[i].fieldId]) + '|';
-              }
+                  let key = '';
+                  for (let i = 0; i <= level; i++) {
+                      key += String(groupConfig[i].fieldId) + ':' + JSON.stringify(record[groupConfig[i].fieldId]) + '|';
+                  }
 
-              if (changedLevel !== -1 && changedLevel <= level) {
-                  if (hiddenByLevel === -1 || level <= hiddenByLevel) {
-                      headersAdded += 1;
+                  if (changedLevel !== -1 && changedLevel <= level) {
+                      if (hiddenByLevel === -1 || level <= hiddenByLevel) {
+                          headersAdded += 1;
+                      }
+                  }
+
+                  if (foldedGroups?.includes(key)) {
+                      isRowHidden = true;
+                      if (hiddenByLevel === -1) hiddenByLevel = level;
                   }
               }
-
-              if (foldedGroups?.includes(key)) {
-                  isRowHidden = true;
-                  if (hiddenByLevel === -1) hiddenByLevel = level;
-              }
+          }
+          
+          if (!(isRowHidden && headersAdded === 0)) {
+              indices.push(index);
+              cacheMap.set(index, { isRowHidden, headersAdded, size: (isRowHidden ? 0 : sizeBase) + headersAdded * 36 });
           }
       }
-
-      if (isRowHidden) size = 0;
-      size += (headersAdded * 36);
-      return size;
+      return { indices, cacheMap, sizeBase };
   }, [groupConfig, data.records, rowHeight, foldedGroups]);
 
+  const estimateSize = React.useCallback((virtualIndex: number) => {
+      const index = visibleRowsInfo.indices[virtualIndex];
+      const info = visibleRowsInfo.cacheMap.get(index);
+      return info ? info.size : visibleRowsInfo.sizeBase;
+  }, [visibleRowsInfo]);
+
   const rowVirtualizer = useVirtualizer({
-    count: data.records.length,
+    count: visibleRowsInfo.indices.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize,
     overscan: 5
@@ -3400,10 +3413,10 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
         
         {paddingTop > 0 && <tbody><tr><td colSpan={visibleFields.length + 2} style={{ height: paddingTop, padding: 0, border: 0, lineHeight: 0, fontSize: 0 }} /></tr></tbody>}
         {virtualItems.map((virtualRow) => {
-             const index = virtualRow.index;
+             const index = visibleRowsInfo.indices[virtualRow.index];
              const record = data.records[index];
              const groupHeadersToRender: any[] = [];
-             let isRowHidden = false;
+             let isRowHidden = visibleRowsInfo.cacheMap.get(index)?.isRowHidden || false;
              let hiddenByLevel = -1;
 
              if (groupConfig && groupConfig.length > 0) {
