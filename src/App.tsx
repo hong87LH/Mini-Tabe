@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { initialGridData } from './initialData';
 import { Grid } from './components/Grid';
@@ -9,6 +9,7 @@ import Papa from 'papaparse';
 import { Parser } from 'expr-eval';
 import { getStringColor } from './lib/utils';
 import { getHandle, setHandle } from './lib/idb';
+import { resolveFieldValueForAI } from './components/Grid';
 
 const computeFormulaValue = (field: any, record: any, fields: any[]) => {
   if (!field.prompt) return '';
@@ -232,6 +233,180 @@ function TableNavItem({
     </div>
   );
 }
+
+// --- New component for Global Filter Rule ---
+const GlobalFilterRule = ({ rule, index, data, lang, updateRule, removeRule }: { key?: React.Key, rule: any, index: number, data: any, lang: string, updateRule: (idx: number, newRule: any) => void, removeRule: (idx: number) => void }) => {
+  const [expandedHasAny, setExpandedHasAny] = useState(false);
+  const [draftSelectedValues, setDraftSelectedValues] = useState<Set<string>>(new Set());
+
+  const handleUpdate = (newSelected: Set<string>) => {
+      setDraftSelectedValues(newSelected);
+      updateRule(index, { ...rule, value: Array.from(newSelected) });
+  };
+
+  const { distinctValues, valueCounts, emptyCount } = useMemo(() => {
+     if (rule.operator !== 'has_any' && !expandedHasAny) return { distinctValues: [], valueCounts: new Map<string, number>(), emptyCount: 0 };
+     const field = data.fields.find((f: any) => f.id === rule.fieldId);
+     if (!field) return { distinctValues: [], valueCounts: new Map<string, number>(), emptyCount: 0 };
+     const vals = new Set<string>();
+     const counts = new Map<string, number>();
+     let emptyCt = 0;
+     data.records.forEach((r: any) => {
+        let aiVal = resolveFieldValueForAI(r[field.id], field, r, data.fields);
+        let extracted: string[] = [];
+        if (Array.isArray(aiVal)) {
+            extracted = aiVal.map(v => String(v?.name || v?.url || v || '')).filter(Boolean);
+        } else if (typeof aiVal === 'object') {
+            extracted = [JSON.stringify(aiVal)];
+        } else {
+            const s = String(aiVal || '').trim();
+            if (s) extracted = [s];
+        }
+
+        if (extracted.length === 0) {
+            emptyCt++;
+        } else {
+            extracted.forEach(s => {
+                vals.add(s);
+                counts.set(s, (counts.get(s) || 0) + 1);
+            });
+        }
+     });
+     return { distinctValues: Array.from(vals).sort(), valueCounts: counts, emptyCount: emptyCt };
+  }, [rule.fieldId, rule.operator, expandedHasAny, data.fields, data.records]);
+
+  const selectedValues = new Set<string>(Array.isArray(rule.value) ? rule.value : []);
+
+  useEffect(() => {
+     if (expandedHasAny) setDraftSelectedValues(selectedValues);
+  }, [expandedHasAny]);
+
+  return (
+    <div className="flex flex-col gap-1.5 p-2 bg-gray-50/50 rounded border border-gray-100">
+       <div className="flex items-center gap-2">
+         <select 
+           className="w-[110px] shrink-0 text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+           value={rule.fieldId}
+           onChange={(e) => {
+             updateRule(index, { ...rule, fieldId: e.target.value, value: '' });
+           }}
+         >
+           {data.fields.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
+         </select>
+         <select 
+           className="w-[90px] shrink-0 text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+           value={rule.operator}
+           onChange={(e) => {
+              const op = e.target.value;
+              let newVal = rule.value;
+              if (op === 'is_not_empty' || op === 'is_empty') {
+                  newVal = '';
+              } else if (op === 'has_any') {
+                  newVal = typeof rule.value === 'string' && rule.value ? [rule.value] : [];
+                  setExpandedHasAny(true);
+              } else if (rule.operator === 'has_any') {
+                  newVal = Array.isArray(rule.value) ? rule.value.join(',') : '';
+              }
+              updateRule(index, { ...rule, operator: op, value: newVal });
+           }}
+         >
+           <option value="equals">{lang === 'en' ? 'Equals' : '等于'}</option>
+           <option value="not_equals">{lang === 'en' ? 'Not equals' : '不等于'}</option>
+           <option value="contains">{lang === 'en' ? 'Contains' : '包含'}</option>
+           <option value="not_contains">{lang === 'en' ? 'Does not contain' : '不包含'}</option>
+           <option value="is_empty">{lang === 'en' ? 'Is empty' : '为空'}</option>
+           <option value="is_not_empty">{lang === 'en' ? 'Is not empty' : '不为空'}</option>
+           <option value="has_any">{lang === 'en' ? 'Specified value' : '指定值'}</option>
+         </select>
+         {rule.operator !== 'is_empty' && rule.operator !== 'is_not_empty' && rule.operator !== 'has_any' && (
+           <input
+             className="flex-1 min-w-[50px] text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500"
+             placeholder={lang === 'en' ? "Value..." : "输入值..."}
+             value={typeof rule.value === 'string' ? rule.value : (Array.isArray(rule.value) ? rule.value.join(',') : '')}
+             onChange={(e) => {
+               updateRule(index, { ...rule, value: e.target.value });
+             }}
+           />
+         )}
+         {rule.operator === 'has_any' && (
+           <div className="flex-1 relative">
+               <div 
+                   className="h-[30px] px-2 flex items-center text-sm bg-white border border-gray-300 rounded cursor-pointer" 
+                   onClick={() => setExpandedHasAny(!expandedHasAny)}
+               >
+                  <span className="truncate text-gray-700">
+                      {selectedValues.size === 0 ? (lang === 'en' ? 'Select values...' : '选择值...') : `${selectedValues.size} ${lang === 'en' ? 'selected' : '项已选'}`}
+                  </span>
+               </div>
+               
+               {expandedHasAny && (
+                  <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded overflow-hidden shadow-xl z-50 flex flex-col max-h-[300px]">
+                     <div className="fixed inset-0 z-40" onClick={() => {
+                        setExpandedHasAny(false);
+                     }}></div>
+                     <div className="relative z-50 flex flex-col h-full max-h-[300px]">
+                         <div className="px-2 flex gap-2 border-b border-gray-100 py-1.5 bg-gray-50 flex-wrap shrink-0">
+                            <button className="text-xs text-blue-600 hover:text-blue-800" onClick={() => {
+                                 const newSelected = new Set(distinctValues);
+                                 if (emptyCount > 0) newSelected.add('__EMPTY__');
+                                 handleUpdate(newSelected);
+                            }}>{lang === 'en' ? 'Select All' : '全选'}</button>
+                            <button className="text-xs text-blue-600 hover:text-blue-800" onClick={() => {
+                                 const newSelected = new Set<string>();
+                                 if (!draftSelectedValues.has('__EMPTY__') && emptyCount > 0) newSelected.add('__EMPTY__');
+                                 distinctValues.forEach(v => {
+                                     if (!draftSelectedValues.has(v)) newSelected.add(v);
+                                 });
+                                 handleUpdate(newSelected);
+                            }}>{lang === 'en' ? 'Invert' : '反选'}</button>
+                            <button className="text-xs text-gray-500 hover:text-gray-700 ml-auto" onClick={() => {
+                                handleUpdate(new Set());
+                            }}>
+                                 {lang === 'en' ? 'Clear' : '清空'}
+                            </button>
+                         </div>
+                         <div className="overflow-y-auto px-2 py-1 flex-1">
+                             {emptyCount > 0 && (
+                                 <label className="flex items-center space-x-2 py-1 hover:bg-gray-50 rounded cursor-pointer">
+                                     <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" checked={draftSelectedValues.has('__EMPTY__')} onChange={(e) => {
+                                         const newSelected = new Set(draftSelectedValues);
+                                         if (e.target.checked) newSelected.add('__EMPTY__'); else newSelected.delete('__EMPTY__');
+                                         handleUpdate(newSelected);
+                                     }} />
+                                     <span className="text-sm text-gray-700 truncate flex-1">{lang === 'en' ? 'Blank' : '空白'} <span className="text-gray-400">({emptyCount})</span></span>
+                                 </label>
+                             )}
+                             {distinctValues.map(v => (
+                                 <label key={v} className="flex items-center space-x-2 py-1 hover:bg-gray-50 rounded cursor-pointer">
+                                     <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" checked={draftSelectedValues.has(v)} onChange={(e) => {
+                                         const newSelected = new Set(draftSelectedValues);
+                                         if (e.target.checked) newSelected.add(v); else newSelected.delete(v);
+                                         handleUpdate(newSelected);
+                                     }} />
+                                     <span className="text-sm text-gray-700 truncate flex-1">{v} <span className="text-gray-400">({valueCounts.get(v)})</span></span>
+                                 </label>
+                             ))}
+                             {distinctValues.length === 0 && emptyCount === 0 && <div className="text-sm text-gray-400 py-1">{lang === 'en' ? 'No values' : '无数据'}</div>}
+                         </div>
+                         <div className="px-3 py-2 border-t border-gray-100 bg-white flex justify-end gap-2 shrink-0">
+                            <button className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700" onClick={() => {
+                                setExpandedHasAny(false);
+                            }}>
+                               {lang === 'en' ? 'Done' : '完成'}
+                            </button>
+                         </div>
+                     </div>
+                  </div>
+               )}
+           </div>
+         )}
+         <button className="p-1 hover:bg-gray-200 rounded text-gray-400 hover:text-red-500 shrink-0 ml-auto z-10" onClick={() => removeRule(index)}>
+           <Trash2 className="w-4 h-4"/>
+         </button>
+       </div>
+    </div>
+  );
+};
 
 export default function App() {
   const [tables, setTablesInternal] = useState<any[]>(() => {
@@ -599,8 +774,21 @@ export default function App() {
   const currentViewState = viewStates[activeViewMode] || {};
 
   const sortConfig = currentViewState.sortConfig || null;
-  const filterConfig = currentViewState.filterConfig || {};
+  const rawFilterConfig = currentViewState.filterConfig;
+  let filterConfig: any[] = [];
+  if (Array.isArray(rawFilterConfig)) {
+      filterConfig = rawFilterConfig;
+  } else if (typeof rawFilterConfig === 'object' && rawFilterConfig !== null) {
+      filterConfig = Object.entries(rawFilterConfig).map(([k, v]) => ({
+          id: Math.random().toString(36).substr(2, 9),
+          fieldId: k,
+          operator: 'contains',
+          value: v
+      }));
+  }
+  const isFilterTempDisabled = currentViewState.isFilterTempDisabled || false;
   const groupConfig = currentViewState.groupConfig || [];
+  const isGroupTempDisabled = currentViewState.isGroupTempDisabled || false;
   const foldedGroups = currentViewState.foldedGroups || [];
   const rowHeight = currentViewState.rowHeight || 'medium';
   const gallerySettings = currentViewState.gallerySettings || null;
@@ -619,12 +807,14 @@ export default function App() {
   const setSortConfig = (conf: any) => updateViewState({ sortConfig: conf });
   const setFilterConfig = (conf: any) => {
      if (typeof conf === 'function') {
-         updateViewState({ filterConfig: conf(filterConfig) });
+         updateViewState({ filterConfig: conf(filterConfig), isFilterTempDisabled: false });
      } else {
-         updateViewState({ filterConfig: conf });
+         updateViewState({ filterConfig: conf, isFilterTempDisabled: false });
      }
   };
+  const setIsFilterTempDisabled = (disabled: boolean) => updateViewState({ isFilterTempDisabled: disabled });
   const setGroupConfig = (conf: any) => updateViewState({ groupConfig: conf });
+  const setIsGroupTempDisabled = (disabled: boolean) => updateViewState({ isGroupTempDisabled: disabled });
   const setFoldedGroups = (conf: any) => updateViewState({ foldedGroups: conf });
   const setRowHeight = (h: any) => updateViewState({ rowHeight: h });
   const setGallerySettings = (s: any) => updateViewState({ gallerySettings: s });
@@ -1587,15 +1777,57 @@ export default function App() {
 
   let displayRecords = [...data.records];
   
-  if (Object.keys(filterConfig).length > 0) {
+  if (filterConfig.length > 0 && !isFilterTempDisabled) {
     displayRecords = displayRecords.filter(record => {
-      return (Object.entries(filterConfig) as [string, string][]).every(([fieldId, keyword]) => {
-        if (!keyword) return true;
-        const val = record[fieldId];
-        if (val == null) return false;
-        if (typeof val === 'string') return val.toLowerCase().includes(keyword.toLowerCase());
-        if (typeof val === 'object') return JSON.stringify(val).toLowerCase().includes(keyword.toLowerCase());
-        return String(val).toLowerCase().includes(keyword.toLowerCase());
+      return filterConfig.every((rule: any) => {
+        const fieldId = rule.fieldId;
+        const op = rule.operator;
+        const val = rule.value;
+        const field = data.fields.find((f: any) => f.id === fieldId);
+        
+        let recordVal = record[fieldId];
+        
+        if (op === 'is_empty') {
+            return recordVal === null || recordVal === undefined || recordVal === '' || (Array.isArray(recordVal) && recordVal.length === 0);
+        }
+        if (op === 'is_not_empty') {
+            return !(recordVal === null || recordVal === undefined || recordVal === '' || (Array.isArray(recordVal) && recordVal.length === 0));
+        }
+
+        if (val === undefined || val === null || val === '') return true; // empty value means skip constraint
+        
+        let aiVal = field ? resolveFieldValueForAI(recordVal, field, record, data.fields) : recordVal;
+
+        if (op === 'has_any') {
+            let extracted: string[] = [];
+            if (Array.isArray(aiVal)) {
+                extracted = aiVal.map(v => String(v?.name || v?.url || v || '')).filter(Boolean);
+            } else if (typeof aiVal === 'object') {
+                extracted = [JSON.stringify(aiVal)];
+            } else {
+                const s = String(aiVal || '').trim();
+                if (s) extracted = [s];
+            }
+
+            const arr2 = Array.isArray(val) ? val.map(String) : [String(val || '')];
+            if (arr2.length === 0) return false;
+
+            if (extracted.length === 0) {
+                return arr2.includes('__EMPTY__');
+            }
+            return arr2.some(v => extracted.includes(v));
+        }
+
+        let strVal = Array.isArray(aiVal) ? aiVal.map(String).join(',').toLowerCase() : String(aiVal || '').toLowerCase();
+        let targetStr = String(val).toLowerCase();
+
+        switch (op) {
+            case 'equals': return strVal === targetStr;
+            case 'not_equals': return strVal !== targetStr;
+            case 'contains': return strVal.includes(targetStr);
+            case 'not_contains': return !strVal.includes(targetStr);
+            default: return strVal.includes(targetStr);
+        }
       });
     });
   }
@@ -1619,7 +1851,7 @@ export default function App() {
     }
   }
 
-  if (groupConfig.length > 0) {
+  if (groupConfig.length > 0 && !isGroupTempDisabled) {
       displayRecords.sort((a, b) => {
           for (const grp of groupConfig) {
               let vA = a[grp.fieldId];
@@ -2033,59 +2265,65 @@ export default function App() {
              </div>
              <div className="relative">
                <button 
-                 className={`flex items-center space-x-1 hover:bg-gray-100 px-2 py-1.5 rounded transition-colors ${Object.keys(filterConfig).length > 0 ? 'bg-blue-50 text-blue-700' : ''}`}
+                 className={`flex items-center space-x-1 hover:bg-gray-100 px-2 py-1.5 rounded transition-colors ${filterConfig.length > 0 && !isFilterTempDisabled ? 'bg-blue-50 text-blue-700' : ''}`}
                  onClick={() => setShowGlobalFilterMenu(!showGlobalFilterMenu)}
                >
-                 <Filter className={`w-4 h-4 ${Object.keys(filterConfig).length > 0 ? 'text-blue-600' : 'text-gray-500'}`} />
+                 <Filter className={`w-4 h-4 ${filterConfig.length > 0 && !isFilterTempDisabled ? 'text-blue-600' : 'text-gray-500'}`} />
                  <span>{lang === 'en' ? "Filter" : "筛选"}</span>
                </button>
                {showGlobalFilterMenu && (
-                 <div className="absolute top-full left-0 mt-1 w-[320px] bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
+                 <div className="absolute top-full left-0 mt-1 w-[400px] bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
                     <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setShowGlobalFilterMenu(false); }}></div>
                     <div className="relative z-50">
-                    <div className="px-3 py-2 text-sm font-medium border-b border-gray-100">{lang === 'en' ? 'Filter conditions' : '筛选条件'}</div>
-                    <div className="p-2 space-y-2">
-                       {Object.entries(filterConfig).map(([fieldId, keyword], i) => (
-                          <div key={i} className="flex items-center gap-2">
-                            <select 
-                              className="w-1/2 text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                              value={fieldId}
-                              onChange={(e) => {
-                                const newConf = { ...filterConfig };
-                                delete newConf[fieldId];
-                                newConf[e.target.value] = keyword;
-                                setFilterConfig(newConf);
-                              }}
+                    <div className="px-3 py-2 text-sm font-medium border-b border-gray-100 flex justify-between items-center">
+                         <span>{lang === 'en' ? 'Filter conditions' : '设置筛选条件'}</span>
+                         <div className="flex items-center gap-1">
+                            <button 
+                                title={isFilterTempDisabled || filterConfig.length === 0 ? (lang === 'en' ? 'Enable Filters' : '启用筛选') : (lang === 'en' ? 'Disable Filters' : '停用筛选')}
+                                className={`p-1 rounded hover:bg-gray-100 transition-colors ${isFilterTempDisabled || filterConfig.length === 0 ? 'text-gray-400' : 'text-blue-600'}`}
+                                onClick={() => {
+                                    if (filterConfig.length > 0) setIsFilterTempDisabled(!isFilterTempDisabled);
+                                }}
                             >
-                              {data.fields.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
-                            </select>
-                            <input
-                              className="w-1/2 text-sm border border-gray-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder={lang === 'en' ? "Contains keyword..." : "包含关键字..."}
-                              value={keyword}
-                              onChange={(e) => {
-                                setFilterConfig({ ...filterConfig, [fieldId]: e.target.value });
-                              }}
-                            />
-                            <button className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-red-500 shrink-0" onClick={() => {
-                              const newConf = { ...filterConfig };
-                              delete newConf[fieldId];
-                              setFilterConfig(newConf);
-                            }}>
-                              <Trash2 className="w-4 h-4"/>
+                                {isFilterTempDisabled || filterConfig.length === 0 ? <EyeOff className="w-[14px] h-[14px]" /> : <Eye className="w-[14px] h-[14px]" />}
                             </button>
-                          </div>
-                       ))}
+                        </div>
+                    </div>
+                    <div className="p-2 space-y-2">
+                       {filterConfig.map((rule: any, i: number) => (
+                           <GlobalFilterRule 
+                               key={rule.id}
+                               rule={rule}
+                               index={i}
+                               data={data}
+                               lang={lang}
+                               updateRule={(idx, newRule) => {
+                                   const newConf = [...filterConfig];
+                                   newConf[idx] = newRule;
+                                   setFilterConfig(newConf);
+                               }}
+                               removeRule={(idx) => {
+                                   setFilterConfig(filterConfig.filter((_: any, idx2: number) => idx2 !== idx));
+                               }}
+                           />
+                        ))}
                        <button 
                          className="text-sm px-2 py-1 text-blue-600 hover:bg-blue-50 flex items-center rounded w-full"
                          onClick={() => {
-                             const unassigned = data.fields.find((f: any) => filterConfig[f.id] === undefined);
-                             if (unassigned) {
-                                 setFilterConfig({ ...filterConfig, [unassigned.id]: '' });
+                             const usedFields = new Set(filterConfig.map((r: any) => r.fieldId));
+                             const unassigned = data.fields.find((f: any) => !usedFields.has(f.id));
+                             if (unassigned || data.fields.length > 0) {
+                                 const newRule = { 
+                                     id: Math.random().toString(36).substr(2, 9), 
+                                     fieldId: unassigned ? unassigned.id : data.fields[0].id, 
+                                     operator: 'contains', 
+                                     value: '' 
+                                 };
+                                 setFilterConfig([...filterConfig, newRule]);
                              }
                          }}
                        >
-                         <Plus className="w-4 h-4 mr-1" /> {lang === 'en' ? 'Add filter' : '添加筛选'}
+                         <Plus className="w-4 h-4 mr-1" /> {lang === 'en' ? 'Add filter' : '添加筛选条件'}
                        </button>
                     </div>
                     </div>
@@ -2094,17 +2332,65 @@ export default function App() {
              </div>
              <div className="relative">
                <button 
-                 className={`flex items-center space-x-1 hover:bg-gray-100 px-2 py-1.5 rounded transition-colors ${groupConfig.length > 0 ? 'bg-blue-50 text-blue-700' : ''}`}
+                 className={`flex items-center space-x-1 hover:bg-gray-100 px-2 py-1.5 rounded transition-colors ${groupConfig.length > 0 && !isGroupTempDisabled ? 'bg-blue-50 text-blue-700' : ''}`}
                  onClick={() => setShowGroupMenu(!showGroupMenu)}
                >
-                 <LayoutTemplate className={`w-4 h-4 ${groupConfig.length > 0 ? 'text-blue-600' : 'text-gray-500'}`} />
+                 <LayoutTemplate className={`w-4 h-4 ${groupConfig.length > 0 && !isGroupTempDisabled ? 'text-blue-600' : 'text-gray-500'}`} />
                  <span>{lang === 'en' ? "Group" : "分组"}</span>
                </button>
                {showGroupMenu && (
                  <div className="absolute top-full left-0 mt-1 w-[320px] bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
                     <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setShowGroupMenu(false); }}></div>
                     <div className="relative z-50">
-                    <div className="px-3 py-2 text-sm font-medium border-b border-gray-100">{lang === 'en' ? 'Group by fields' : '分组条件'}</div>
+                    <div className="px-3 py-2 text-sm font-medium border-b border-gray-100 flex justify-between items-center">
+                        <span>{lang === 'en' ? 'Group by fields' : '分组条件'}</span>
+                        <div className="flex items-center gap-1">
+                            <button 
+                                title={lang === 'en' ? 'Expand All' : '全部展开'}
+                                className="p-1 text-gray-400 hover:text-blue-600 rounded hover:bg-gray-100 transition-colors flex items-center justify-center"
+                                onClick={() => setFoldedGroups([])}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+                            </button>
+                            <button 
+                                title={lang === 'en' ? 'Collapse All' : '全部折叠'}
+                                className="p-1 text-gray-400 hover:text-blue-600 rounded hover:bg-gray-100 transition-colors flex items-center justify-center"
+                                onClick={() => {
+                                    const keys = new Set<string>();
+                                    if (activeViewMode === 'gallery') {
+                                        data.records.forEach((record: any) => {
+                                            let key = '';
+                                            groupConfig.forEach((g: any) => {
+                                                const val = record[g.fieldId];
+                                                key += g.fieldId + ':' + JSON.stringify(val) + '|';
+                                            });
+                                            keys.add(key);
+                                        });
+                                    } else {
+                                        data.records.forEach((record: any) => {
+                                            if (groupConfig.length > 0) {
+                                                const g = groupConfig[0];
+                                                const val = record[g.fieldId];
+                                                const key = g.fieldId + ':' + JSON.stringify(val) + '|';
+                                                keys.add(key);
+                                            }
+                                        });
+                                    }
+                                    setFoldedGroups(Array.from(keys));
+                                }}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 21 5-5 5 5"/><path d="m7 3 5 5 5-5"/></svg>
+                            </button>
+                            <div className="w-px h-3 bg-gray-300 mx-1"></div>
+                            <button 
+                                title={isGroupTempDisabled ? (lang === 'en' ? 'Enable Grouping' : '启用分组') : (lang === 'en' ? 'Disable Grouping' : '停用分组')}
+                                className={`p-1 rounded hover:bg-gray-100 transition-colors ${isGroupTempDisabled ? 'text-gray-400' : 'text-blue-600'}`}
+                                onClick={() => setIsGroupTempDisabled(!isGroupTempDisabled)}
+                            >
+                                {isGroupTempDisabled ? <EyeOff className="w-[14px] h-[14px]" /> : <Eye className="w-[14px] h-[14px]" />}
+                            </button>
+                        </div>
+                    </div>
                     <div className="p-2 space-y-2">
                        {groupConfig.map((grp, i) => (
                           <div key={i} className="flex items-center gap-2">
@@ -2298,11 +2584,12 @@ export default function App() {
             lang={lang}
             username={userSettings.username}
             data={displayData}
+            allRecords={data.records}
             searchQuery={showSearch ? searchQuery : ''}
             searchMatches={showSearch ? searchMatches : undefined}
             activeSearchMatch={showSearch && searchMatches.length > 0 ? searchMatches[currentSearchIndex] : null}
             rowHeight={rowHeight}
-            groupConfig={groupConfig}
+            groupConfig={isGroupTempDisabled ? [] : groupConfig}
             sortConfig={sortConfig}
             filterConfig={filterConfig}
             foldedGroups={foldedGroups}
@@ -2372,16 +2659,24 @@ export default function App() {
                 setSortConfig(null);
               }
             }}
-            onFilterField={(fieldId: string, keyword: string) => {
-              setFilterConfig(prev => {
-                const newConf = { ...prev };
-                if (keyword) {
-                  newConf[fieldId] = keyword;
-                } else {
-                  delete newConf[fieldId];
-                }
-                return newConf;
-              });
+            onFilterField={(fieldId: string, operator: string, value: any) => {
+                 let newRules = [...filterConfig];
+                 if (operator === 'clear_all') {
+                     newRules = newRules.filter((r: any) => r.fieldId !== fieldId);
+                 } else {
+                     const existingIdx = newRules.findIndex((r: any) => r.fieldId === fieldId);
+                     if (existingIdx >= 0) {
+                        newRules[existingIdx] = { ...newRules[existingIdx], operator, value };
+                     } else {
+                        newRules.push({
+                           id: Math.random().toString(36).substr(2, 9),
+                           fieldId,
+                           operator,
+                           value
+                        });
+                     }
+                 }
+                 setFilterConfig(newRules);
             }}
             modelSettings={modelSettings}
           />

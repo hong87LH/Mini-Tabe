@@ -71,3 +71,17 @@ export interface GridData {
   cellLinks?: Record<string, string>;
 }
 
+export type FilterOperator = 'equals' | 'not_equals' | 'contains' | 'not_contains' | 'is_empty' | 'is_not_empty' | 'has_any';
+
+export interface FilterRule {
+  id: string;
+  fieldId: string;
+  operator: FilterOperator;
+  value: any;
+}
+
+export interface FilterConfigData {
+  rules: FilterRule[];
+  isTempDisabled?: boolean;
+}
+

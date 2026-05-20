@@ -8,6 +8,7 @@ import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   if (!query || !text) return <>{text}</>;
@@ -146,6 +147,16 @@ const ZoomableImage = ({
   useEffect(() => {
     setImageLoaded(false);
   }, [src]);
+
+  useEffect(() => {
+    const handleGlobalWheel = (e: WheelEvent) => {
+      if ((e.target as HTMLElement).closest('.zoom-scroll-area')) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('wheel', handleGlobalWheel, { passive: false });
+    return () => window.removeEventListener('wheel', handleGlobalWheel);
+  }, []);
 
   useEffect(() => {
     setAnnotations(item.annotations || []);
@@ -320,9 +331,8 @@ const ZoomableImage = ({
             {refUrls.map((rUrl, i) => (
                 <div 
                     key={i} 
-                    className={`flex-1 w-full flex items-center justify-center relative overflow-hidden cursor-move ${i > 0 ? 'border-t border-gray-700' : ''}`}
+                    className={`flex-1 w-full flex items-center justify-center relative overflow-hidden cursor-move zoom-scroll-area ${i > 0 ? 'border-t border-gray-700' : ''}`}
                     onWheel={(e) => {
-                        e.preventDefault();
                         const s = refScales[i] || 1;
                         let newScale = s;
                         if (e.deltaY > 0) {
@@ -377,9 +387,8 @@ const ZoomableImage = ({
       )}
       
       <div 
-        className="flex-1 relative flex items-center justify-center overflow-hidden"
+        className="flex-1 relative flex items-center justify-center overflow-hidden zoom-scroll-area"
         onWheel={(e) => {
-          e.preventDefault();
           const s = scale;
           let newScale = s;
           
@@ -989,26 +998,43 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
 
 const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string, alt: string, className: string, title?: string, onClick?: (e: React.MouseEvent) => void }) => {
   const [src, setSrc] = useState<string>('');
+  const imgRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     let isMounted = true;
+    
     if (thumbnailCache.has(path)) {
-      setSrc(thumbnailCache.get(path)!);
-    } else {
-      getOrGenerateThumbnail(path).then(fetched => {
-        if (isMounted) setSrc(fetched);
-      });
+        setSrc(thumbnailCache.get(path)!);
+        return;
     }
-    return () => { isMounted = false; };
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+           getOrGenerateThumbnail(path).then(fetched => {
+             if (isMounted) setSrc(fetched);
+           });
+           observer.disconnect();
+        }
+      });
+    }, { rootMargin: '200px', threshold: 0.01 });
+
+    if (imgRef.current) observer.observe(imgRef.current);
+    
+    return () => { 
+      isMounted = false; 
+      observer.disconnect();
+    };
   }, [path]);
 
-  return <img src={src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='} alt={alt} className={className} title={title} onClick={onClick} />;
+  return <img ref={imgRef} src={src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='} alt={alt} className={className} title={title} onClick={onClick} loading="lazy" />;
 };
 
 interface GridProps {
   tableId?: string;
   viewMode?: 'grid' | 'gallery';
   data: GridData;
+  allRecords?: any[];
   searchQuery?: string;
   searchMatches?: { recordId: string, fieldId: string }[];
   activeSearchMatch?: { recordId: string, fieldId: string, recordIndex: number, fieldIndex: number } | null;
@@ -1031,9 +1057,9 @@ interface GridProps {
   onResizeCol: (fieldId: string, width: number) => void;
   onUpdateField: (fieldId: string, updates: Partial<Field>) => void;
   onSortField?: (fieldId: string, direction: 'asc'|'desc'|null) => void;
-  onFilterField?: (fieldId: string, keyword: string) => void;
+  onFilterField?: (fieldId: string, operator: string, value: any) => void;
   sortConfig?: { fieldId: string, direction: 'asc'|'desc' } | null;
-  filterConfig?: Record<string, string>;
+  filterConfig?: any[]; // Array of FilterRules
   groupConfig?: { fieldId: string, direction: 'asc'|'desc' }[];
   rowHeight: 'short'|'medium'|'tall'|'extra';
   modelSettings: any;
@@ -1989,7 +2015,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
 const scrollCache = new Map<string, number>();
 
-export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks }: GridProps) {
+export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const globalAttachmentPropsMap = useMemo(() => {
@@ -2036,6 +2062,63 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
   const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
   const [selectedColIds, setSelectedColIds] = useState<Set<string>>(new Set());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const estimateSize = React.useCallback((index: number) => {
+      let size = 33;
+      if (rowHeight === 'medium') size = 57;
+      if (rowHeight === 'tall') size = 81;
+      if (rowHeight === 'extra') size = 121;
+      
+      let isRowHidden = false;
+      let hiddenByLevel = -1;
+      let headersAdded = 0;
+
+      if (groupConfig && groupConfig.length > 0) {
+          const record = data.records[index];
+          let changedLevel = -1;
+          for (let level = 0; level < groupConfig.length; level++) {
+              const fieldId = groupConfig[level].fieldId;
+              const prevRecord = index > 0 ? data.records[index - 1] : null;
+              let val1 = prevRecord ? JSON.stringify(prevRecord[fieldId]) : null;
+              let val2 = JSON.stringify(record[fieldId]);
+              
+              if (changedLevel !== -1 || val1 !== val2) {
+                  if (changedLevel === -1) changedLevel = level;
+              }
+
+              let key = '';
+              for (let i = 0; i <= level; i++) {
+                  key += String(groupConfig[i].fieldId) + ':' + JSON.stringify(record[groupConfig[i].fieldId]) + '|';
+              }
+
+              if (changedLevel !== -1 && changedLevel <= level) {
+                  if (hiddenByLevel === -1 || level <= hiddenByLevel) {
+                      headersAdded += 1;
+                  }
+              }
+
+              if (foldedGroups?.includes(key)) {
+                  isRowHidden = true;
+                  if (hiddenByLevel === -1) hiddenByLevel = level;
+              }
+          }
+      }
+
+      if (isRowHidden) size = 0;
+      size += (headersAdded * 36);
+      return size;
+  }, [groupConfig, data.records, rowHeight, foldedGroups]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: data.records.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize,
+    overscan: 5
+  });
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0;
+  const paddingBottom = virtualItems.length > 0 ? rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end : 0;
 
   const currentScrollKey = `${tableId}_${viewMode}`;
   const isRestoringScroll = useRef(false);
@@ -2174,6 +2257,23 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
   const [selectionStart, setSelectionStart] = useState<{ r: number, c: number } | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<{ r: number, c: number } | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
+  
+  const getSelectionBox = () => {
+    if (!selectionStart || !selectionEnd) return null;
+    return {
+      minR: Math.min(selectionStart.r, selectionEnd.r),
+      maxR: Math.max(selectionStart.r, selectionEnd.r),
+      minC: Math.min(selectionStart.c, selectionEnd.c),
+      maxC: Math.max(selectionStart.c, selectionEnd.c)
+    };
+  };
+
+  const selectionBox = getSelectionBox();
+
+  const gridStateRef = useRef({ selectionStart, selectionEnd, isSelecting, selectionBox, extraSelectedCells });
+  useEffect(() => {
+     gridStateRef.current = { selectionStart, selectionEnd, isSelecting, selectionBox, extraSelectedCells };
+  });
 
   useEffect(() => {
     const handleMouseUp = () => setIsSelecting(false);
@@ -2189,18 +2289,6 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
        }
     }
   }, [activeSearchMatch]);
-
-  const getSelectionBox = () => {
-    if (!selectionStart || !selectionEnd) return null;
-    return {
-      minR: Math.min(selectionStart.r, selectionEnd.r),
-      maxR: Math.max(selectionStart.r, selectionEnd.r),
-      minC: Math.min(selectionStart.c, selectionEnd.c),
-      maxC: Math.max(selectionStart.c, selectionEnd.c)
-    };
-  };
-
-  const selectionBox = getSelectionBox();
 
   useEffect(() => {
     const handleCopy = (e: ClipboardEvent) => {
@@ -2587,31 +2675,35 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
           let ratio = ratioRaw.replace(/：/g, ':').trim();
           
           if (cfg.isRetouchMode) {
-              for (let f of data.fields) {
-                const marker = `{${f.name}}`;
-                if ((cfg.sourceImageTemplate || '').includes(marker)) {
-                    let val = record[f.id];
-                    if (val) {
-                       const arr = Array.isArray(val) ? val : (typeof val==='string' ? val.split(',') : [val]);
-                       const first = arr[0];
-                       if (first && typeof first === 'object' && first.cropData && first.cropData.ratio) {
-                           const r = first.cropData.ratio;
-                           const standards = [
-                             { r: 1, s: '1:1' },
-                             { r: 16/9, s: '16:9' },
-                             { r: 9/16, s: '9:16' },
-                             { r: 4/3, s: '4:3' },
-                             { r: 3/4, s: '3:4' },
-                             { r: 3/2, s: '3:2' },
-                             { r: 2/3, s: '2:3' },
-                             { r: 21/9, s: '21:9' }
-                           ];
-                           const closest = standards.reduce((prev, curr) => Math.abs(curr.r - r) < Math.abs(prev.r - r) ? curr : prev);
-                           ratio = closest.s;
-                       }
+              const template = cfg.sourceImageTemplate || '';
+              const matches = data.fields
+                 .map(f => ({ f, index: template.indexOf(`{${f.name}}`) }))
+                 .filter(m => m.index !== -1)
+                 .sort((a, b) => a.index - b.index);
+
+              for (let match of matches) {
+                 const f = match.f;
+                 let val = record[f.id];
+                 if (val) {
+                    const arr = Array.isArray(val) ? val : (typeof val==='string' ? val.split(',') : [val]);
+                    const first = arr[0];
+                    if (first && typeof first === 'object' && first.cropData && first.cropData.ratio) {
+                        const r = first.cropData.ratio;
+                        const standards = [
+                          { r: 1, s: '1:1' },
+                          { r: 16/9, s: '16:9' },
+                          { r: 9/16, s: '9:16' },
+                          { r: 4/3, s: '4:3' },
+                          { r: 3/4, s: '3:4' },
+                          { r: 3/2, s: '3:2' },
+                          { r: 2/3, s: '2:3' },
+                          { r: 21/9, s: '21:9' }
+                        ];
+                        const closest = standards.reduce((prev, curr) => Math.abs(curr.r - r) < Math.abs(prev.r - r) ? curr : prev);
+                        ratio = closest.s;
+                        break;
                     }
-                    break;
-                }
+                 }
               }
           }
           
@@ -2993,22 +3085,26 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                  let targetW = 0;
                  let targetH = 0;
                  if (cfg.isRetouchMode && field.type === 'aiImage' && cfg.scaleToSource !== false) {
-                     for (let f of data.fields) {
-                        const marker = `{${f.name}}`;
-                        if ((cfg.sourceImageTemplate || '').includes(marker)) {
-                            let val = record[f.id];
-                            if (val) {
-                               const arr = Array.isArray(val) ? val : (typeof val==='string' ? val.split(',') : [val]);
-                               const first = arr[0];
-                               if (first && typeof first === 'object' && first.cropData) {
-                                   const cr = first.cropData;
-                                   if (cr.imgW && cr.imgH && cr.naturalW && cr.naturalH && cr.scale && cr.maskW && cr.maskH) {
-                                      targetW = Math.round((cr.maskW / cr.scale) * (cr.naturalW / cr.imgW));
-                                      targetH = Math.round((cr.maskH / cr.scale) * (cr.naturalH / cr.imgH));
-                                   }
+                     const template = cfg.sourceImageTemplate || '';
+                     const matches = data.fields
+                        .map(f => ({ f, index: template.indexOf(`{${f.name}}`) }))
+                        .filter(m => m.index !== -1)
+                        .sort((a, b) => a.index - b.index);
+
+                     for (let match of matches) {
+                        const f = match.f;
+                        let val = record[f.id];
+                        if (val) {
+                           const arr = Array.isArray(val) ? val : (typeof val==='string' ? val.split(',') : [val]);
+                           const first = arr[0];
+                           if (first && typeof first === 'object' && first.cropData) {
+                               const cr = first.cropData;
+                               if (cr.imgW && cr.imgH && cr.naturalW && cr.naturalH && cr.scale && cr.maskW && cr.maskH) {
+                                  targetW = Math.round((cr.maskW / cr.scale) * (cr.naturalW / cr.imgW));
+                                  targetH = Math.round((cr.maskH / cr.scale) * (cr.naturalH / cr.imgH));
                                }
-                            }
-                            break;
+                               break;
+                           }
                         }
                      }
                  }
@@ -3198,7 +3294,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
   }
 
   return (
-    <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate' }}>
+    <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate', overflowAnchor: 'none' }}>
       {viewMode === 'gallery' ? (
         <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} gallerySettings={gallerySettings} onGallerySettingsChange={onGallerySettingsChange} groupConfig={groupConfig} foldedGroups={foldedGroups} onFoldedGroupsChange={onFoldedGroupsChange} />
       ) : (
@@ -3245,12 +3341,13 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                 onGenerateColumn={() => handleGenerateColumn(field)}
                 onDeleteField={() => onDeleteField?.(field.id)}
                 onSortField={(dir) => onSortField?.(field.id, dir)}
-                onFilterField={(keyword) => onFilterField?.(field.id, keyword)}
+                onFilterField={(operator, value) => onFilterField?.(field.id, operator, value)}
                 frozenLeftOffset={colIdx <= frozenColIndex ? frozenLeftOffsets[colIdx] : undefined}
                 isFrozenLast={colIdx === frozenColIndex}
                 isSelected={selectionBox ? colIdx >= selectionBox.minC && colIdx <= selectionBox.maxC && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1 : false}
                 sortDirection={sortConfig?.fieldId === field.id ? sortConfig.direction : undefined}
-                filterValue={filterConfig?.[field.id]}
+                filterRules={filterConfig?.filter(r => r.fieldId === field.id) || []}
+                records={allRecords || data.records}
                 onSelectCol={(e) => {
                    if (e.shiftKey && selectionStart) {
                       setSelectionEnd({ r: data.records.length - 1, c: colIdx });
@@ -3300,8 +3397,11 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
             <th className="bg-gray-50 border-b border-gray-200" style={{ width: 'auto' }}></th>
           </tr>
         </thead>
-        <tbody className="text-[13px]">
-          {data.records.map((record, index) => {
+        
+        {paddingTop > 0 && <tbody><tr><td colSpan={visibleFields.length + 2} style={{ height: paddingTop, padding: 0, border: 0, lineHeight: 0, fontSize: 0 }} /></tr></tbody>}
+        {virtualItems.map((virtualRow) => {
+             const index = virtualRow.index;
+             const record = data.records[index];
              const groupHeadersToRender: any[] = [];
              let isRowHidden = false;
              let hiddenByLevel = -1;
@@ -3339,7 +3439,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
              }
 
              return (
-              <React.Fragment key={record.id}>
+              <tbody key={record.id} ref={virtualRow.measureElement as any} data-index={virtualRow.index} className="text-[13px]">
                  {groupHeadersToRender.map((gh) => {
                     const isFolded = foldedGroups?.includes(gh.groupKey);
                     
@@ -3353,14 +3453,14 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                     }
 
                     return (
-                    <tr key={`gh-${record.id}-${gh.level}`} className="bg-gray-50 border-b border-t border-gray-200 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => {
+                    <tr key={`gh-${record.id}-${gh.level}`} className="bg-gray-50 border-gray-200 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => {
                         const next = new Set(foldedGroups || []);
                         if (isFolded) next.delete(gh.groupKey);
                         else next.add(gh.groupKey);
                         onFoldedGroupsChange?.(Array.from(next));
                     }}>
-                      <td colSpan={visibleFields.length + 2} className="p-0 select-none">
-                        <div className="sticky left-0 flex items-center py-2 text-[13px] font-medium text-gray-800 w-fit" style={{ paddingLeft: `${gh.level * 24 + 16}px` }}>
+                      <td colSpan={visibleFields.length + 2} className="p-0 select-none border-b border-gray-200">
+                        <div className="sticky left-0 flex items-center h-[35px] text-[13px] font-medium text-gray-800 w-fit" style={{ paddingLeft: `${gh.level * 24 + 16}px` }}>
                           <ChevronDown className={`w-4 h-4 mr-1.5 text-gray-500 transition-transform ${isFolded ? '-rotate-90' : ''}`} />
                           <span className="text-gray-500 mr-1.5">{gh.field?.name}:</span>
                           <span>{displayValue == null || displayValue === '' || (Array.isArray(displayValue) && displayValue.length === 0) ? (lang === 'en' ? '(Empty)' : '(空)') : String(displayValue)}</span>
@@ -3477,32 +3577,31 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                     isCutBox={isCutBox}
                     onBatchAIGenerate={() => {
                         let targetRecordIds = [record.id];
-                        if (selectionBox || extraSelectedCells.length > 0) {
+                        const { selectionBox: currentSelectionBox, extraSelectedCells: currentExtra } = gridStateRef.current;
+                        if (currentSelectionBox || currentExtra.length > 0) {
                             const selectedRecordIds = new Set<string>();
-                            if (selectionBox) {
-                                for(let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
-                                     if (colIdx >= selectionBox.minC && colIdx <= selectionBox.maxC) {
+                            if (currentSelectionBox) {
+                                for(let r = currentSelectionBox.minR; r <= currentSelectionBox.maxR; r++) {
+                                     if (colIdx >= currentSelectionBox.minC && colIdx <= currentSelectionBox.maxC) {
                                          selectedRecordIds.add(data.records[r].id);
                                      }
                                 }
                             }
-                            extraSelectedCells.forEach(cell => {
+                            currentExtra.forEach(cell => {
                                 if (cell.c === colIdx) selectedRecordIds.add(data.records[cell.r].id);
                             });
                             
-                            // If the current cell is selected, we batch generate for all selected cells in this column.
-                            // Otherwise, we only generate for the current cell as expected by typical isolated clicks.
                             if (selectedRecordIds.has(record.id)) {
                                 targetRecordIds = Array.from(selectedRecordIds);
                             }
                         }
-                        // Now we trigger generate!
                         handleGenerateColumn(field, targetRecordIds);
                     }}
                     onMouseDown={(e: React.MouseEvent) => {
                        if (e.button === 2) return; // Ignore right-clicks, handled by onContextMenu
 
-                       if (e.shiftKey && selectionStart) {
+                       const { selectionStart: currentStart } = gridStateRef.current;
+                       if (e.shiftKey && currentStart) {
                            setSelectionEnd({ r: index, c: colIdx });
                        } else if (e.ctrlKey || e.metaKey) {
                            setExtraSelectedCells(prev => {
@@ -3518,7 +3617,7 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
                        }
                     }}
                     onMouseEnter={() => {
-                       if (isSelecting) {
+                       if (gridStateRef.current.isSelecting) {
                           setSelectionEnd({ r: index, c: colIdx });
                        }
                     }}
@@ -3546,10 +3645,12 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               <td className="border-b border-gray-200"></td>
             </tr>
             )}
-            </React.Fragment>
+            </tbody>
             );
           })}
+          {paddingBottom > 0 && <tbody><tr><td colSpan={visibleFields.length + 2} style={{ height: paddingBottom, padding: 0, border: 0, lineHeight: 0, fontSize: 0 }} /></tr></tbody>}
           {/* Add New Row Button */}
+          <tbody>
           <tr>
             <td className="sticky left-0 bg-white group-hover:bg-gray-50 border-r border-b border-gray-200 text-center text-gray-400 z-[35] p-0 select-none transition-colors" style={{ width: 64, minWidth: 64, maxWidth: 64 }}>
               <div className={cn("flex items-center justify-center font-bold text-lg", heightClass)}>+</div>
@@ -3560,7 +3661,8 @@ export function Grid({ tableId, viewMode = 'grid', data, searchQuery, searchMatc
               </div>
             </td>
           </tr>
-        </tbody>
+          </tbody>
+        
       </table>
       )}
 
@@ -4195,9 +4297,10 @@ interface HeaderCellProps {
   onGenerateColumn: () => void;
   onDeleteField: () => void;
   onSortField: (dir: 'asc'|'desc'|null) => void;
-  onFilterField: (keyword: string) => void;
+  onFilterField: (operator: string, value: any) => void;
   sortDirection?: 'asc' | 'desc';
-  filterValue?: string;
+  filterRules?: any[];
+  records: BaseRecord[];
   onSelectCol: (e: React.MouseEvent) => void;
   allFields: Field[];
   isDragged: boolean;
@@ -4241,14 +4344,73 @@ const FIELD_TYPES: { type: FieldType, label: string, labelZh: string }[] = [
 ];
 
 function HeaderCell({ 
-  field, colIdx, totalCols, onRename, onChangeType, onResize, onUpdateField, onGenerateColumn, onDeleteField, onSortField, onFilterField, sortDirection, filterValue, onSelectCol, allFields,
+  field, colIdx, totalCols, onRename, onChangeType, onResize, onUpdateField, onGenerateColumn, onDeleteField, onSortField, onFilterField, sortDirection, filterRules, records, onSelectCol, allFields,
   isDragged, isDragOver, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, onContextMenu, frozenLeftOffset, isFrozenLast, isSelected, modelSettings, lang = 'zh'
 }: HeaderCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showActionMenu, setShowActionMenu] = useState(false);
+  const [colFilterSearch, setColFilterSearch] = useState('');
   const [isTypeExpanded, setIsTypeExpanded] = useState(true);
   
+  const { distinctValues, valueCounts, emptyCount } = useMemo(() => {
+     if (!showActionMenu) return { distinctValues: [], valueCounts: new Map<string, number>(), emptyCount: 0 };
+     const vals = new Set<string>();
+     const counts = new Map<string, number>();
+     let emptyCt = 0;
+     records.forEach(r => {
+        let aiVal = resolveFieldValueForAI(r[field.id], field, r, allFields);
+        let extracted: string[] = [];
+        if (Array.isArray(aiVal)) {
+            extracted = aiVal.map(v => String(v?.name || v?.url || v || '')).filter(Boolean);
+        } else if (typeof aiVal === 'object') {
+            extracted = [JSON.stringify(aiVal)];
+        } else {
+            const s = String(aiVal || '').trim();
+            if (s) extracted = [s];
+        }
+
+        if (extracted.length === 0) {
+            emptyCt++;
+        } else {
+            extracted.forEach(s => {
+                vals.add(s);
+                counts.set(s, (counts.get(s) || 0) + 1);
+            });
+        }
+     });
+     return { distinctValues: Array.from(vals).sort(), valueCounts: counts, emptyCount: emptyCt };
+  }, [showActionMenu, records, field, allFields]);
+
+  const hasAnyRule = filterRules?.find(r => r.operator === 'has_any');
+  const containsRule = filterRules?.find(r => r.operator === 'contains');
+  
+  const initialSelected = useMemo(() => {
+     if (hasAnyRule) return new Set<string>(hasAnyRule.value);
+     const all = new Set<string>(distinctValues);
+     if (emptyCount > 0) all.add('__EMPTY__');
+     return all;
+  }, [hasAnyRule, distinctValues, emptyCount]);
+
+  const [draftSelectedValues, setDraftSelectedValues] = useState<Set<string>>(new Set());
+
+  const handleUpdateFilter = (newSelected: Set<string>) => {
+      setDraftSelectedValues(newSelected);
+      if (newSelected.size === distinctValues.length + (emptyCount > 0 ? 1 : 0) || newSelected.size === 0) {
+          onFilterField('clear_all', '');
+      } else {
+          onFilterField('has_any', Array.from(newSelected));
+      }
+  };
+
+  useEffect(() => {
+      if (showActionMenu) {
+          setDraftSelectedValues(initialSelected);
+          setColFilterSearch('');
+      }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showActionMenu]);
+
   const [draftPrompt, setDraftPrompt] = useState(field.prompt || '');
   const [draftRefs, setDraftRefs] = useState<string[]>(field.refFields || []);
   const [draftAiImageConfig, setDraftAiImageConfig] = useState(field.aiImageConfig || { count: 1, size: '1024x1024' });
@@ -4351,9 +4513,9 @@ function HeaderCell({
           </div>
         ) : (
           <>
-            <span className="truncate flex-1">{field.name}</span>
+            <span className="truncate flex-1" title={field.name}>{field.name}</span>
             <div className="cursor-pointer p-0.5 rounded hover:bg-gray-200 flex items-center justify-center shrink-0" onClick={(e) => { e.stopPropagation(); setShowActionMenu(true); }}>
-              {filterValue ? (
+              {filterRules && filterRules.length > 0 ? (
                 <div className="text-blue-500 flex items-center"><Filter className="w-3.5 h-3.5" /></div>
               ) : sortDirection ? (
                 <div className="text-blue-500 flex items-center"><ArrowDownUp className="w-3.5 h-3.5" /></div>
@@ -4366,24 +4528,151 @@ function HeaderCell({
       </div>
 
       {showActionMenu && (
-        <div ref={actionMenuRef} className={cn("absolute top-full mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1", colIdx < totalCols / 2 ? "left-0" : "right-0")} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
-           <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">{lang === 'en' ? 'Filter' : '筛选'}</div>
-           <div className="px-3 pb-2">
-             <input type="text" className="w-full border border-gray-300 rounded px-2 py-1 text-sm outline-none focus:border-blue-500" placeholder={lang === 'en' ? "Filter by keyword..." : "输入关键词筛选..."} value={filterValue || ''} onChange={(e) => onFilterField(e.target.value)} />
+        <div ref={actionMenuRef} className={cn("absolute top-full mt-1 w-72 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1 flex flex-col max-h-[400px]", colIdx < totalCols / 2 ? "left-0" : "right-0")} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
+           <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider shrink-0 flex items-center justify-between">
+              <span>{lang === 'en' ? 'Filter' : '筛选'}</span>
+              {(filterRules && filterRules.length > 0) && (
+                  <button 
+                      className="text-xs text-blue-600 hover:text-blue-800 font-normal normal-case" 
+                      onClick={() => {
+                          onFilterField('clear_all', '');
+                          setShowActionMenu(false);
+                      }}
+                  >
+                      {lang === 'en' ? 'Clear' : '清除筛选'}
+                  </button>
+              )}
+           </div>
+           <div className="px-3 pb-2 shrink-0 relative">
+             <input type="text" className="w-full border border-gray-300 rounded px-2 py-1 text-sm outline-none focus:border-blue-500 pr-7" placeholder={lang === 'en' ? "Search in column..." : "在列中搜索..."} value={colFilterSearch} onChange={(e) => {
+                 const val = e.target.value;
+                 setColFilterSearch(val);
+                 if (val) {
+                     const lowerVal = val.toLowerCase();
+                     const newSelected = new Set(distinctValues.filter(v => v.toLowerCase().includes(lowerVal)));
+                     handleUpdateFilter(newSelected);
+                 } else {
+                     const newSelected = new Set(distinctValues);
+                     if (emptyCount > 0) newSelected.add('__EMPTY__');
+                     handleUpdateFilter(newSelected);
+                 }
+             }} onKeyDown={(e) => {
+                 if (e.key === 'Enter') {
+                     setShowActionMenu(false);
+                 }
+             }} />
+             {colFilterSearch && (
+                 <button className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" onClick={() => {
+                     setColFilterSearch('');
+                     const newSelected = new Set(distinctValues);
+                     if (emptyCount > 0) newSelected.add('__EMPTY__');
+                     setDraftSelectedValues(newSelected);
+                     handleUpdateFilter(newSelected);
+                 }}>
+                     <X className="w-3.5 h-3.5" />
+                 </button>
+             )}
            </div>
            
-           <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100 mt-1">{lang === 'en' ? 'Sort' : '排序'}</div>
-           <button className={cn("w-full flex items-center px-3 py-1.5 text-sm transition-colors", sortDirection === 'asc' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100')} onClick={() => { onSortField('asc'); setShowActionMenu(false); }}>
-              <ArrowDownUp className="w-4 h-4 mr-2 opacity-70" /> {lang === 'en' ? 'Sort A-Z' : '正序 (A-Z)'}
-           </button>
-           <button className={cn("w-full flex items-center px-3 py-1.5 text-sm transition-colors", sortDirection === 'desc' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100')} onClick={() => { onSortField('desc'); setShowActionMenu(false); }}>
-              <ArrowDownUp className="w-4 h-4 mr-2 opacity-70" /> {lang === 'en' ? 'Sort Z-A' : '倒序 (Z-A)'}
-           </button>
-           {sortDirection && (
-              <button className="w-full flex items-center px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition-colors" onClick={() => { onSortField(null); setShowActionMenu(false); }}>
-                <X className="w-4 h-4 mr-2 opacity-70" /> {lang === 'en' ? 'Clear Sort' : '恢复默认排序'}
+           <div className="px-3 py-1 flex-1 overflow-y-auto">
+              <label className="flex items-center space-x-2 py-1 hover:bg-gray-50 px-1 rounded cursor-pointer min-h-[28px]">
+                 <input 
+                     type="checkbox" 
+                     className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0"
+                     checked={draftSelectedValues.size === distinctValues.length + (emptyCount > 0 ? 1 : 0) && draftSelectedValues.size > 0} 
+                     ref={el => {
+                         if (el) {
+                             const isAll = draftSelectedValues.size === distinctValues.length + (emptyCount > 0 ? 1 : 0);
+                             const isNone = draftSelectedValues.size === 0;
+                             el.indeterminate = !isAll && !isNone;
+                         }
+                     }}
+                     onChange={(e) => {
+                         if (e.target.checked) {
+                             const newSelected = new Set(distinctValues);
+                             if (emptyCount > 0) newSelected.add('__EMPTY__');
+                             handleUpdateFilter(newSelected);
+                         } else {
+                             handleUpdateFilter(new Set());
+                         }
+                         setColFilterSearch('');
+                     }}
+                 />
+                 <span className="text-sm text-gray-700 truncate flex-1">{lang === 'en' ? 'Select All' : '全选'}</span>
+                 <span className="text-sm text-gray-400 shrink-0">({distinctValues.length + (emptyCount > 0 ? 1 : 0)})</span>
+              </label>
+              
+              <label className="flex items-center space-x-2 py-1 hover:bg-gray-50 px-1 rounded cursor-pointer min-h-[28px]">
+                 <input 
+                     type="checkbox" 
+                     className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0"
+                     checked={draftSelectedValues.has('__EMPTY__')} 
+                     onChange={(e) => {
+                         const newSelected = new Set(draftSelectedValues);
+                         if (e.target.checked) newSelected.add('__EMPTY__'); else newSelected.delete('__EMPTY__');
+                         handleUpdateFilter(newSelected);
+                     }} 
+                 />
+                 <span className="text-sm text-gray-700 truncate flex-1">{lang === 'en' ? 'Blank' : '空白'}</span>
+                 <span className="text-sm text-gray-400 shrink-0">({emptyCount})</span>
+              </label>
+
+              {distinctValues.filter(v => v.toLowerCase().includes(colFilterSearch.toLowerCase())).map(v => (
+                  <label key={v} className="flex items-center space-x-2 py-1 hover:bg-gray-50 px-1 rounded cursor-pointer min-h-[28px]">
+                     <input 
+                         type="checkbox" 
+                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0"
+                         checked={draftSelectedValues.has(v)} 
+                         onChange={(e) => {
+                             const newSelected = new Set(draftSelectedValues);
+                             if (e.target.checked) newSelected.add(v); else newSelected.delete(v);
+                             handleUpdateFilter(newSelected);
+                         }} 
+                     />
+                     <span className="text-sm text-gray-700 truncate flex-1">{v}</span>
+                     <span className="text-sm text-gray-400 shrink-0 ml-1">({valueCounts.get(v)})</span>
+                  </label>
+              ))}
+              {distinctValues.length === 0 && emptyCount === 0 && <div className="text-sm text-gray-400 py-2 px-1">{lang === 'en' ? 'No values' : '无数据'}</div>}
+           </div>
+
+           <div className="px-3 py-2 shrink-0 border-t border-gray-50 flex justify-between items-center gap-2">
+              <button 
+                  className="text-xs text-blue-600 hover:text-blue-800"
+                  onClick={() => {
+                     const newSelected = new Set<string>();
+                     if (!draftSelectedValues.has('__EMPTY__') && emptyCount > 0) newSelected.add('__EMPTY__');
+                     distinctValues.forEach(v => {
+                         if (!draftSelectedValues.has(v)) newSelected.add(v);
+                     });
+                     handleUpdateFilter(newSelected);
+                  }}
+              >
+                 {lang === 'en' ? 'Invert' : '反选'}
               </button>
-           )}
+              <div className="flex items-center gap-2">
+                  <button className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700" onClick={() => {
+                      setShowActionMenu(false);
+                  }}>
+                      {lang === 'en' ? 'Done' : '完成'}
+                  </button>
+              </div>
+           </div>
+           
+           <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100 mt-1 shrink-0">{lang === 'en' ? 'Sort' : '排序'}</div>
+           <div className="shrink-0">
+             <button className={cn("w-full flex items-center px-3 py-1.5 text-sm transition-colors", sortDirection === 'asc' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100')} onClick={() => { onSortField('asc'); setShowActionMenu(false); }}>
+                <ArrowDownUp className="w-4 h-4 mr-2 opacity-70" /> {lang === 'en' ? 'Sort A-Z' : '正序 (A-Z)'}
+             </button>
+             <button className={cn("w-full flex items-center px-3 py-1.5 text-sm transition-colors", sortDirection === 'desc' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100')} onClick={() => { onSortField('desc'); setShowActionMenu(false); }}>
+                <ArrowDownUp className="w-4 h-4 mr-2 opacity-70" /> {lang === 'en' ? 'Sort Z-A' : '倒序 (Z-A)'}
+             </button>
+             {sortDirection && (
+                <button className="w-full flex items-center px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition-colors" onClick={() => { onSortField(null); setShowActionMenu(false); }}>
+                  <X className="w-4 h-4 mr-2 opacity-70" /> {lang === 'en' ? 'Clear Sort' : '恢复默认排序'}
+                </button>
+             )}
+           </div>
         </div>
       )}
 
@@ -5145,6 +5434,7 @@ interface CellProps {
   isLinkedBottom?: boolean;
 }
 
+const Cell = React.memo(
 function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh', globalAttachmentPropsMap, isLinked, isLinkedTop, isLinkedBottom }: CellProps) {
   const value = record[field.id];
   const isElectron = !!((window as any).electronAPI || (window as any).electron);
@@ -5159,20 +5449,39 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
 
   useEffect(() => {
     if (forceEdit && isActive && !isEditingMode) {
-      if (['text', 'aiText', 'url'].includes(field.type)) {
+      if (['text', 'aiText', 'url', 'number', 'date'].includes(field.type)) {
          const v = typeof value === 'object' && value !== null ? JSON.stringify(value) : value;
-         setLocalText(String(v || ''));
+         setLocalText(String(v ?? ''));
       }
       setIsEditingMode(true);
     }
   }, [forceEdit, isActive, isEditingMode, field.type, value]);
 
   useEffect(() => {
-    if (isEditingMode && (field.type === 'text' || field.type === 'url' || field.type === 'aiText')) {
+    if (!isEditingMode && (field.type === 'text' || field.type === 'url' || field.type === 'aiText' || field.type === 'number' || field.type === 'date')) {
       const v = typeof value === 'object' && value !== null ? JSON.stringify(value) : value;
-      setLocalText(v || '');
+      setLocalText(String(v ?? ''));
     }
   }, [isEditingMode, value, field.type]);
+  
+  const latestLocalTextRef = useRef(localText);
+  latestLocalTextRef.current = localText;
+  
+  useEffect(() => {
+     if (!isEditingMode) return;
+     if (field.type !== 'text' && field.type !== 'url' && field.type !== 'aiText' && field.type !== 'number' && field.type !== 'date') return;
+     const v = typeof value === 'object' && value !== null ? JSON.stringify(value) : value;
+     if (String(v ?? '') === latestLocalTextRef.current) return;
+     
+     const handler = setTimeout(() => {
+        let finalVal: any = latestLocalTextRef.current;
+        if (field.type === 'number') {
+           finalVal = finalVal === '' ? null : Number(finalVal);
+        }
+        onChange(finalVal);
+     }, 300);
+     return () => clearTimeout(handler);
+  }, [localText, isEditingMode, onChange, field.type, value]);
 
   const ref = useClickOutside(() => {
     if (isActive) {
@@ -5355,10 +5664,9 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
             autoFocus
             type="number"
             className="w-full h-full px-2 outline-none bg-white text-right absolute z-30 shadow-[0_4px_6px_-1px_rgb(0,0,0,0.1),0_2px_4px_-2px_rgb(0,0,0,0.1)] border-none ring-[1.5px] ring-blue-500 ring-inset"
-            value={value !== null && value !== undefined ? value : ''}
+            value={localText}
             onChange={(e) => {
-              const val = e.target.value === '' ? null : Number(e.target.value);
-              onChange(val);
+              setLocalText(e.target.value);
             }}
             onBlur={(e) => {
               const val = e.target.value === '' ? null : Number(e.target.value);
@@ -5388,8 +5696,8 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
             autoFocus
             type="date"
             className="w-full h-full px-2 outline-none bg-white absolute z-30 shadow-[0_4px_6px_-1px_rgb(0,0,0,0.1),0_2px_4px_-2px_rgb(0,0,0,0.1)] border-none ring-[1.5px] ring-blue-500 ring-inset"
-            value={value || ''}
-            onChange={(e) => onChange(e.target.value)}
+            value={localText}
+            onChange={(e) => setLocalText(e.target.value)}
             onBlur={(e) => {
               onChange(e.target.value);
               setIsEditingMode(false);
@@ -6000,7 +6308,47 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
       )}
     </td>
   );
-}
+}, (prev, next) => {
+  const baseEqual = prev.field === next.field &&
+    prev.record[prev.field.id] === next.record[next.field.id] &&
+    prev.isActive === next.isActive &&
+    prev.forceEdit === next.forceEdit &&
+    prev.isGeneratingCol === next.isGeneratingCol &&
+    prev.searchQuery === next.searchQuery &&
+    prev.isSearchMatch === next.isSearchMatch &&
+    prev.isSearchMatchActive === next.isSearchMatchActive &&
+    prev.heightClass === next.heightClass &&
+    prev.isSelectedBox === next.isSelectedBox &&
+    prev.isCutBox === next.isCutBox &&
+    prev.frozenLeftOffset === next.frozenLeftOffset &&
+    prev.isFrozenLast === next.isFrozenLast &&
+    prev.lang === next.lang &&
+    prev.isLinked === next.isLinked &&
+    prev.isLinkedTop === next.isLinkedTop &&
+    prev.isLinkedBottom === next.isLinkedBottom &&
+    prev.modelSettings === next.modelSettings;
+    
+  if (!baseEqual) return false;
+  
+  if (['attachment', 'aiImage', 'aiVideo'].includes(prev.field.type) && prev.globalAttachmentPropsMap !== next.globalAttachmentPropsMap) {
+      const val = prev.record[prev.field.id];
+      if (val) {
+         let urls: string[] = [];
+         if (Array.isArray(val)) urls = val.map((v: any) => typeof v === 'string' ? v : v.url);
+         else if (typeof val === 'string') urls = val.split(',').map((s: string) => s.trim());
+         else if (typeof val === 'object') urls = [val.url];
+         
+         for (const u of urls) {
+            if (u) {
+               const pVal = prev.globalAttachmentPropsMap?.get(u);
+               const nVal = next.globalAttachmentPropsMap?.get(u);
+               if (JSON.stringify(pVal) !== JSON.stringify(nVal)) return false;
+            }
+         }
+      }
+  }
+  return true;
+});
 
 
 const MOCK_USERS = [
