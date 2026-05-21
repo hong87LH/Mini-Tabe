@@ -38,9 +38,15 @@ function safeFileURLToPath(urlStr) {
 const __filename = safeFileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Track paths being written to currently to avoid race conditions
+const inFlightPaths = new Set();
+
 // ▼▼▼ 核心算法：检查重名，如果存在则自动增加后缀 -1, -2 ▼▼▼
 function getUniqueFilePath(originalPath) {
-  if (!fs.existsSync(originalPath)) {
+  const checkPath = (p) => fs.existsSync(p) || inFlightPaths.has(p);
+
+  if (!checkPath(originalPath)) {
+    inFlightPaths.add(originalPath);
     return originalPath; // 不存在重名，直接用
   }
 
@@ -58,12 +64,13 @@ function getUniqueFilePath(originalPath) {
 
   let newPath = path.join(dirName, `${baseName}-${counter}${ext}`);
   
-  // 核心防止死循环：直到找到一个在磁盘上不存在的名字
-  while (fs.existsSync(newPath)) {
+  // 核心防止死循环：直到找到一个在磁盘上不存在的名字且不在写入中
+  while (checkPath(newPath)) {
     counter++;
     newPath = path.join(dirName, `${baseName}-${counter}${ext}`);
   }
 
+  inFlightPaths.add(newPath);
   return newPath;
 }
 // ▲▲▲ ▲▲▲
@@ -439,9 +446,8 @@ app.whenReady().then(() => {
 
   // ▼▼▼ 监听前端下载文件请求，执行真实的物理写入 ▼▼▼
   ipcMain.handle('download-file', async (event, { url, filename, folderPath }) => {
+    let finalTargetPath = null;
     try {
-      let finalTargetPath;
-
       // 1. 如果配置了目标文件夹，直接静默保存。如果没有配置，则弹出另存为窗口
       if (!folderPath) {
         const win = BrowserWindow.getFocusedWindow();
@@ -450,6 +456,7 @@ app.whenReady().then(() => {
         });
         if (canceled || !filePath) return null;
         finalTargetPath = filePath;
+        inFlightPaths.add(finalTargetPath);
       } else {
         if (!fs.existsSync(folderPath)) {
           await fs.promises.mkdir(folderPath, { recursive: true });
@@ -485,6 +492,10 @@ app.whenReady().then(() => {
     } catch (err) {
       console.error('[失败] 无法保存图片:', err);
       throw err;
+    } finally {
+      if (finalTargetPath) {
+          inFlightPaths.delete(finalTargetPath);
+      }
     }
   });
   // ▲▲▲ ▲▲▲

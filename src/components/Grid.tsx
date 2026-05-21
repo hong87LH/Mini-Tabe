@@ -1009,9 +1009,13 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
   useEffect(() => {
     let isMounted = true;
     
-    if (src || thumbnailCache.has(path)) {
-        if (!src) setSrc(thumbnailCache.get(path)!);
+    // Check cache for this specific path first
+    const cached = thumbnailCache.get(path);
+    if (cached) {
+        setSrc(cached);
         return;
+    } else {
+        setSrc(''); // Reset when path changes and it's not cached yet, instead of keeping old image
     }
 
     const isVideo = path.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/);
@@ -1046,7 +1050,7 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
          observer.unobserve(imgRef.current);
       }
     };
-  }, [path, src]);
+  }, [path]);
 
   return <img 
     ref={imgRef} 
@@ -1550,7 +1554,8 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
                }
             }
             
-            if (b64 && aiOptions?.isRetouchMode && item?.cropData) {
+            let wasCropped = false;
+            if (b64 && item?.cropData) {
                try {
                   const crop = item.cropData;
                   const cropped = await new Promise<{b64:string, mime:string}>((resolve) => {
@@ -1589,10 +1594,13 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
                      img.onerror = () => resolve({b64: b64 as string, mime});
                      img.src = `data:${mime};base64,${b64}`;
                   });
+                  if (cropped.b64 !== b64) {
+                      wasCropped = true;
+                  }
                   b64 = cropped.b64;
                   mime = cropped.mime;
                } catch (e) {
-                  console.error("Retouch crop failed:", e);
+                  console.error("Image crop failed:", e);
                }
             }
 
@@ -1601,7 +1609,7 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
                const finalDataUrl = `data:${mime};base64,${b64}`;
                dataUrls.push(finalDataUrl);
                dataUrlsOut.push(finalDataUrl);
-               originalUrlsOut.push(fetchUrl.startsWith('blob:') ? finalDataUrl : fetchUrl);
+               originalUrlsOut.push(fetchUrl.startsWith('blob:') || wasCropped ? finalDataUrl : fetchUrl);
             } else {
                dataUrls.push(u); 
                dataUrlsOut.push(u);
