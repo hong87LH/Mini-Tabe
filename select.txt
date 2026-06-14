@@ -1,0 +1,64 @@
+1196:  selectedCells, 
+1203:  selectedCells: Set<string>; 
+1211:  const [selectedRatings, setSelectedRatings] = useState<Record<number, boolean>>({ 0: false, 1: false, 2: false, 3: false, 4: false, 5: false });
+1216:     const selectedArr = Array.from(selectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
+1218:     const hasAnyFilter = Object.values(selectedRatings).some(v => v);
+1220:     selectedArr.forEach(({r, c}) => {
+1246:           if (!hasAnyFilter || selectedRatings[rtg]) {
+1260:  const images = useMemo(() => getFilteredImages(), [selectedCells, data, visibleFields, selectedRatings]);
+1352:                className={`px-3 py-1.5 rounded-full text-sm font-medium flex items-center transition-colors ${selectedRatings[r] ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}
+1356:                    <Star className={`w-3.5 h-3.5 mr-1 ${selectedRatings[r] ? 'fill-blue-700 text-blue-700' : 'fill-transparent'}`} /> {r}
+1996:                            {displayFieldIds.length === 0 ? (lang === 'en' ? 'No text' : '不显示文本') : `${displayFieldIds.length} ${lang === 'en' ? 'columns selected' : '列已选择'}`}
+2025:                             {refFieldIds.length === 0 ? (lang === 'en' ? 'None' : '无') : `${refFieldIds.length} ${lang === 'en' ? 'columns selected' : '列已选择'}`}
+2104:  const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+2105:  const [selectedColIds, setSelectedColIds] = useState<Set<string>>(new Set());
+2363:      const selectedArr = Array.from(allSelectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
+2364:      if (selectedArr.length === 0) return;
+2366:      const minR = Math.min(...selectedArr.map(x => x.r));
+2367:      const maxR = Math.max(...selectedArr.map(x => x.r));
+2368:      const minC = Math.min(...selectedArr.map(x => x.c));
+2369:      const maxC = Math.max(...selectedArr.map(x => x.c));
+2450:      const selectedArr = Array.from(allSelectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
+2451:      if (selectedArr.length === 0) return;
+2453:      const minR = Math.min(...selectedArr.map(x => x.r));
+2454:      const minC = Math.min(...selectedArr.map(x => x.c));
+2460:      if (selectedArr.length > 1) {
+2461:          // Map to multiple selected cells with tiling relative to minR, minC
+2462:          for (const { r, c } of selectedArr) {
+2663:      const selectedIds = [];
+2667:        selectedIds.push(fieldId);
+2670:      if (isIdInSelection && selectedIds.length > 1) {
+2671:        idsToDrag = selectedIds;
+3373:                   if (selectedRecordIds.size === data.records.length && data.records.length > 0) {
+3380:                  {selectedRecordIds.size > 0 ? (
+3384:                      checked={selectedRecordIds.size === data.records.length}
+3387:                          input.indeterminate = selectedRecordIds.size > 0 && selectedRecordIds.size < data.records.length;
+3570:                    className={cn("flex flex-1 items-center justify-center h-full cursor-pointer relative", selectedRecordIds.has(record.id) ? 'bg-blue-50/50' : '')} 
+3573:                      const newSet = new Set(selectedRecordIds);
+3581:                      let sel = new Set(selectedRecordIds);
+3590:                    <span className={cn("group-hover:hidden", selectedRecordIds.has(record.id) || runningWorkflowRows.has(record.id) ? 'hidden' : '')}>{index + 1}</span>
+3591:                    {runningWorkflowRows.has(record.id) && !selectedRecordIds.has(record.id) && (
+3594:                    <div className={cn("items-center justify-center space-x-1 hidden group-hover:flex", (selectedRecordIds.has(record.id) || runningWorkflowRows.has(record.id)) ? '!flex' : '')}>
+3597:                        checked={selectedRecordIds.has(record.id)}
+3647:                            const selectedRecordIds = new Set<string>();
+3651:                                         selectedRecordIds.add(data.records[r].id);
+3656:                                if (cell.c === colIdx) selectedRecordIds.add(data.records[cell.r].id);
+3659:                            if (selectedRecordIds.has(record.id)) {
+3660:                                targetRecordIds = Array.from(selectedRecordIds);
+3691:                       // If clicking outside current selection, set this cell as the only selected cell
+3827:                   const idsObj = Array.from(selectedRecordIds).length > 0 ? Array.from(selectedRecordIds) : [contextMenuState.recordId!];
+3833:                {lang === 'en' ? `Run Workflow (${Math.max(selectedRecordIds.size, 1)})` : `运行智能生成 (${Math.max(selectedRecordIds.size, 1)})`}
+3838:                   onDeleteRecords?.(Array.from(selectedRecordIds).length > 0 ? Array.from(selectedRecordIds) : [contextMenuState.recordId!]);
+3844:                {lang === 'en' ? `Delete ${Math.max(selectedRecordIds.size, 1)} row(s)` : `删除 ${Math.max(selectedRecordIds.size, 1)} 行`}
+4047:                         const selectedIds = [];
+4051:                            selectedIds.push(fieldId);
+4054:                         if (isIdInSelection && selectedIds.length > 1) {
+4055:                            idsToHide = selectedIds;
+4072:                         const selectedIds = [];
+4076:                            selectedIds.push(fieldId);
+4079:                         if (isIdInSelection && selectedIds.length > 1) {
+4080:                            idsToDelete = selectedIds;
+4268:            selectedCells={showBatchDownloadDialog}
+4281:            <p className="text-gray-600 mb-6">{lang === 'en' ? 'Are you sure you want to clear all markings for the selected cells?' : '确定要清除所选单元格的全部标注吗？'}</p>
+4309:                   const selectedArr = Array.from(allSelectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
+4313:                   selectedArr.forEach(({r, c}) => {

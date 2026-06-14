@@ -1569,7 +1569,7 @@ export default function App() {
     input.onchange = (e: any) => {
       const file = e.target.files[0];
       if (file) {
-        processJSONFile(file);
+        processJSONFile(file, true);
       }
     };
     input.click();
@@ -1755,7 +1755,7 @@ export default function App() {
     input.onchange = (e: any) => {
       const file = e.target.files[0];
       if (file) {
-        processCSVFile(file);
+        processCSVFile(file, true);
       }
     };
     input.click();
@@ -2222,16 +2222,19 @@ export default function App() {
                    icon={activeViewMode === 'grid' ? <GridIcon className="w-4 h-4 text-blue-600"/> : <ImageIcon className="w-4 h-4 text-blue-600"/> } 
                    label={activeViewMode === 'grid' ? (lang === 'en' ? "Main Grid" : "默认视图") : (lang === 'en' ? "Image Review" : "图片审阅")} 
                    active 
+                   onClick={() => setActiveViewMode(activeViewMode === 'grid' ? 'gallery' : 'grid')}
                 />
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 opacity-0 pointer-events-none group-hover/viewmode:opacity-100 group-hover/viewmode:pointer-events-auto transition-opacity min-w-[140px]">
-                   <button className="w-full flex items-center px-4 py-2 text-sm hover:bg-gray-100" onClick={() => setActiveViewMode('grid')}>
-                      <GridIcon className="w-4 h-4 mr-2 text-gray-500" />
-                      {lang === 'en' ? 'Main Grid' : '默认视图'}
-                   </button>
-                   <button className="w-full flex items-center px-4 py-2 text-sm hover:bg-gray-100" onClick={() => setActiveViewMode('gallery')}>
-                      <ImageIcon className="w-4 h-4 mr-2 text-gray-500" />
-                      {lang === 'en' ? 'Image Review' : '图片审阅'}
-                   </button>
+                <div className="absolute top-full left-0 pt-1 z-50 opacity-0 pointer-events-none group-hover/viewmode:opacity-100 group-hover/viewmode:pointer-events-auto transition-opacity min-w-[140px]">
+                   <div className="bg-white border border-gray-200 rounded-lg shadow-lg py-1">
+                       <button className="w-full flex items-center px-4 py-2 text-sm hover:bg-gray-100" onClick={() => setActiveViewMode('grid')}>
+                          <GridIcon className="w-4 h-4 mr-2 text-gray-500" />
+                          {lang === 'en' ? 'Main Grid' : '默认视图'}
+                       </button>
+                       <button className="w-full flex items-center px-4 py-2 text-sm hover:bg-gray-100" onClick={() => setActiveViewMode('gallery')}>
+                          <ImageIcon className="w-4 h-4 mr-2 text-gray-500" />
+                          {lang === 'en' ? 'Image Review' : '图片审阅'}
+                       </button>
+                   </div>
                 </div>
              </div>
              <div className="w-px h-3.5 bg-gray-300 mx-1.5" />

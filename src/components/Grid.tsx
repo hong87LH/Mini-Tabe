@@ -148,6 +148,57 @@ const ZoomableImage = ({
     setImageLoaded(false);
   }, [src]);
 
+  const retainedViewStateRef = useRef<{scale: number, relX: number, relY: number} | null>(null);
+  const currentStateRef = useRef({ scale, pos });
+  
+  useEffect(() => {
+     currentStateRef.current = { scale, pos };
+  }, [scale, pos]);
+
+  const wrapNavPrev = React.useCallback((e?: any) => {
+     if (imgRef.current) {
+        retainedViewStateRef.current = { 
+           scale: currentStateRef.current.scale,
+           relX: currentStateRef.current.pos.x / imgRef.current.clientWidth,
+           relY: currentStateRef.current.pos.y / imgRef.current.clientHeight
+        };
+     }
+     onPrev(e);
+  }, [onPrev]);
+
+  const wrapNavNext = React.useCallback((e?: any) => {
+     if (imgRef.current) {
+        retainedViewStateRef.current = { 
+           scale: currentStateRef.current.scale,
+           relX: currentStateRef.current.pos.x / imgRef.current.clientWidth,
+           relY: currentStateRef.current.pos.y / imgRef.current.clientHeight
+        };
+     }
+     onNext(e);
+  }, [onNext]);
+
+  useEffect(() => {
+     const handleKeyDown = (e: KeyboardEvent) => {
+         if (e.key === 'ArrowLeft') { e.preventDefault(); wrapNavPrev(e); }
+         else if (e.key === 'ArrowRight') { e.preventDefault(); wrapNavNext(e); }
+         else if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+     };
+     window.addEventListener('keydown', handleKeyDown);
+     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [wrapNavPrev, wrapNavNext, onClose]);
+
+  useEffect(() => {
+    if (imageLoaded && retainedViewStateRef.current && !item.cropData) {
+       if (imgRef.current) {
+          setScale(retainedViewStateRef.current.scale);
+          setPos({
+             x: retainedViewStateRef.current.relX * imgRef.current.clientWidth,
+             y: retainedViewStateRef.current.relY * imgRef.current.clientHeight
+          });
+       }
+    }
+  }, [imageLoaded, item.url, item.mappedUrl, item.cropData]);
+
   useEffect(() => {
     const handleGlobalWheel = (e: WheelEvent) => {
       if ((e.target as HTMLElement).closest('.zoom-scroll-area')) {
@@ -164,11 +215,16 @@ const ZoomableImage = ({
 
   useEffect(() => {
     setActiveAnnotationId(null);
-    setScale(item.cropData?.scale || 1);
-    setPos({ x: item.cropData?.x || 0, y: item.cropData?.y || 0 });
-    setCropRatio(item.cropData?.ratio || 1);
-    setIsCropMode(!!item.cropData);
-    setIsOutpaintMode(item.cropData?.isOutpaint || false);
+    if (item.cropData) {
+        setScale(item.cropData.scale || 1);
+        setPos({ x: item.cropData.x || 0, y: item.cropData.y || 0 });
+        setCropRatio(item.cropData.ratio || 1);
+        setIsCropMode(true);
+        setIsOutpaintMode(item.cropData.isOutpaint || false);
+    } else {
+        setIsCropMode(false);
+        setIsOutpaintMode(false);
+    }
   }, [item.url, item.mappedUrl]);
 
   const applyOutpaintTopStrategy = (ratio: number) => {
@@ -575,7 +631,7 @@ const ZoomableImage = ({
          </button>
       </div>
 
-      <button onClick={onPrev} className="absolute left-8 top-1/2 -translate-y-1/2 text-white/50 hover:text-white z-10 p-4">
+      <button onClick={wrapNavPrev} className="absolute left-8 top-1/2 -translate-y-1/2 text-white/50 hover:text-white z-10 p-4">
          <ChevronLeft className="w-12 h-12" />
       </button>
 
@@ -809,7 +865,7 @@ const ZoomableImage = ({
         })}
       </div>
 
-      <button onClick={onNext} className="absolute right-8 top-1/2 -translate-y-1/2 text-white/50 hover:text-white z-10 p-4">
+      <button onClick={wrapNavNext} className="absolute right-8 top-1/2 -translate-y-1/2 text-white/50 hover:text-white z-10 p-4">
          <ChevronRight className="w-12 h-12" />
       </button>
 
@@ -2102,6 +2158,7 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
   const [activeCell, setActiveCell] = useState<{ recordId: string; fieldId: string } | null>(null);
   const [forceEdit, setForceEdit] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+  const [lastSelectedRowIndex, setLastSelectedRowIndex] = useState<number | null>(null);
   const [selectedColIds, setSelectedColIds] = useState<Set<string>>(new Set());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -2264,13 +2321,14 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                                else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
                                else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
 
-                               items.forEach((curIt: any) => {
+                               if (items.length > 0) {
+                                   const curIt = items[0];
                                    const u = typeof curIt === 'string' ? curIt : curIt.url;
                                    if (u) {
                                        const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
                                        refUrls.push(mappedU as string);
                                    }
-                               });
+                               }
                            }
                       });
                       it.refUrls = refUrls;
@@ -2294,17 +2352,6 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
       if (!previewImageState) return;
       setPreviewImageState(prev => prev ? { ...prev, currentIndex: (prev.currentIndex + 1) % prev.items.length } : null);
   };
-
-  useEffect(() => {
-      const handleKeyDown = (e: KeyboardEvent) => {
-          if (!previewImageState) return;
-          if (e.key === 'ArrowLeft') { e.preventDefault(); handlePreviewPrev(); }
-          else if (e.key === 'ArrowRight') { e.preventDefault(); handlePreviewNext(); }
-          else if (e.key === 'Escape') { e.preventDefault(); setPreviewImage(null); }
-      };
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [previewImageState]);
 
   const [extraSelectedCells, setExtraSelectedCells] = useState<{ r: number, c: number }[]>([]);
 
@@ -2819,6 +2866,13 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
              finalDataUrls = [...finalDataUrls, ...dataUrls];
              finalOriginalUrls = [...finalOriginalUrls, ...(originalUrls || [])];
              finalSourceUrls = [...finalSourceUrls, ...(sourceUrls || [])];
+          }
+
+          if (finalOriginalUrls.length > 1) {
+             finalOriginalUrls = [finalOriginalUrls[0]];
+          }
+          if (finalSourceUrls.length > 1) {
+             finalSourceUrls = [finalSourceUrls[0]];
           }
 
           if (imgSet.provider === 'gemini') {
@@ -3571,8 +3625,19 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                     onClick={(e) => {
                       e.stopPropagation();
                       const newSet = new Set(selectedRecordIds);
-                      if (newSet.has(record.id)) newSet.delete(record.id);
-                      else newSet.add(record.id);
+                      if (e.shiftKey && lastSelectedRowIndex !== null && lastSelectedRowIndex !== index) {
+                         const start = Math.min(lastSelectedRowIndex, index);
+                         const end = Math.max(lastSelectedRowIndex, index);
+                         for (let i = start; i <= end; i++) {
+                             if (data.records[i]) {
+                                 newSet.add(data.records[i].id);
+                             }
+                         }
+                      } else {
+                         if (newSet.has(record.id)) newSet.delete(record.id);
+                         else newSet.add(record.id);
+                         setLastSelectedRowIndex(index);
+                      }
                       setSelectedRecordIds(newSet);
                     }}
                     onContextMenu={(e) => {

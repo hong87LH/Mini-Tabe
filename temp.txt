@@ -1,0 +1,58 @@
+2218-  const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
+2219-
+2220:  const [previewImageState, setPreviewImageState] = useState<{ items: any[], currentIndex: number, sourceViewMode: 'table' | 'gallery', onUpdate?: (newItems: any[]) => void } | null>(null);
+2221-
+2222-  const setPreviewImage = (path: string | null, allItems: any[] = [], onUpdate?: (newItems: any[]) => void) => {
+--
+2287-
+2288-  const handlePreviewPrev = () => {
+2289:      if (!previewImageState) return;
+2290-      setPreviewImageState(prev => prev ? { ...prev, currentIndex: (prev.currentIndex - 1 + prev.items.length) % prev.items.length } : null);
+2291-  };
+2292-
+2293-  const handlePreviewNext = () => {
+2294:      if (!previewImageState) return;
+2295-      setPreviewImageState(prev => prev ? { ...prev, currentIndex: (prev.currentIndex + 1) % prev.items.length } : null);
+2296-  };
+--
+2298-  useEffect(() => {
+2299-      const handleKeyDown = (e: KeyboardEvent) => {
+2300:          if (!previewImageState) return;
+2301-          if (e.key === 'ArrowLeft') { e.preventDefault(); handlePreviewPrev(); }
+2302-          else if (e.key === 'ArrowRight') { e.preventDefault(); handlePreviewNext(); }
+--
+2305-      window.addEventListener('keydown', handleKeyDown);
+2306-      return () => window.removeEventListener('keydown', handleKeyDown);
+2307:  }, [previewImageState]);
+2308-
+2309-  const [extraSelectedCells, setExtraSelectedCells] = useState<{ r: number, c: number }[]>([]);
+--
+2823-
+2824-          if (imgSet.provider === 'gemini') {
+2825:            throw new Error("Local Gemini Image generation not natively supported in this preview without vertex AI. Please use OpenAI-compatible proxy for images.");
+2826-          } else if (imgSet.provider === 'lingwu') {
+2827-            const w = window as any;
+--
+3732-      )}
+3733-
+3734:      {previewImageState && previewImageState.items.length > 0 && (
+3735-          <ZoomableImage 
+3736:             item={previewImageState.items[previewImageState.currentIndex]}
+3737-             onPrev={(e) => { e.stopPropagation(); handlePreviewPrev(); }}
+3738-             onNext={(e) => { e.stopPropagation(); handlePreviewNext(); }}
+--
+3740-             username={username}
+3741-             lang={lang}
+3742:             sourceViewMode={previewImageState.sourceViewMode}
+3743-             onUpdateItem={(newItem) => {
+3744:                const newItems = [...previewImageState.items];
+3745:                newItems[previewImageState.currentIndex] = newItem;
+3746:                setPreviewImageState({ ...previewImageState, items: newItems });
+3747:                if (previewImageState.onUpdate) {
+3748-                   const cleanedItems = newItems.map(item => {
+3749-                       const { mappedUrl, ...cleanProps } = item;
+3750-                       return cleanProps;
+3751-                   });
+3752:                   previewImageState.onUpdate(cleanedItems);
+3753-                }
+3754-                if (onUpdateGlobalAttachment) {

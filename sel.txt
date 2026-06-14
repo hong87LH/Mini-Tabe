@@ -1,0 +1,2 @@
+3590:                    <span className={cn("group-hover:hidden", selectedRecordIds.has(record.id) || runningWorkflowRows.has(record.id) ? 'hidden' : '')}>{index + 1}</span>
+3594:                    <div className={cn("items-center justify-center space-x-1 hidden group-hover:flex", (selectedRecordIds.has(record.id) || runningWorkflowRows.has(record.id)) ? '!flex' : '')}>
