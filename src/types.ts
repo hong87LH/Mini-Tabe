@@ -69,6 +69,7 @@ export interface GridData {
   records: BaseRecord[];
   frozenColId?: string | null;
   cellLinks?: Record<string, string>;
+  individualFrozenColIds?: string[];
 }
 
 export type FilterOperator = 'equals' | 'not_equals' | 'contains' | 'not_contains' | 'is_empty' | 'is_not_empty' | 'has_any';

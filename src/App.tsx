@@ -1382,6 +1382,19 @@ export default function App() {
     }));
   };
 
+  const handleIndividualFreezeColumn = (fieldId: string) => {
+    setData((prev: any) => {
+      const ids = prev.individualFrozenColIds || [];
+      const newIds = ids.includes(fieldId) 
+        ? ids.filter((id: string) => id !== fieldId)
+        : [...ids, fieldId];
+      return {
+        ...prev,
+        individualFrozenColIds: newIds
+      };
+    });
+  };
+
   const handleDeleteField = (fieldId: string) => {
     setData((prev: any) => ({
       ...prev,
@@ -2648,6 +2661,7 @@ export default function App() {
             onInsertField={handleInsertField}
             onDuplicateField={handleDuplicateField}
             onFreezeColumn={handleFreezeColumn}
+            onIndividualFreezeColumn={handleIndividualFreezeColumn}
             onDeleteField={handleDeleteField}
             onRenameField={handleRenameField}
             onChangeFieldType={handleChangeFieldType}

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
-import { Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste } from 'lucide-react';
+import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -1139,6 +1139,7 @@ interface GridProps {
   onInsertField?: (index: number, count?: number) => void;
   onDuplicateField?: (fieldId: string) => void;
   onFreezeColumn?: (fieldId: string | null) => void;
+  onIndividualFreezeColumn?: (fieldId: string) => void;
   onDeleteField?: (fieldId: string) => void;
   onRenameField: (fieldId: string, name: string) => void;
   onChangeFieldType: (fieldId: string, type: FieldType) => void;
@@ -2113,7 +2114,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
 const scrollCache = new Map<string, number>();
 
-export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks }: GridProps) {
+export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onIndividualFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const globalAttachmentPropsMap = useMemo(() => {
@@ -3405,11 +3406,23 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
     frozenColIndex = visibleFields.findIndex(f => f.id === data.frozenColId);
   }
 
-  const frozenLeftOffsets: number[] = [];
+  const isFrozen = visibleFields.map((f, i) => 
+     i <= frozenColIndex || (data.individualFrozenColIds?.includes(f.id) || false)
+  );
+
+  const frozenLeftOffsets: (number | undefined)[] = [];
+  const isFrozenLastArray: boolean[] = [];
   let currentLeft = 64; // Starting after the 64px row corner
-  for (let i = 0; i <= frozenColIndex; i++) {
-    frozenLeftOffsets.push(currentLeft);
-    currentLeft += visibleFields[i].width || 150;
+
+  for (let i = 0; i < visibleFields.length; i++) {
+    if (isFrozen[i]) {
+      frozenLeftOffsets.push(currentLeft);
+      currentLeft += visibleFields[i].width || 150;
+      isFrozenLastArray.push(!isFrozen[i+1]);
+    } else {
+      frozenLeftOffsets.push(undefined);
+      isFrozenLastArray.push(false);
+    }
   }
 
   return (
@@ -3461,8 +3474,9 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                 onDeleteField={() => onDeleteField?.(field.id)}
                 onSortField={(dir) => onSortField?.(field.id, dir)}
                 onFilterField={(operator, value) => onFilterField?.(field.id, operator, value)}
-                frozenLeftOffset={colIdx <= frozenColIndex ? frozenLeftOffsets[colIdx] : undefined}
-                isFrozenLast={colIdx === frozenColIndex}
+                frozenLeftOffset={frozenLeftOffsets[colIdx]}
+                isFrozenLast={isFrozenLastArray[colIdx]}
+                isIndividuallyFrozen={data.individualFrozenColIds?.includes(field.id)}
                 isSelected={selectionBox ? colIdx >= selectionBox.minC && colIdx <= selectionBox.maxC && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1 : false}
                 sortDirection={sortConfig?.fieldId === field.id ? sortConfig.direction : undefined}
                 filterRules={filterConfig?.filter(r => r.fieldId === field.id) || []}
@@ -3688,8 +3702,8 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                     isActive={activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
                     forceEdit={forceEdit && activeCell?.recordId === record.id && activeCell?.fieldId === field.id}
                     isGeneratingCol={generatingCells.has(`${record.id}-${field.id}`)}
-                    frozenLeftOffset={colIdx <= frozenColIndex ? frozenLeftOffsets[colIdx] : undefined}
-                    isFrozenLast={colIdx === frozenColIndex}
+                    frozenLeftOffset={frozenLeftOffsets[colIdx]}
+                    isFrozenLast={isFrozenLastArray[colIdx]}
                     onActivate={() => { setActiveCell({ recordId: record.id, fieldId: field.id }); setForceEdit(false); }}
                     onChange={(val) => onUpdateRecord(record.id, field.id, val)}
                     onBlur={() => { setActiveCell(null); setForceEdit(false); }}
@@ -4043,6 +4057,20 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                    {data.frozenColId === colContextMenuState.fieldId 
                      ? (lang === 'en' ? 'Unfreeze column' : '取消冻结') 
                      : (lang === 'en' ? 'Freeze up to this column' : '冻结至此列')
+                   }
+                </button>
+             )}
+             {onIndividualFreezeColumn && (
+                <button 
+                   className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center"
+                   onClick={() => {
+                      onIndividualFreezeColumn(colContextMenuState.fieldId || '');
+                      setColContextMenuState(null);
+                   }}
+                >
+                   {data.individualFrozenColIds?.includes(colContextMenuState.fieldId || '')
+                     ? (lang === 'en' ? 'Unfreeze individually' : '取消单独冻结')
+                     : (lang === 'en' ? 'Freeze individually' : '单独冻结此列')
                    }
                 </button>
              )}
@@ -4443,6 +4471,7 @@ interface HeaderCellProps {
   onContextMenu?: (e: React.MouseEvent) => void;
   frozenLeftOffset?: number;
   isFrozenLast?: boolean;
+  isIndividuallyFrozen?: boolean;
   isSelected?: boolean;
   modelSettings: any;
   lang?: 'en' | 'zh';
@@ -4475,7 +4504,7 @@ const FIELD_TYPES: { type: FieldType, label: string, labelZh: string }[] = [
 
 function HeaderCell({ 
   field, colIdx, totalCols, onRename, onChangeType, onResize, onUpdateField, onGenerateColumn, onDeleteField, onSortField, onFilterField, sortDirection, filterRules, records, onSelectCol, allFields,
-  isDragged, isDragOver, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, onContextMenu, frozenLeftOffset, isFrozenLast, isSelected, modelSettings, lang = 'zh'
+  isDragged, isDragOver, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, onContextMenu, frozenLeftOffset, isFrozenLast, isIndividuallyFrozen, isSelected, modelSettings, lang = 'zh'
 }: HeaderCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -4643,7 +4672,10 @@ function HeaderCell({
           </div>
         ) : (
           <>
-            <span className="truncate flex-1" title={field.name}>{field.name}</span>
+            <span className="truncate flex-1 flex items-center" title={field.name}>
+                {field.name}
+                {isIndividuallyFrozen && <Lock className="w-3 h-3 ml-1 text-gray-400 shrink-0" />}
+            </span>
             <div className="cursor-pointer p-0.5 rounded hover:bg-gray-200 flex items-center justify-center shrink-0" onClick={(e) => { e.stopPropagation(); setShowActionMenu(true); }}>
               {filterRules && filterRules.length > 0 ? (
                 <div className="text-blue-500 flex items-center"><Filter className="w-3.5 h-3.5" /></div>
@@ -4719,11 +4751,11 @@ function HeaderCell({
                      }}
                      onChange={(e) => {
                          if (e.target.checked) {
-                             const newSelected = new Set(distinctValues);
+                             const newSelected = new Set<string>(distinctValues);
                              if (emptyCount > 0) newSelected.add('__EMPTY__');
                              handleUpdateFilter(newSelected);
                          } else {
-                             handleUpdateFilter(new Set());
+                             handleUpdateFilter(new Set<string>());
                          }
                          setColFilterSearch('');
                      }}
@@ -4738,7 +4770,7 @@ function HeaderCell({
                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0"
                      checked={draftSelectedValues.has('__EMPTY__')} 
                      onChange={(e) => {
-                         const newSelected = new Set(draftSelectedValues);
+                         const newSelected = new Set<string>(draftSelectedValues);
                          if (e.target.checked) newSelected.add('__EMPTY__'); else newSelected.delete('__EMPTY__');
                          handleUpdateFilter(newSelected);
                      }} 
@@ -4754,7 +4786,7 @@ function HeaderCell({
                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0"
                          checked={draftSelectedValues.has(v)} 
                          onChange={(e) => {
-                             const newSelected = new Set(draftSelectedValues);
+                             const newSelected = new Set<string>(draftSelectedValues);
                              if (e.target.checked) newSelected.add(v); else newSelected.delete(v);
                              handleUpdateFilter(newSelected);
                          }} 
