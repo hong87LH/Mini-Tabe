@@ -111,7 +111,11 @@ const ZoomableImage = ({
 }) => {
   const src = item.mappedUrl;
   const isVideo = src.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/);
-  const refUrls: string[] = item.refUrls || [];
+  const refCellsData: any[] = item.refCells || item.refUrls || [];
+  // normalize so refCells is always string[][]
+  const refCells: string[][] = refCellsData.map(r => Array.isArray(r) ? r : [r]);
+
+  const [activeRefImgIndices, setActiveRefImgIndices] = useState<number[]>(refCells.map(() => 0));
   
   // Use state to track if reference panel should be shown.
   // Defaults to true if launched from gallery (Review Mode), false if from table (Normal Default View).
@@ -382,65 +386,106 @@ const ZoomableImage = ({
          if (e.target === e.currentTarget) onClose();
       }}
     >
-      {isRefMode && refUrls.length > 0 && (
+      {isRefMode && refCells.length > 0 && (
          <div className="flex-1 max-w-[35%] border-r border-gray-700 flex flex-col relative bg-black/50 overflow-hidden">
-            {refUrls.map((rUrl, i) => (
-                <div 
-                    key={i} 
-                    className={`flex-1 w-full flex items-center justify-center relative overflow-hidden cursor-move zoom-scroll-area ${i > 0 ? 'border-t border-gray-700' : ''}`}
-                    onWheel={(e) => {
-                        const s = refScales[i] || 1;
-                        let newScale = s;
-                        if (e.deltaY > 0) {
-                           newScale = [...zoomLevels].reverse().find(l => l < s - 0.01) || zoomLevels[0];
-                        } else if (e.deltaY < 0) {
-                           newScale = zoomLevels.find(l => l > s + 0.01) || zoomLevels[zoomLevels.length - 1];
-                        }
-                        if (newScale !== s) {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const mouseX = e.clientX - rect.left - rect.width / 2;
-                          const mouseY = e.clientY - rect.top - rect.height / 2;
-                          setRefPos(prevPos => {
-                            const newPos = [...prevPos];
-                            newPos[i] = {
-                              x: mouseX - (mouseX - (prevPos[i]?.x || 0)) * (newScale / s),
-                              y: mouseY - (mouseY - (prevPos[i]?.y || 0)) * (newScale / s)
-                            };
-                            return newPos;
-                          });
-                          setRefScales(prevScales => {
-                             const newScales = [...prevScales];
-                             newScales[i] = newScale;
-                             return newScales;
-                          });
-                        }
-                    }}
-                    onMouseDown={(e) => {
-                        setRefIsDragging(true);
-                        setActiveRefIndex(i);
-                        setRefDragStart({ x: e.clientX - refPos[i].x, y: e.clientY - refPos[i].y });
-                        e.stopPropagation();
-                    }}
-                    onMouseMove={(e) => {
-                        if (refIsDragging && activeRefIndex === i) {
-                            const newPos = [...refPos];
-                            newPos[i] = { ...refPos[i], x: e.clientX - refDragStart.x, y: e.clientY - refDragStart.y };
-                            setRefPos(newPos);
-                        }
-                    }}
-                    onMouseUp={() => setRefIsDragging(false)}
-                    onMouseLeave={() => setRefIsDragging(false)}
-                >
-                    <img 
-                        src={rUrl} 
-                        className="object-contain max-w-[90%] max-h-[90%] pointer-events-none" 
-                        draggable={false}
-                        style={{ transform: `translate(${refPos[i].x}px, ${refPos[i].y}px) scale(${refScales[i]})`, transition: refIsDragging && activeRefIndex === i ? 'none' : 'transform 0.1s' }}
-                    />
-                </div>
-            ))}
-         </div>
-      )}
+            {refCells.map((rCellUrls, i) => {
+                const rUrl = rCellUrls[activeRefImgIndices[i] || 0];
+                return (
+                 <div 
+                     key={i} 
+                     className={`flex-1 w-full flex items-center justify-center relative overflow-hidden cursor-move zoom-scroll-area ${i > 0 ? 'border-t border-gray-700' : ''}`}
+                     onWheel={(e) => {
+                         const s = refScales[i] || 1;
+                         let newScale = s;
+                         if (e.deltaY > 0) {
+                            newScale = [...zoomLevels].reverse().find(l => l < s - 0.01) || zoomLevels[0];
+                         } else if (e.deltaY < 0) {
+                            newScale = zoomLevels.find(l => l > s + 0.01) || zoomLevels[zoomLevels.length - 1];
+                         }
+                         if (newScale !== s) {
+                           const rect = e.currentTarget.getBoundingClientRect();
+                           const mouseX = e.clientX - rect.left - rect.width / 2;
+                           const mouseY = e.clientY - rect.top - rect.height / 2;
+                           setRefPos(prevPos => {
+                             const newPos = [...prevPos];
+                             newPos[i] = {
+                               x: mouseX - (mouseX - (prevPos[i]?.x || 0)) * (newScale / s),
+                               y: mouseY - (mouseY - (prevPos[i]?.y || 0)) * (newScale / s)
+                             };
+                             return newPos;
+                           });
+                           setRefScales(prevScales => {
+                              const newScales = [...prevScales];
+                              newScales[i] = newScale;
+                              return newScales;
+                           });
+                         }
+                     }}
+                     onMouseDown={(e) => {
+                         setRefIsDragging(true);
+                         setActiveRefIndex(i);
+                         setRefDragStart({ x: e.clientX - refPos[i].x, y: e.clientY - refPos[i].y });
+                         e.stopPropagation();
+                     }}
+                     onMouseMove={(e) => {
+                         if (refIsDragging && activeRefIndex === i) {
+                             const newPos = [...refPos];
+                             newPos[i] = { ...refPos[i], x: e.clientX - refDragStart.x, y: e.clientY - refDragStart.y };
+                             setRefPos(newPos);
+                         }
+                     }}
+                     onMouseUp={() => setRefIsDragging(false)}
+                     onMouseLeave={() => setRefIsDragging(false)}
+                 >
+                     <img 
+                         src={rUrl} 
+                         className="object-contain max-w-[90%] max-h-[90%] pointer-events-none" 
+                         draggable={false}
+                         style={{ transform: `translate(${refPos[i].x}px, ${refPos[i].y}px) scale(${refScales[i]})`, transition: refIsDragging && activeRefIndex === i ? 'none' : 'transform 0.1s' }}
+                     />
+                     {rCellUrls.length > 1 && (
+                         <div className="absolute left-3 bottom-3 flex items-center gap-2 z-10 px-2 py-1 bg-black/50 text-white rounded opacity-80 hover:opacity-100 backdrop-blur-sm shadow-sm overflow-hidden text-xs" onMouseDown={e => e.stopPropagation()}>
+                             <button
+                                 className="shrink-0 p-1 hover:bg-white/20 rounded disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-white"
+                                 disabled={(activeRefImgIndices[i] || 0) === 0}
+                                 onClick={(e) => {
+                                     e.stopPropagation();
+                                     setActiveRefImgIndices(prev => {
+                                         const next = [...prev];
+                                         next[i] = Math.max(0, (next[i] || 0) - 1);
+                                         return next;
+                                     });
+                                     setRefPos(prev => { const next = [...prev]; next[i] = {x: 0, y: 0}; return next; });
+                                     setRefScales(prev => { const next = [...prev]; next[i] = 1; return next; });
+                                 }}
+                             >
+                                 <ChevronLeft className="w-4 h-4" />
+                             </button>
+                             <span className="font-mono tabular-nums tracking-wider px-1">
+                                 {`${(activeRefImgIndices[i] || 0) + 1}/${rCellUrls.length}`}
+                             </span>
+                             <button
+                                 className="shrink-0 p-1 hover:bg-white/20 rounded disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-white"
+                                 disabled={(activeRefImgIndices[i] || 0) === rCellUrls.length - 1}
+                                 onClick={(e) => {
+                                     e.stopPropagation();
+                                     setActiveRefImgIndices(prev => {
+                                         const next = [...prev];
+                                         next[i] = Math.min(rCellUrls.length - 1, (next[i] || 0) + 1);
+                                         return next;
+                                     });
+                                     setRefPos(prev => { const next = [...prev]; next[i] = {x: 0, y: 0}; return next; });
+                                     setRefScales(prev => { const next = [...prev]; next[i] = 1; return next; });
+                                 }}
+                             >
+                                 <ChevronRight className="w-4 h-4" />
+                             </button>
+                         </div>
+                     )}
+                 </div>
+             )})}
+          </div>
+       )}
       
       <div 
         className="flex-1 relative flex items-center justify-center overflow-hidden zoom-scroll-area"
@@ -590,7 +635,7 @@ const ZoomableImage = ({
             {annotationViewState === 2 ? <MessageSquareText className="w-5 h-5" /> : <MessageSquare className="w-5 h-5" />}
             {annotationViewState === 0 && <span className="absolute rotate-45 w-6 h-[2px] bg-red-400"></span>}
          </button>
-         {refUrls.length > 0 && (
+         {refCells.length > 0 && (
             <button 
                onClick={(e) => { e.stopPropagation(); setIsRefMode(prev => !prev); }} 
                title={lang === 'en' ? "Toggle Reference Preview" : "切换参考图大屏模式"} 
@@ -1889,7 +1934,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
         return (
             <div key={idx} className="relative group w-[200px] h-auto flex flex-col bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex-shrink-0 cursor-pointer hover:shadow-md transition-shadow" onClick={() => {
                 const fileItemsForPreview = displayImages.map(d => {
-                    const refUrls: string[] = [];
+                    const refCells: string[][] = [];
                     refFieldIds.forEach(id => {
                         const val = d.record[id];
                         if (val) {
@@ -1899,15 +1944,18 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
                             else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
 
                             if (items.length > 0) {
-                                const u = typeof items[0] === 'string' ? items[0] : items[0].url;
-                                if (u) {
-                                    const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
-                                    refUrls.push(mappedU);
+                                const urlsObj = items.map(it => {
+                                    const u = typeof it === 'string' ? it : it.url;
+                                    if (u) return fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
+                                    return '';
+                                }).filter(Boolean);
+                                if (urlsObj.length > 0) {
+                                     refCells.push(urlsObj as string[]);
                                 }
                             }
                         }
                     });
-                    return { ...d.item, refUrls };
+                    return { ...d.item, refCells };
                 });
                 onPreviewImage(path, fileItemsForPreview);
             }}>
@@ -2323,11 +2371,13 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                                else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
 
                                if (items.length > 0) {
-                                   const curIt = items[0];
-                                   const u = typeof curIt === 'string' ? curIt : curIt.url;
-                                   if (u) {
-                                       const mappedU = fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
-                                       refUrls.push(mappedU as string);
+                                   const urlsObj = items.map(it => {
+                                       const u = typeof it === 'string' ? it : it.url;
+                                       if (u) return fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
+                                       return '';
+                                   }).filter(Boolean);
+                                   if (urlsObj.length > 0) {
+                                       refUrls.push(urlsObj as any);
                                    }
                                }
                            }
@@ -2549,8 +2599,15 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                    if (typeof pathToAdd === 'string' && pathToAdd) {
                       // external text paste for attachments (append mode)
                       const existing = record[field.id] || [];
-                      const existingArr = Array.isArray(existing) ? existing : (typeof existing === 'string' && existing ? existing.split(',').map(s=>({url: s.trim()})) : []);
-                      const newItems = pathToAdd.split(',').map(s => ({ url: s.trim() })).filter(s => s.url);
+                      let existingArr: any[] = [];
+                      if (Array.isArray(existing)) {
+                          existingArr = [...existing];
+                      } else if (typeof existing === 'string' && existing) {
+                          existingArr = existing.split(',').map(s=>({url: s.trim()}));
+                      } else if (typeof existing === 'object' && existing !== null) {
+                          existingArr = [existing];
+                      }
+                      const newItems = pathToAdd.split(',').map(s => ({ url: s.trim() })).filter((s: any) => s.url);
                       val = [...existingArr, ...newItems];
                    } else {
                       val = pathToAdd;
@@ -5934,6 +5991,12 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
              const globalProps = globalAttachmentPropsMap?.get(url);
              return globalProps ? { url, ...globalProps } : { url };
           });
+        } else if (typeof value === 'object' && value !== null) {
+          const base = typeof value === 'string' ? { url: value } : value;
+          const { mappedUrl, ...cleanV } = base as any;
+          const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+          const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+          fileItems = [globalProps ? { ...itemObj, ...globalProps } : itemObj];
         }
         
         let imgSizeClass = 'h-[24px] w-[24px]';
@@ -6402,6 +6465,8 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                  existingItems = [...value];
                } else if (typeof value === 'string' && value.trim() !== '') {
                  existingItems = value.split(',').map(s => ({ url: s.trim() }));
+               } else if (typeof value === 'object' && value !== null) {
+                 existingItems = [value];
                }
 
                const fileObjects = files.map((file: any) => {
@@ -6730,6 +6795,12 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
        const globalProps = globalAttachmentPropsMap?.get(url);
        return globalProps ? { url, ...globalProps } : { url };
     });
+  } else if (typeof value === 'object' && value !== null) {
+    const base = typeof value === 'string' ? { url: value } : value;
+    const { mappedUrl, ...cleanV } = base as any;
+    const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
+    const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+    fileItems = [globalProps ? { ...itemObj, ...globalProps } : itemObj];
   }
 
   const ref = useClickOutside(onClose);
