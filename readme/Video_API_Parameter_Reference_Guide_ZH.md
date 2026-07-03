@@ -30,35 +30,35 @@
 
 ## 二、Grok 系列（xAI）
 
-### 🟣 grok-video-3（新版）
+### 🟣 grok-video-3（标准版）
 
 | 前端配置列 (UI) | 实际传给 API | 状态 | 解读 |
 |----------------|-------------|------|------|
-| 画质 (resolution) | `size: "720P/1080P"` | ✅ 起效 | Grok 把分辨率叫 size |
-| 画面比例 (aspect_ratio) | `aspect_ratio` | ✅ 起效 | 原样传递 |
-| 视频时长 (duration) | `duration` | ✅ 起效 | 字段名一致，直接传递 |
+| 画质 (resolution) | `size: "720P"` | ✅ 起效 | Grok 把分辨率叫 size，仅支持 720P |
+| 画面比例 (aspect_ratio) | `aspect_ratio` | ✅ 起效 | 支持 16:9 / 9:16 / 2:3 / 3:2 / 1:1 |
+| 视频时长 (duration) | `duration` | ✅ 起效 | 仅 6s 或 10s 两档。映射规则：≤6 → `"6"`，≥7 → `"10"` |
+| 首帧参考图 (images) | `images` | ✅ 起效 | 可选传 1 张图作为首帧，不传=文生视频 |
 | 生成模式 (mode) | ❌ 被删除 | 🚫 不起效 | Grok 不认生成模式，自动剥离 |
-| 音效 (sound) | `generate_audio` | ✅ 起效 | 启用音频列时自动映射 |
+| 音效 (sound) | ❌ 被删除 | 🚫 不起效 | grok-video-3 已不支持音效参数 |
 
-### 🟠 grok-video-3-plus（增强版）
+### 🆕 grok-imagine-video-1.5-preview（Imagine 1.5）
 
-| 前端配置列 (UI) | 实际传给 API | 状态 | 解读 |
-|----------------|-------------|------|------|
-| 画质 (resolution) | ❌ 被删除 | 🚫 不起效 | plus 版不能传分辨率，已拦截 |
-| 画面比例 (aspect_ratio) | `aspect_ratio` | ✅ 起效 | 原样传递 |
-| 视频时长 (duration) | `duration` | ✅ 起效 | 直接传递 |
-| 生成模式 (mode) | ❌ 被删除 | 🚫 不起效 | 自动剥离 |
-| 音效 (sound) | `generate_audio` | ✅ 起效 | 自动映射 |
+**说明**：xAI 官方 Imagine 1.5 视频模型，专注图生视频，内置音频，1-15s 灵活时长。
 
-### ⚪ grok-videos（老版）
+> ⚠️ 仅支持图生视频，**必须**传入首帧参考图
 
 | 前端配置列 (UI) | 实际传给 API | 状态 | 解读 |
 |----------------|-------------|------|------|
-| 画质 (resolution) | ❌ 被删除 | 🚫 不起效 | 老版用比例决定画质，已剥离 |
-| 画面比例 (aspect_ratio) | `size: "16:9"` | ✅ 起效 | 老版奇葩：比例字段叫 size |
-| 视频时长 (duration) | `seconds` | ✅ 起效 | 老版叫 seconds，已自动转换 |
-| 生成模式 (mode) | ❌ 被删除 | 🚫 不起效 | 自动剥离 |
-| 音效 (sound) | `generate_audio` | ✅ 起效 | 自动映射 |
+| 画质 (resolution) | `resolution` | ✅ 起效 | 720p 或 480p |
+| 画面比例 (aspect_ratio) | `aspect_ratio` | ✅ 起效 | 16:9 / 9:16 / 1:1 / 3:2 / 2:3 |
+| 视频时长 (duration) | `duration` | ✅ 起效 | 1-15s，按秒计费 |
+| 首帧参考图 (images) | `images` | ✅ 必填 | 必须传 1 张图作为首帧 |
+| 生成模式 (mode) | ❌ 被删除 | 🚫 不起效 | 不支持生成模式 |
+| 音效 (sound) | ✅ 内置 | ✅ 自带 | 模型自动生成音频，无需额外参数 |
+
+### ⚪ grok-video-3-plus / grok-videos（已下线）
+
+> ⚠️ 平台已不再提供 `grok-video-3-plus` 和 `grok-videos` 模型，请迁移至 `grok-video-3` 或 `grok-imagine-video-1.5-preview`。
 
 ---
 
@@ -79,11 +79,11 @@
          ┌────────────────────────┼────────────────────────┐
          ▼                        ▼                        ▼
 ┌───────────────┐        ┌───────────────┐        ┌───────────────┐
-│    Veo 系列    │        │  Grok 新版    │        │  Grok 老版    │
+│    Veo 系列    │        │ grok-video-3  │        │ Imagine 1.5   │
 ├───────────────┤        ├───────────────┤        ├───────────────┤
-│ generation_   │        │ size          │        │ size(比例)    │
-│ mode / quality│        │ duration      │        │ seconds       │
-│ aspect_ratio  │        │ aspect_ratio  │        │ generate_audio│
+│ generation_   │        │ size          │        │ resolution    │
+│ mode / quality│        │ duration      │        │ duration      │
+│ aspect_ratio  │        │ aspect_ratio  │        │ aspect_ratio  │
 └───────────────┘        └───────────────┘        └───────────────┘
 ```
 
@@ -95,8 +95,8 @@
 |---------|---------|-----------|
 | 未定义的字段: generation_mode | 给 Grok 传了 mode | ✅ 自动剥离 |
 | 未知的参数: quality | 给 Veo 标准版传了 resolution | ✅ 自动剥离 |
-| 参数验证失败: seconds | 给新版 Grok 传了 duration | ✅ 自动转换 |
-| size 字段冲突 | 老版 Grok 比例/分辨率混用 | ✅ 自动区分 |
+| 参数验证失败: size | 给 Imagine 1.5 传了 size | ✅ 自动转换/剥离 |
+| 不支持的参数: generate_audio | 给 grok-video-3 传了 sound | ✅ 自动剥离 |
 
 ---
 
@@ -111,9 +111,8 @@
 ### 🎯 Grok 系列推荐
 | 场景 | 模型选择 | 推荐参数 |
 |------|---------|---------|
-| 标准视频 | grok-video-3 | resolution=1080P, duration=5 |
-| 增强版 | grok-video-3-plus | duration=5, 比例=16:9 |
-| 兼容老项目 | grok-videos | duration=5, 比例=16:9 |
+| 标准视频 | grok-video-3 | resolution=720P, duration=10, 比例=16:9 |
+| 图生视频(带音效) | grok-imagine-video-1.5-preview | resolution=720P, duration=15, 比例=16:9, 首帧参考图必填 |
 
 ---
 

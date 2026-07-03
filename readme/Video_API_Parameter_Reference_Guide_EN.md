@@ -30,35 +30,35 @@
 
 ## II. Grok Series (xAI)
 
-### 🟣 grok-video-3 (New Version)
+### 🟣 grok-video-3 (Standard Version)
 
 | Frontend Config (UI) | Actually Sent to API | Status | Explanation |
 |---------------------|---------------------|--------|--------------|
-| resolution | `size: "720P/1080P"` | ✅ Effective | Grok calls resolution "size" |
-| aspect_ratio | `aspect_ratio` | ✅ Effective | Passed as-is |
-| duration | `duration` | ✅ Effective | Field name matches, passed directly |
+| resolution | `size: "720P"` | ✅ Effective | Grok calls resolution "size", only supports 720P |
+| aspect_ratio | `aspect_ratio` | ✅ Effective | Supports 16:9 / 9:16 / 2:3 / 3:2 / 1:1 |
+| duration | `duration` | ✅ Effective | Only 6s or 10s. Mapping rule: ≤6 → `"6"`, ≥7 → `"10"` |
+| images | `images` | ✅ Effective | Optional first frame image, no image = text-to-video |
 | mode | ❌ Removed | 🚫 Ineffective | Grok doesn't recognize generation mode, auto-stripped |
-| sound | `generate_audio` | ✅ Effective | Auto-mapped when audio column enabled |
+| sound | ❌ Removed | 🚫 Ineffective | grok-video-3 no longer supports sound parameters |
 
-### 🟠 grok-video-3-plus (Enhanced Version)
+### 🆕 grok-imagine-video-1.5-preview (Imagine 1.5)
 
-| Frontend Config (UI) | Actually Sent to API | Status | Explanation |
-|---------------------|---------------------|--------|--------------|
-| resolution | ❌ Removed | 🚫 Ineffective | Plus version doesn't accept resolution, blocked |
-| aspect_ratio | `aspect_ratio` | ✅ Effective | Passed as-is |
-| duration | `duration` | ✅ Effective | Passed directly |
-| mode | ❌ Removed | 🚫 Ineffective | Auto-stripped |
-| sound | `generate_audio` | ✅ Effective | Auto-mapped |
+**Description**: xAI official Imagine 1.5 video model, focused on image-to-video, built-in audio, 1-15s flexible duration.
 
-### ⚪ grok-videos (Legacy Version)
+> ⚠️ Only supports image-to-video, **must** pass a first frame reference image
 
 | Frontend Config (UI) | Actually Sent to API | Status | Explanation |
 |---------------------|---------------------|--------|--------------|
-| resolution | ❌ Removed | 🚫 Ineffective | Legacy uses aspect ratio for quality, stripped |
-| aspect_ratio | `size: "16:9"` | ✅ Effective | Legacy quirk: aspect ratio field is "size" |
-| duration | `seconds` | ✅ Effective | Legacy calls it "seconds", auto-converted |
-| mode | ❌ Removed | 🚫 Ineffective | Auto-stripped |
-| sound | `generate_audio` | ✅ Effective | Auto-mapped |
+| resolution | `resolution` | ✅ Effective | 720p or 480p |
+| aspect_ratio | `aspect_ratio` | ✅ Effective | 16:9 / 9:16 / 1:1 / 3:2 / 2:3 |
+| duration | `duration` | ✅ Effective | 1-15s, billed per second |
+| images | `images` | ✅ Required | Must pass 1 image as first frame |
+| mode | ❌ Removed | 🚫 Ineffective | Generation mode not supported |
+| sound | ✅ Built-in | ✅ Included | Model automatically generates audio, no extra params needed |
+
+### ⚪ grok-video-3-plus / grok-videos (Deprecated)
+
+> ⚠️ The platform no longer provides `grok-video-3-plus` and `grok-videos` models, please migrate to `grok-video-3` or `grok-imagine-video-1.5-preview`.
 
 ---
 
@@ -80,11 +80,11 @@
          ┌────────────────────────┼────────────────────────┐
          ▼                        ▼                        ▼
 ┌───────────────┐        ┌───────────────┐        ┌───────────────┐
-│    Veo Series │        │  Grok New     │        │ Grok Legacy   │
+│    Veo Series │        │ grok-video-3  │        │ Imagine 1.5   │
 ├───────────────┤        ├───────────────┤        ├───────────────┤
-│ generation_  │        │ size          │        │ size(aspect)  │
-│ mode / quality│        │ duration      │        │ seconds       │
-│ aspect_ratio  │        │ aspect_ratio  │        │generate_audio│
+│ generation_  │        │ size          │        │ resolution    │
+│ mode / quality│        │ duration      │        │ duration      │
+│ aspect_ratio  │        │ aspect_ratio  │        │ aspect_ratio  │
 └───────────────┘        └───────────────┘        └───────────────┘
 ```
 
@@ -96,8 +96,8 @@
 |--------------|---------------|---------------|
 | Undefined field: generation_mode | Passed mode to Grok | ✅ Auto-stripped |
 | Unknown parameter: quality | Passed resolution to Veo standard | ✅ Auto-stripped |
-| Parameter validation failed: seconds | Passed duration to new Grok | ✅ Auto-converted |
-| size field conflict | Legacy Grok aspect/resolution conflict | ✅ Auto-differentiated |
+| Parameter validation failed: size | Passed size to Imagine 1.5 | ✅ Auto-converted/stripped |
+| Unsupported parameter: generate_audio | Passed sound to grok-video-3 | ✅ Auto-stripped |
 
 ---
 
@@ -112,9 +112,8 @@
 ### 🎯 Grok Series Recommendations
 | Scenario | Model | Recommended Params |
 |----------|------|-------------------|
-| Standard video | grok-video-3 | resolution=1080P, duration=5 |
-| Enhanced version | grok-video-3-plus | duration=5, aspect_ratio=16:9 |
-| Legacy project compatibility | grok-videos | duration=5, aspect_ratio=16:9 |
+| Standard video | grok-video-3 | resolution=720P, duration=10, aspect_ratio=16:9 |
+| Img2Vid (with audio) | grok-imagine-video-1.5-preview | resolution=720P, duration=15, aspect_ratio=16:9, images required |
 
 ---
 

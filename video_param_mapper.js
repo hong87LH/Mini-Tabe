@@ -49,28 +49,30 @@ export function mapVideoParams(model, params) {
      delete mapped.duration;
      delete mapped.resolution;
   } 
-  else if (model.includes('grok-video')) {
-     // grok-video series
-     
-     if (model === 'grok-videos') {
-         if (aspect_ratio) mapped.size = aspect_ratio; 
-         if (duration) mapped.seconds = String(duration);
-         
-         delete mapped.aspect_ratio;
-         delete mapped.duration;
-     } 
-     else if (model.includes('grok-video-3')) {
-         if (aspect_ratio) mapped.aspect_ratio = aspect_ratio;
-         // 只有 grok-video-3 需要传 size(画质) 参数，plus版本不需要
-         if (model === 'grok-video-3' && resolution) mapped.size = resolution;
-         if (duration) mapped.duration = String(duration);
-     }
-     
-     if (sound !== undefined) mapped.generate_audio = sound ? "true" : "false";
-     
-     // 清理 Grok 系列不需要的冗余参数
-     delete mapped.mode;
-     delete mapped.resolution;
+  else if (model === 'grok-video-3' || model === 'grok-imagine-video-1.5-preview') {
+      if (model === 'grok-video-3') {
+          if (aspect_ratio) mapped.aspect_ratio = aspect_ratio;
+          mapped.size = "720P";                              // 锁定 720P
+          if (duration) mapped.duration = Number(duration) <= 6 ? "6" : "10";  // 近似映射
+      }
+      else if (model === 'grok-imagine-video-1.5-preview') {
+          if (aspect_ratio) mapped.aspect_ratio = aspect_ratio;
+          if (resolution) mapped.resolution = resolution.toLowerCase();  // 转小写
+          if (duration) mapped.duration = String(duration);    // 1-15s 直传
+      }
+
+      // Grok 通用清理
+      delete mapped.mode;
+      delete mapped.sound;
+      delete mapped.generate_audio;
+      
+      if (model === 'grok-video-3') {
+          delete mapped.resolution; // grok-video-3 的 resolution 已被转成 size
+      }
+      if (model === 'grok-imagine-video-1.5-preview') {
+          delete mapped.size;
+          delete mapped.enhance_prompt;
+      }
   }
   else if (model.includes('viduq3')) {
      // vidu series

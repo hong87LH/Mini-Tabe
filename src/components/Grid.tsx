@@ -570,6 +570,8 @@ const ZoomableImage = ({
             >
                <div className="absolute -top-12 left-1/2 -translate-x-1/2 flex justify-center gap-2 pointer-events-auto w-max text-sm">
                   <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(1); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${cropRatio === 1 ? 'border border-blue-500' : ''}`}>1:1</button>
+                  <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(2/3); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${Math.abs(cropRatio - 2/3) < 0.01 ? 'border border-blue-500' : ''}`}>2:3</button>
+                  <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(3/2); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${Math.abs(cropRatio - 3/2) < 0.01 ? 'border border-blue-500' : ''}`}>3:2</button>
                   <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(3/4); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${cropRatio === 0.75 ? 'border border-blue-500' : ''}`}>3:4</button>
                   <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(4/3); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${Math.abs(cropRatio - 4/3) < 0.01 ? 'border border-blue-500' : ''}`}>4:3</button>
                   <button onClick={(e) => { e.stopPropagation(); handleCropRatioChange(9/16); }} className={`px-3 py-1 rounded bg-black/50 text-white/80 ${cropRatio === 9/16 ? 'border border-blue-500' : ''}`}>9:16</button>
