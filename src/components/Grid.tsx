@@ -2928,12 +2928,6 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
              finalSourceUrls = [...finalSourceUrls, ...(sourceUrls || [])];
           }
 
-          if (finalOriginalUrls.length > 1) {
-             finalOriginalUrls = [finalOriginalUrls[0]];
-          }
-          if (finalSourceUrls.length > 1) {
-             finalSourceUrls = [finalSourceUrls[0]];
-          }
 
           if (imgSet.provider === 'gemini') {
             throw new Error("Local Gemini Image generation not natively supported in this preview without vertex AI. Please use OpenAI-compatible proxy for images.");
