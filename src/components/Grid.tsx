@@ -9,6 +9,15 @@ import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import {
+  stripPreviewOnlyProps,
+  normalizeAttachmentKey,
+  mergeReviewProps,
+  pickGlobalReviewProps,
+  normalizeAttachmentItems,
+  hydrateReviewProps,
+  AttachmentReviewProps
+} from '../lib/attachmentUtils';
 
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   if (!query || !text) return <>{text}</>;
@@ -670,7 +679,7 @@ const ZoomableImage = ({
          <button onClick={(e) => { e.stopPropagation(); setIsCropMode(prev => !prev); }} title={lang === 'en' ? "Crop Mode" : "局部修图模式"} className={`p-2 rounded-full transition-colors flex items-center justify-center relative ${isCropMode ? 'bg-blue-600 text-white' : 'bg-black/50 text-white/70 hover:text-white'}`}>
              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>
          </button>
-         <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(src); }} title="Copy Image" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
+         <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(item.url || src); }} title="Copy Image" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
             <Copy className="w-5 h-5" />
          </button>
          <button onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
@@ -1202,6 +1211,7 @@ interface GridProps {
   rowHeight: 'short'|'medium'|'tall'|'extra';
   modelSettings: any;
   lang?: 'en' | 'zh';
+  globalAttachmentPropsMap?: Map<string, AttachmentReviewProps>;
   username?: string;
   gallerySettings?: any;
   onGallerySettingsChange?: (settings: any) => void;
@@ -1302,7 +1312,8 @@ const BatchDownloadPopup = ({
   visibleFields, 
   lang, 
   onClose,
-  triggerDownload
+  triggerDownload,
+  globalAttachmentPropsMap
 }: { 
   selectedCells: Set<string>; 
   data: GridData; 
@@ -1310,6 +1321,7 @@ const BatchDownloadPopup = ({
   lang: string; 
   onClose: () => void;
   triggerDownload: (url: string, filename: string, folderPath?: string) => Promise<string | undefined>;
+  globalAttachmentPropsMap: Map<string, AttachmentReviewProps>;
 }) => {
   // ratings index 0 is unrated, 1-5 is stars
   const [selectedRatings, setSelectedRatings] = useState<Record<number, boolean>>({ 0: false, 1: false, 2: false, 3: false, 4: false, 5: false });
@@ -1340,10 +1352,21 @@ const BatchDownloadPopup = ({
 
         let activeIndex = 0;
         items.forEach((item) => {
-           let rtg = 0;
+           const url = typeof item === 'string' ? item : item?.url;
+           if (!url) return;
+
+           const globalReview = globalAttachmentPropsMap.get(
+             normalizeAttachmentKey(url)
+           );
+
+           const rtg = Number(
+             (typeof item === 'object' ? item?.rating : undefined) ??
+             globalReview?.rating ??
+             0
+           );
+
            let itemName = '';
            if (item && typeof item === 'object') {
-             rtg = item.rating || 0;
              itemName = item.name || '';
            }
 
@@ -2168,36 +2191,20 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const globalAttachmentPropsMap = useMemo(() => {
-     const map = new Map<string, any>();
-     data.records.forEach((rec) => {
+     const map = new Map<string, AttachmentReviewProps>();
+     const sourceRecords = allRecords?.length ? allRecords : data.records;
+     
+     sourceRecords.forEach((rec) => {
          data.fields.forEach((f) => {
              if (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo') {
                  const val = rec[f.id];
                  if (val) {
-                     let items: any[] = [];
-                     if (Array.isArray(val)) items = val;
-                     else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
-                     else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
-
+                     const items = normalizeAttachmentItems(val);
                      items.forEach(item => {
-                         const url = typeof item === 'string' ? item : item.url;
-                         if (url && typeof item !== 'string') {
-                             const existing = map.get(url);
-                             const hasAnnotations = item.annotations && item.annotations.length > 0;
-                             const hasRating = (item.rating && item.rating > 0);
-                             const hasStatus = item.status && item.status !== 'unannotated';
-                             
-                             if (hasAnnotations || hasRating || hasStatus) {
-                                 const newAnnotations = (hasAnnotations && (!existing?.annotations || item.annotations.length >= existing.annotations.length)) 
-                                    ? item.annotations 
-                                    : existing?.annotations;
-                                    
-                                 map.set(url, { 
-                                     annotations: newAnnotations, 
-                                     status: item.status || existing?.status, 
-                                     rating: item.rating || existing?.rating 
-                                 });
-                             }
+                         const key = normalizeAttachmentKey(item.url);
+                         if (key) {
+                             const existing = map.get(key);
+                             map.set(key, mergeReviewProps(existing, item));
                          }
                      });
                  }
@@ -2205,7 +2212,7 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
          });
      });
      return map;
-  }, [data.records, data.fields]);
+  }, [allRecords, data.records, data.fields]);
   const [activeCell, setActiveCell] = useState<{ recordId: string; fieldId: string } | null>(null);
   const [forceEdit, setForceEdit] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
@@ -2327,34 +2334,36 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
 
   const [previewImageState, setPreviewImageState] = useState<{ items: any[], currentIndex: number, sourceViewMode: 'table' | 'gallery', onUpdate?: (newItems: any[]) => void } | null>(null);
 
-  const setPreviewImage = (path: string | null, allItems: any[] = [], onUpdate?: (newItems: any[]) => void) => {
+  const setPreviewImage = (path: string | null, allItems: any[] = [], onUpdate?: (newItems: any[]) => void, sourceRecordId?: string) => {
       if (!path) { setPreviewImageState(null); return; }
       if (allItems.length === 0) allItems = [{ url: path }];
       
       const defaultSettings = gallerySettings || gallerySettingsCache.get(tableId) || { refFieldIds: [] };
       const refFieldIds = defaultSettings.refFieldIds || [];
 
-      let parsedItems = allItems.map(it => typeof it === 'string' ? { url: it } : { ...it });
-      parsedItems = parsedItems.map(it => {
-          const itemUrl = it.url;
-          const mappedUrl = fullImageBlobCache.get(itemUrl) || ((itemUrl.startsWith('/') || itemUrl.match(/^[a-zA-Z]:\\/) || itemUrl.startsWith('\\\\')) ? `file://${itemUrl}` : itemUrl);
-          it.mappedUrl = it.mappedUrl || mappedUrl;
+      let currentRecord: any = null;
+      const sourceRecords = allRecords?.length ? allRecords : data.records;
+      if (sourceRecordId) {
+         currentRecord = sourceRecords.find((r: any) => r.id === sourceRecordId);
+      }
+      
+      let parsedItems = allItems.map(raw => {
+          const sourceItem = typeof raw === 'string' ? { url: raw } : raw;
+          const baseItem = stripPreviewOnlyProps(sourceItem);
+          const itemUrl = baseItem.url;
+          const mappedUrl = fullImageBlobCache.get(itemUrl) || ((itemUrl.startsWith('/') || itemUrl.match(/^[a-zA-Z]:\\\\/) || itemUrl.startsWith('\\\\')) ? `file://${itemUrl}` : itemUrl);
           
-          if (!it.refUrls && refFieldIds.length > 0) {
-              for (const rec of data.records) {
+          let rec = currentRecord;
+          if (!rec) {
+              for (const r of sourceRecords) {
                   let found = false;
                   for (const f of data.fields) {
                       if (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo') {
-                          const val = rec[f.id];
+                          const val = r[f.id];
                           if (val) {
-                              let items: any[] = [];
-                              if (Array.isArray(val)) items = val;
-                              else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
-                              else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
-
+                              const items = normalizeAttachmentItems(val);
                               for (const item of items) {
-                                  const u = typeof item === 'string' ? item : item.url;
-                                  if (u && (u === itemUrl || u.replace(/\\/g, '/') === itemUrl.replace(/\\/g, '/'))) {
+                                  if (item.url && (item.url === itemUrl || item.url.replace(/\\/g, '/') === itemUrl.replace(/\\/g, '/'))) {
                                       found = true;
                                       break;
                                   }
@@ -2362,36 +2371,36 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                           }
                       }
                   }
-                  if (found) {
-                      const refUrls: string[] = [];
-                      refFieldIds.forEach((id: string) => {
-                           const val = rec[id];
-                           if (val) {
-                               let items: any[] = [];
-                               if (Array.isArray(val)) items = val;
-                               else if (typeof val === 'string' && val.trim() !== '') items = val.split(',').map((s: string) => ({ url: s.trim() }));
-                               else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
-
-                               if (items.length > 0) {
-                                   const urlsObj = items.map(it => {
-                                       const u = typeof it === 'string' ? it : it.url;
-                                       if (u) return fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
-                                       return '';
-                                   }).filter(Boolean);
-                                   if (urlsObj.length > 0) {
-                                       refUrls.push(urlsObj as any);
-                                   }
-                               }
-                           }
-                      });
-                      it.refUrls = refUrls;
-                      break; 
-                  }
+                  if (found) { rec = r; break; }
               }
           }
-          return it;
+          
+          const refCells: string[][] = [];
+          if (rec && refFieldIds.length > 0) {
+              refFieldIds.forEach((id: string) => {
+                   const val = rec[id];
+                   if (val) {
+                       const items = normalizeAttachmentItems(val);
+                       if (items.length > 0) {
+                           const urlsObj = items.map(it => {
+                               const u = it.url;
+                               if (u) return fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
+                               return '';
+                           }).filter(Boolean);
+                           if (urlsObj.length > 0) {
+                               refCells.push(urlsObj as any);
+                           }
+                       }
+                   }
+              });
+          }
+          
+          return {
+              ...baseItem,
+              mappedUrl,
+              refCells
+          };
       });
-
       const currentIndex = parsedItems.findIndex((it: any) => it.mappedUrl === path || it.url === path);
       setPreviewImageState({ items: parsedItems, currentIndex: currentIndex === -1 ? 0 : currentIndex, sourceViewMode: viewMode, onUpdate });
   };
@@ -2594,23 +2603,17 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
           
           if (field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') {
                 if (isRaw) {
-                   // Internal paste handles full items array natively
-                   val = rawVal;
+                   val = normalizeAttachmentItems(rawVal).map(item => 
+                     hydrateReviewProps(item, globalAttachmentPropsMap)
+                   );
                } else {
                    let pathToAdd = val || '';
                    if (typeof pathToAdd === 'string' && pathToAdd) {
-                      // external text paste for attachments (append mode)
-                      const existing = record[field.id] || [];
-                      let existingArr: any[] = [];
-                      if (Array.isArray(existing)) {
-                          existingArr = [...existing];
-                      } else if (typeof existing === 'string' && existing) {
-                          existingArr = existing.split(',').map(s=>({url: s.trim()}));
-                      } else if (typeof existing === 'object' && existing !== null) {
-                          existingArr = [existing];
-                      }
-                      const newItems = pathToAdd.split(',').map(s => ({ url: s.trim() })).filter((s: any) => s.url);
-                      val = [...existingArr, ...newItems];
+                      const existingArr = normalizeAttachmentItems(record[field.id]);
+                      const pastedItems = normalizeAttachmentItems(pathToAdd).map(item => 
+                        hydrateReviewProps(item, globalAttachmentPropsMap)
+                      );
+                      val = [...existingArr, ...pastedItems];
                    } else {
                       val = pathToAdd;
                    }
@@ -3877,17 +3880,13 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                 newItems[previewImageState.currentIndex] = newItem;
                 setPreviewImageState({ ...previewImageState, items: newItems });
                 if (previewImageState.onUpdate) {
-                   const cleanedItems = newItems.map(item => {
-                       const { mappedUrl, ...cleanProps } = item;
-                       return cleanProps;
-                   });
+                   const cleanedItems = newItems.map(stripPreviewOnlyProps);
                    previewImageState.onUpdate(cleanedItems);
                 }
                 if (onUpdateGlobalAttachment) {
-                   const { url, mappedUrl, cropData, ...updatedProps } = newItem;
-                   if (url) {
-                       // Do not send cropData globally, only annotations and status/rating
-                       onUpdateGlobalAttachment(url, updatedProps);
+                   const updatedProps = pickGlobalReviewProps(newItem);
+                   if (newItem.url && Object.keys(updatedProps).length > 0) {
+                       onUpdateGlobalAttachment(newItem.url, updatedProps);
                    }
                 }
              }}
@@ -4417,6 +4416,7 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
             lang={lang}
             onClose={() => setShowBatchDownloadDialog(null)}
             triggerDownload={triggerDownload}
+            globalAttachmentPropsMap={globalAttachmentPropsMap}
          />
       )}
 
@@ -4528,6 +4528,7 @@ interface HeaderCellProps {
   isSelected?: boolean;
   modelSettings: any;
   lang?: 'en' | 'zh';
+  globalAttachmentPropsMap?: Map<string, AttachmentReviewProps>;
 }
 
 const FIELD_COLORS = [
@@ -5628,7 +5629,7 @@ interface CellProps {
   onActivate: () => void;
   onChange: (value: any) => void;
   onBlur: () => void;
-  onPreviewImage: (url: string, items?: any[], onUpdate?: (newItems: any[]) => void) => void;
+  onPreviewImage: (url: string, items?: any[], onUpdate?: (newItems: any[]) => void, sourceRecordId?: string) => void;
   allFields: Field[];
   modelSettings: any;
   heightClass: string;
@@ -5643,6 +5644,7 @@ interface CellProps {
   frozenLeftOffset?: number;
   isFrozenLast?: boolean;
   lang?: 'en' | 'zh';
+  globalAttachmentPropsMap?: Map<string, AttachmentReviewProps>;
   globalAttachmentPropsMap?: Map<string, any>;
   isLinked?: boolean;
   isLinkedTop?: boolean;
@@ -5963,7 +5965,8 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
             value={value} 
             onChange={onChange} 
             onClose={() => setIsEditingMode(false)}
-            onPreview={onPreviewImage}
+            onPreview={(url, items, update) => onPreviewImage(url, items, update, record.id)}
+            globalAttachmentPropsMap={globalAttachmentPropsMap}
           />
         );
       }
@@ -5978,20 +5981,20 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
              const base = typeof v === 'string' ? { url: v } : v;
              const { mappedUrl, ...cleanV } = base;
              const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
-             const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+             const globalProps = globalAttachmentPropsMap?.get(normalizeAttachmentKey(itemObj.url));
              return globalProps ? { ...itemObj, ...globalProps } : itemObj;
           });
         } else if (typeof value === 'string' && value.trim() !== '') {
           fileItems = value.split(',').map(s => {
              const url = s.trim();
-             const globalProps = globalAttachmentPropsMap?.get(url);
+             const globalProps = globalAttachmentPropsMap?.get(normalizeAttachmentKey(url));
              return globalProps ? { url, ...globalProps } : { url };
           });
         } else if (typeof value === 'object' && value !== null) {
           const base = typeof value === 'string' ? { url: value } : value;
           const { mappedUrl, ...cleanV } = base as any;
           const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
-          const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+          const globalProps = globalAttachmentPropsMap?.get(normalizeAttachmentKey(itemObj.url));
           fileItems = [globalProps ? { ...itemObj, ...globalProps } : itemObj];
         }
         
@@ -6027,7 +6030,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           title={path}
                           onClick={(e) => { 
                             e.stopPropagation(); 
-                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems)); 
+                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id); 
                           }}
                         />
                         {item.cropData && (
@@ -6095,13 +6098,13 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
              const base = typeof v === 'string' ? { url: v } : v;
              const { mappedUrl, ...cleanV } = base;
              const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
-             const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+             const globalProps = globalAttachmentPropsMap?.get(normalizeAttachmentKey(itemObj.url));
              return globalProps ? { ...itemObj, ...globalProps } : itemObj;
           });
         } else if (typeof value === 'string' && value.trim() !== '') {
           fileItems = value.split(',').map(s => {
              const url = s.trim();
-             const globalProps = globalAttachmentPropsMap?.get(url);
+             const globalProps = globalAttachmentPropsMap?.get(normalizeAttachmentKey(url));
              return globalProps ? { url, ...globalProps } : { url };
           });
         }
@@ -6138,7 +6141,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           title={path}
                           onClick={(e) => { 
                             e.stopPropagation(); 
-                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems)); 
+                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id); 
                           }}
                         />
                         {item.cropData && (
@@ -6563,8 +6566,8 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
          
          for (const u of urls) {
             if (u) {
-               const pVal = prev.globalAttachmentPropsMap?.get(u);
-               const nVal = next.globalAttachmentPropsMap?.get(u);
+               const pVal = prev.globalAttachmentPropsMap?.get(normalizeAttachmentKey(u));
+               const nVal = next.globalAttachmentPropsMap?.get(normalizeAttachmentKey(u));
                if (JSON.stringify(pVal) !== JSON.stringify(nVal)) return false;
             }
          }
@@ -6782,20 +6785,20 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
        const base = typeof v === 'string' ? { url: v } : v;
        const { mappedUrl, ...cleanV } = base;
        const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
-       const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+       const globalProps = globalAttachmentPropsMap?.get(normalizeAttachmentKey(itemObj.url));
        return globalProps ? { ...itemObj, ...globalProps } : itemObj;
     });
   } else if (typeof value === 'string' && value.trim() !== '') {
     fileItems = value.split(',').map(s => {
        const url = s.trim();
-       const globalProps = globalAttachmentPropsMap?.get(url);
+       const globalProps = globalAttachmentPropsMap?.get(normalizeAttachmentKey(url));
        return globalProps ? { url, ...globalProps } : { url };
     });
   } else if (typeof value === 'object' && value !== null) {
     const base = typeof value === 'string' ? { url: value } : value;
     const { mappedUrl, ...cleanV } = base as any;
     const itemObj = cleanV.url ? cleanV : { url: cleanV.name || '', ...cleanV };
-    const globalProps = globalAttachmentPropsMap?.get(itemObj.url);
+    const globalProps = globalAttachmentPropsMap?.get(normalizeAttachmentKey(itemObj.url));
     fileItems = [globalProps ? { ...itemObj, ...globalProps } : itemObj];
   }
 
@@ -6942,7 +6945,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                <div 
                  className="absolute top-1 right-1 bg-black/60 text-white rounded p-1 opacity-0 group-hover/attachment:opacity-100 cursor-pointer flex items-center gap-1.5 transition-opacity"
                >
-                 <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(item); }} title="Copy">
+                 <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
                     <Copy className="w-3.5 h-3.5 hover:text-blue-300" />
                  </button>
                  <button onClick={(e) => { e.stopPropagation(); triggerDownload(path, path.split('/').pop()?.split('\\').pop() || 'download.png'); }} title="Download">

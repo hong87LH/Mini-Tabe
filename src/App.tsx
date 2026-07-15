@@ -1,3 +1,4 @@
+import { normalizeAttachmentKey } from './lib/attachmentUtils';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { initialGridData } from './initialData';
@@ -2614,18 +2615,19 @@ export default function App() {
             gallerySettings={gallerySettings}
             onGallerySettingsChange={setGallerySettings}
             onUpdateGlobalAttachment={(url: string, updatedProps: any) => {
+               const targetKey = normalizeAttachmentKey(url);
                setData((prev: any) => ({
                  ...prev,
                  records: prev.records.map((rec: any) => {
                      let changed = false;
                      const newRec = { ...rec };
                      prev.fields.forEach((f: any) => {
-                         if (f.type === 'attachment' || f.type === 'aiImage') {
+                         if (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo') {
                              const val = rec[f.id];
                              if (Array.isArray(val)) {
                                  const newVal = val.map(v => {
                                      const vUrl = typeof v === 'string' ? v : v.url;
-                                     if (vUrl === url) return typeof v === 'string' ? { url: vUrl, ...updatedProps } : { ...v, ...updatedProps };
+                                     if (normalizeAttachmentKey(vUrl) === targetKey) return typeof v === 'string' ? { url: vUrl, ...updatedProps } : { ...v, ...updatedProps };
                                      return v;
                                  });
                                  if (JSON.stringify(newVal) !== JSON.stringify(val)) {
@@ -2634,13 +2636,13 @@ export default function App() {
                                  }
                              } else if (typeof val === 'string' && val.trim() !== '') {
                                  const parts = val.split(',').map(s => s.trim());
-                                 if (parts.includes(url)) {
-                                     const newVal = parts.map(p => p === url ? { url: p, ...updatedProps } : { url: p });
+                                 if (parts.some(p => normalizeAttachmentKey(p) === targetKey)) {
+                                     const newVal = parts.map(p => normalizeAttachmentKey(p) === targetKey ? { url: p, ...updatedProps } : { url: p });
                                      newRec[f.id] = newVal;
                                      changed = true;
                                  }
                              } else if (val && typeof val === 'object' && !Array.isArray(val)) {
-                                 if (val.url === url) {
+                                 if (normalizeAttachmentKey(val.url) === targetKey) {
                                      newRec[f.id] = { ...val, ...updatedProps };
                                      changed = true;
                                  }
