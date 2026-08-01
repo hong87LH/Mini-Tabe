@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readLocalFile: (filePath, options) => ipcRenderer.invoke('read-local-file', filePath, options),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   generateLingwuImage: (options) => ipcRenderer.invoke('generate-lingwu-image', options),
+  checkOssStorage: (ossConfig) => ipcRenderer.invoke('check-oss-storage', ossConfig),
+  executeOssCleanup: (ossConfig) => ipcRenderer.invoke('execute-oss-cleanup', ossConfig),
   generateLingwuVideo: (options) => ipcRenderer.invoke('generate-lingwu-video', options),
   queryNetworkJob: (localJobId) => ipcRenderer.invoke('query-network-job', localJobId),
   listNetworkJobs: () => ipcRenderer.invoke('list-network-jobs'),

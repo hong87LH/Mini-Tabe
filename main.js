@@ -126,6 +126,17 @@ app.whenReady().then(async () => {
     console.error("Failed to resume pending jobs", e);
   }
 
+  // Trigger silent OSS cleanup if env vars are present
+  try {
+    const { OssStorageManager } = await import('./oss_storage_manager.js');
+    if (process.env.OSS_ACCESS_KEY_ID && process.env.OSS_ACCESS_KEY_SECRET) {
+      const manager = new OssStorageManager();
+      manager.runAutomaticCleanup(0).catch(e => console.error('Startup OSS cleanup failed:', e));
+    }
+  } catch (e) {
+    console.error('Failed to init OssStorageManager on startup:', e);
+  }
+
   createWindow();
 
   // 自定义协议用于渲染本地图片
@@ -147,6 +158,43 @@ app.whenReady().then(async () => {
     } catch (err) {
        console.error("generate-lingwu-image error:", err);
        throw err;
+    }
+  });
+
+  ipcMain.handle('check-oss-storage', async (event, ossConfig) => {
+    try {
+      const { OssStorageManager, OSS_STORAGE_POLICY } = await import('./oss_storage_manager.js');
+      if (!ossConfig || !ossConfig.accessKeyId) throw new Error("Missing OSS Config");
+      const manager = new OssStorageManager(ossConfig);
+      const usageBytes = await manager.getBucketUsage();
+      const plan = await manager.planCleanup(usageBytes, 0);
+      return {
+          usageBytes,
+          policy: OSS_STORAGE_POLICY,
+          plan
+      };
+    } catch (e) {
+      console.error("check-oss-storage error:", e);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('execute-oss-cleanup', async (event, ossConfig) => {
+    try {
+      const { OssStorageManager } = await import('./oss_storage_manager.js');
+      if (!ossConfig || !ossConfig.accessKeyId) throw new Error("Missing OSS Config");
+      const manager = new OssStorageManager(ossConfig);
+      const usageBytes = await manager.getBucketUsage();
+      const plan = await manager.planCleanup(usageBytes, 0);
+      if (plan && plan.plannedDeletions && plan.plannedDeletions.length > 0) {
+          await manager.executeCleanup(plan);
+          const freedBytes = plan.plannedDeletions.reduce((acc, f) => acc + (f.bytes || 0), 0);
+          return { freedBytes };
+      }
+      return { freedBytes: 0 };
+    } catch (e) {
+      console.error("execute-oss-cleanup error:", e);
+      throw e;
     }
   });
 

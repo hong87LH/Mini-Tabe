@@ -1,4 +1,5 @@
 import { OssImageUploader } from './oss_uploader.js';
+import { getOssReferenceProfile } from './oss_reference_profiles.js';
 import OSS from 'ali-oss';
 import fs from 'node:fs';
 
@@ -15,24 +16,39 @@ const MANAGED_NAMESPACES = [
   }
 ];
 
-const OSS_STORAGE_POLICY = {
+export const OSS_STORAGE_POLICY = {
   enabled: true,
   packageBytes: 20 * 1024 ** 3,
   triggerBytes: 19 * 1024 ** 3,
   targetBytes: 17.5 * 1024 ** 3,
   protectRecentDays: 3,
   maxDeleteRounds: 20,
-  dryRun: true
+  dryRun: false
 };
 
 export class OssStorageManager {
   constructor(ossConfig) {
+    this._ossConfig = { ...ossConfig };
+    this._bucket = ossConfig?.bucket || process.env.OSS_BUCKET;
     this._client = new OSS({
       accessKeyId: ossConfig?.accessKeyId || process.env.OSS_ACCESS_KEY_ID,
       accessKeySecret: ossConfig?.accessKeySecret || process.env.OSS_ACCESS_KEY_SECRET,
       endpoint: ossConfig?.endpoint || process.env.OSS_ENDPOINT || 'https://oss-cn-beijing.aliyuncs.com',
-      bucket: ossConfig?.bucket || process.env.OSS_BUCKET
+      bucket: this._bucket
     });
+  }
+
+  async runAutomaticCleanup(incomingBatchBytes = 0) {
+    try {
+      const usage = await this.getBucketUsage();
+      const plan = await this.planCleanup(usage, incomingBatchBytes);
+      if (plan && plan.plannedDeletions.length > 0) {
+        console.log(`[OSS Manager] 触发自动清理: 当前 ${(usage / 1024**3).toFixed(2)}GB, 将清理 ${plan.plannedDeletions.length} 个目录`);
+        await this.executeCleanup(plan);
+      }
+    } catch (e) {
+      console.error(`[OSS Manager] 自动清理失败:`, e);
+    }
   }
 
   async getBucketUsage() {
@@ -186,15 +202,15 @@ export class OssStorageManager {
        // Clean local CSV for the corresponding namespace
        const ns = MANAGED_NAMESPACES.find(n => n.id === folder.namespaceId);
        if (ns) {
-         const uploader = new OssImageUploader(); // Uses env config
-         // We need to read the CSV, filter out the successfulKeys, rewrite
-         const profile = ns.profileId;
-         const records = uploader._loadRecords({ csvFilename: ns.id === 'legacy-webp-q90-v1' ? 'oss_references_node.csv' : 'oss_references_gemini_jpeg_node.csv', cloudCsvPath: ns.prefix + 'oss_references.csv' }); // This is a bit hacky, better use getOssReferenceProfile
+         const uploader = new OssImageUploader(this._ossConfig);
+         const profile = getOssReferenceProfile(ns.profileId);
+         const records = uploader._loadRecords(profile);
          
-         const filtered = records.filter(r => !successfulKeys.includes(r.cloud_path));
+         const successfulKeySet = new Set(successfulKeys);
+         const filtered = records.filter(record => !successfulKeySet.has(record.cloud_path));
+         
          if (filtered.length < records.length) {
-             const fakeProfile = { csvFilename: ns.id === 'legacy-webp-q90-v1' ? 'oss_references_node.csv' : 'oss_references_gemini_jpeg_node.csv', cloudCsvPath: ns.id === 'legacy-webp-q90-v1' ? 'references-node/oss_references_node.csv' : 'references-node-gemini-jpeg-v1/oss_references_gemini_jpeg_node.csv' };
-             uploader._rewriteRecords(filtered, fakeProfile);
+             await uploader._rewriteRecords(filtered, profile);
          }
        }
     }

@@ -17,9 +17,41 @@ function buildStandardOssDomain(endpoint: string, bucket: string): string {
 export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const [psPath, setPsPath] = useState(localStorage.getItem('bitable_ps_path') || '');
+  const [storageData, setStorageData] = useState<any>(null);
+  const [storageLoading, setStorageLoading] = useState(false);
 
   const toggleExpand = (id: string) => {
     setExpandedSections(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+  
+  const checkOssStorage = async () => {
+    if (!ossConfig.accessKeyId) {
+      alert(lang === 'en' ? 'Please fill OSS config first' : '请先填写OSS配置');
+      return;
+    }
+    setStorageLoading(true);
+    try {
+      const res = await (window as any).electronAPI.checkOssStorage(ossConfig);
+      setStorageData(res);
+    } catch (e: any) {
+      alert(e.message || 'Check failed');
+    } finally {
+      setStorageLoading(false);
+    }
+  };
+
+  const cleanupOssStorage = async () => {
+    if (!ossConfig.accessKeyId) return;
+    setStorageLoading(true);
+    try {
+      const res = await (window as any).electronAPI.executeOssCleanup(ossConfig);
+      alert(lang === 'en' ? `Cleanup completed. Freed ${(res.freedBytes / 1024 / 1024).toFixed(2)} MB` : `清理完成，释放了 ${(res.freedBytes / 1024 / 1024).toFixed(2)} MB 空间`);
+      await checkOssStorage();
+    } catch (e: any) {
+      alert(e.message || 'Cleanup failed');
+    } finally {
+      setStorageLoading(false);
+    }
   };
 
   const ensureArray = (val: any) => Array.isArray(val) ? val : (val ? [{...val, id: Math.random().toString(36).substr(2, 9)}] : []);
@@ -348,6 +380,76 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
             value={ossConfig.domain || ''}
             readOnly
           />
+        </div>
+        
+        {/* OSS Storage Management */}
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-sm font-medium text-gray-700 flex items-center">
+              <Database className="w-4 h-4 mr-2 text-gray-500" />
+              {lang === 'en' ? 'OSS Storage Management' : 'OSS 容量管理'}
+            </h4>
+            <div className="flex gap-2">
+              <button
+                onClick={checkOssStorage}
+                disabled={storageLoading || !ossConfig.accessKeyId}
+                className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded transition-colors disabled:opacity-50"
+              >
+                {storageLoading ? (lang === 'en' ? 'Checking...' : '检查中...') : (lang === 'en' ? 'Check Storage' : '刷新容量')}
+              </button>
+              {storageData?.plan?.plannedDeletions?.length > 0 && (
+                <button
+                  onClick={cleanupOssStorage}
+                  disabled={storageLoading}
+                  className="px-3 py-1.5 text-xs bg-red-50 hover:bg-red-100 text-red-600 rounded transition-colors"
+                >
+                  {lang === 'en' ? 'Force Cleanup' : '强制清理'}
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {storageData && (
+            <div className="text-xs bg-gray-50 p-3 rounded-lg border border-gray-100">
+              <div className="flex justify-between mb-1">
+                <span className="text-gray-500">{lang === 'en' ? 'Current Usage' : '当前用量'}</span>
+                <span className={`font-mono ${storageData.usageBytes > storageData.policy.triggerBytes ? 'text-orange-600 font-bold' : 'text-gray-700'}`}>
+                  {(storageData.usageBytes / 1024 / 1024 / 1024).toFixed(2)} GB / {(storageData.policy.packageBytes / 1024 / 1024 / 1024).toFixed(2)} GB
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-1.5 mb-3">
+                <div 
+                  className={`h-1.5 rounded-full ${storageData.usageBytes > storageData.policy.triggerBytes ? 'bg-orange-500' : 'bg-green-500'}`} 
+                  style={{ width: `${Math.min(100, (storageData.usageBytes / storageData.policy.packageBytes) * 100)}%` }}
+                ></div>
+              </div>
+              
+              {storageData.plan?.plannedDeletions?.length > 0 ? (
+                <div>
+                  <div className="text-orange-600 mb-1">
+                    {lang === 'en' ? 'Cleanup Recommended: Exceeds ' : '建议清理：已超过 '}
+                    {(storageData.policy.triggerBytes / 1024 / 1024 / 1024).toFixed(2)} GB
+                  </div>
+                  <div className="text-gray-500 pl-2 border-l-2 border-orange-200">
+                    {storageData.plan.plannedDeletions.map((f: any, i: number) => (
+                      <div key={i} className="flex justify-between">
+                        <span>{f.prefix}</span>
+                        <span>{(f.bytes / 1024 / 1024).toFixed(2)} MB</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between font-medium mt-1 pt-1 border-t border-orange-100 text-orange-700">
+                      <span>{lang === 'en' ? 'Projected Usage' : '预计清理后'}</span>
+                      <span>{(storageData.plan.projectedBytes / 1024 / 1024 / 1024).toFixed(2)} GB</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-green-600">
+                  {lang === 'en' ? 'Storage is within healthy limits.' : '当前容量健康，无需清理。'}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

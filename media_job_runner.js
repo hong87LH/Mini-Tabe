@@ -1,6 +1,7 @@
 import { LingwuClient } from './lingwu_client.js';
 import { NetworkJobStore } from './network_job_store.js';
 import { startPolling } from './network_polling.js';
+import { OssStorageManager } from './oss_storage_manager.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -144,6 +145,13 @@ export class MediaJobRunner {
 
             // 3. Save uploaded urls and creating phase
             const uploadedUrls = [...uploadedImages, ...uploadedVideos, ...uploadedAudio];
+            
+            // Asynchronously trigger OSS cleanup
+            if (uploadedUrls.length > 0 && ossConfig) {
+                const storageManager = new OssStorageManager(ossConfig);
+                storageManager.runAutomaticCleanup(0).catch(e => console.error('OSS cleanup check failed:', e));
+            }
+            
             await this.jobStore.patch(localJobId, {
                 phase: 'creating',
                 uploadedReferenceUrls: uploadedUrls

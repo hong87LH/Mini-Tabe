@@ -1190,8 +1190,21 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
   />;
 };
 
+type LocateCellRequest = {
+  requestId: number;
+  tableId: string;
+  recordId: string;
+  fieldId: string;
+};
+
+type LocateCellResult = {
+  status: 'success' | 'hidden' | 'not-found';
+};
+
 interface GridProps {
   tableId: string;
+  locateCellRequest?: LocateCellRequest | null;
+  onLocateCellResult?: (result: LocateCellResult) => void;
   viewMode?: 'grid' | 'gallery';
   data: GridData;
   allRecords?: any[];
@@ -2201,7 +2214,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
 const scrollCache = new Map<string, number>();
 
-export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onIndividualFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks }: GridProps) {
+export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode = 'grid', data, allRecords, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onIndividualFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const globalAttachmentPropsMap = useMemo(() => {
@@ -2307,6 +2320,60 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
   const currentScrollKey = `${tableId}_${viewMode}`;
   const isRestoringScroll = useRef(false);
   const ignoreScrollUntil = useRef(0);
+  const handledLocateRequestRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const request = locateCellRequest;
+    if (!request) return;
+    if (handledLocateRequestRef.current === request.requestId) return;
+    handledLocateRequestRef.current = request.requestId;
+
+    const recordIndex = data.records.findIndex(record => record.id === request.recordId);
+    const fieldIndex = data.fields.findIndex(field => field.id === request.fieldId);
+
+    if (recordIndex < 0 || fieldIndex < 0) {
+      onLocateCellResult?.({ status: 'not-found' });
+      return;
+    }
+
+    const virtualRowIndex = visibleRowsInfo.indices.findIndex(dataIndex => dataIndex === recordIndex);
+
+    if (virtualRowIndex < 0) {
+      onLocateCellResult?.({ status: 'hidden' });
+      return;
+    }
+
+    rowVirtualizer.scrollToIndex(virtualRowIndex, { align: 'center' });
+
+    let frameOne = 0;
+    let frameTwo = 0;
+
+    frameOne = window.requestAnimationFrame(() => {
+      frameTwo = window.requestAnimationFrame(() => {
+        const cellId = `cell-${request.recordId}-${request.fieldId}`;
+        const element = document.getElementById(cellId);
+        
+        if (!element) {
+          onLocateCellResult?.({ status: 'not-found' });
+          return;
+        }
+
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        setActiveCell({ recordId: request.recordId, fieldId: request.fieldId });
+
+        if (typeof (element as HTMLElement).focus === 'function') {
+          (element as HTMLElement).focus({ preventScroll: true });
+        }
+
+        onLocateCellResult?.({ status: 'success' });
+      });
+    });
+
+    return () => {
+      if (frameOne) window.cancelAnimationFrame(frameOne);
+      if (frameTwo) window.cancelAnimationFrame(frameTwo);
+    };
+  }, [locateCellRequest?.requestId, data.records, data.fields, visibleRowsInfo.indices, rowVirtualizer, onLocateCellResult]);
 
   // Restore scroll position when table changes
   useLayoutEffect(() => {

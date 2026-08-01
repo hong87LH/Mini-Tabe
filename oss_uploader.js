@@ -330,11 +330,83 @@ class OssImageUploader {
     return records;
   }
 
+  _upgradeCsvIfNeeded(records, profile, scopeCheck, localStat) {
+    const csvFile = this._getCsvFile(profile);
+    if (!fs.existsSync(csvFile)) {
+      return;
+    }
+    const text = fs.readFileSync(csvFile, 'utf-8').trim();
+    if (!text) {
+      return;
+    }
+    const firstLine = text.split(/\r?\n/)[0];
+    const currentHeaders = firstLine.split(',').map(item => item.trim());
+    
+    /*
+     * 不仅检查列数，
+     * 也检查字段名称和顺序。
+     */
+    const needsUpgrade = currentHeaders.length !== CSV_FIELDS.length || 
+      CSV_FIELDS.some((field, index) => currentHeaders[index] !== field);
+
+    if (!needsUpgrade) {
+      return;
+    }
+    
+    console.log(`[OSS] 发现旧版 CSV 表头，正在升级到 ${CSV_FIELDS.length} 列...`);
+    
+    const scope = scopeCheck?.scope;
+    
+    if (scopeCheck?.valid && scope && !scope.isEmpty) {
+      records.forEach(record => {
+        record.bucket = record.bucket || scope.bucket || this._bucket;
+        record.endpoint_host = record.endpoint_host || scope.endpointHost || this._endpointHost;
+        record.reference_profile_id = record.reference_profile_id || scope.profileId || profile.id;
+      });
+    }
+    
+    const headers = CSV_FIELDS.join(',');
+    const lines = records.map(record => CSV_FIELDS.map(field => record[field] || '').join(','));
+    
+    const tempPath = `${csvFile}.tmp`;
+    fs.writeFileSync(tempPath, headers + '\n' + lines.join('\n') + '\n', 'utf-8');
+    fs.renameSync(tempPath, csvFile);
+    
+    if (localStat && localStat.mtime) {
+      const time = new Date(localStat.mtime);
+      try {
+        fs.utimesSync(csvFile, time, time);
+      } catch {
+        // 修改时间恢复失败不阻断升级
+      }
+    }
+    
+    console.log('[OSS] 本地 CSV 表头升级完成');
+  }
+
   async _appendRecord(record, profile) {
     const csvFile = this._getCsvFile(profile);
+    
+    if (fs.existsSync(csvFile)) {
+      const records = this._loadRecords(profile);
+      const scopeCheck = this._validateLocalCsvScope(records, profile);
+      
+      if (!scopeCheck.valid) {
+        const error = new Error(scopeCheck.message || '本地 CSV 所属 Bucket 不匹配');
+        error.code = scopeCheck.code || 'OSS_CSV_SCOPE_INVALID';
+        throw error;
+      }
+      
+      /*
+       * 防止刚从云端下载回来的
+       * CSV 仍是旧表头。
+       */
+      this._upgradeCsvIfNeeded(records, profile, scopeCheck, null);
+    }
+    
     const exists = fs.existsSync(csvFile);
     const headers = CSV_FIELDS.join(',');
-    const values = CSV_FIELDS.map(f => record[f] || '').join(',');
+    const values = CSV_FIELDS.map(field => record[field] || '').join(',');
 
     if (!exists) {
       fs.writeFileSync(csvFile, headers + '\n' + values + '\n', 'utf-8');
@@ -374,13 +446,22 @@ class OssImageUploader {
   _writeEmptyCsv(profile) {
     const csvFile = this._getCsvFile(profile);
     const headers = CSV_FIELDS.join(',');
-    fs.writeFileSync(csvFile, headers + '\n', 'utf-8');
+
+    if (fs.existsSync(csvFile)) {
+      const bakPath = `${csvFile}.bak`;
+      fs.copyFileSync(csvFile, bakPath);
+    }
+
+    const tempPath = `${csvFile}.tmp`;
+    fs.writeFileSync(tempPath, headers + '\n', 'utf-8');
+    fs.renameSync(tempPath, csvFile);
+
     console.log(`[OSS] 已在本地写入空缓存 → ${csvFile}`);
   }
 
-  async _mergeCurrentBucketCsv(profile, cloud, localRecords) {
+  async _mergeCurrentBucketCsv(profile, cloud, localRecords, originalLocalStat) {
     const csvFile = this._getCsvFile(profile);
-    const localStat = fs.existsSync(csvFile) ? { mtime: fs.statSync(csvFile).mtime.getTime() } : null;
+    const localStat = originalLocalStat || (fs.existsSync(csvFile) ? { mtime: fs.statSync(csvFile).mtime.getTime() } : null);
     
     const cloudTime = cloud.lastModified;
     const localTime = localStat ? localStat.mtime : 0;
@@ -406,13 +487,18 @@ class OssImageUploader {
       cloud = await this._getCloudCsvStat(profile);
     } catch (e) {
       console.warn(`[OSS] 获取云端 CSV 状态发生错误:`, e);
-      return; // 网络错误，停止同步
+      throw new Error(`获取云端 CSV 状态发生网络或权限错误，同步终止: ${e.message}`);
     }
 
     const localExists = fs.existsSync(this._getCsvFile(profile));
+    const localStat = localExists ? { mtime: fs.statSync(this._getCsvFile(profile)).mtime.getTime() } : null;
     const localRecords = localExists ? this._loadRecords(profile) : [];
     
     const scopeCheck = this._validateLocalCsvScope(localRecords, profile);
+
+    if (localExists && scopeCheck.valid) {
+      this._upgradeCsvIfNeeded(localRecords, profile, scopeCheck, localStat);
+    }
 
     if (cloud.exists) {
       if (!scopeCheck.valid) {
@@ -421,7 +507,7 @@ class OssImageUploader {
         return;
       }
       
-      await this._mergeCurrentBucketCsv(profile, cloud, localRecords);
+      await this._mergeCurrentBucketCsv(profile, cloud, localRecords, localStat);
       return;
     }
 
@@ -517,7 +603,7 @@ class OssImageUploader {
     
     const exists = await this._ossExists(record.cloud_path);
     if (!exists) {
-      await this._removeRecordsBy('cloud_path', record.cloud_path);
+      await this._removeRecordsBy('cloud_path', record.cloud_path, profile);
       return null;
     }
     return record;
@@ -526,9 +612,19 @@ class OssImageUploader {
   async _ossExists(cloudPath) {
     this._ensureOSS();
     try {
-      return await this._client.head(cloudPath).then(() => true).catch(() => false);
-    } catch {
-      return false;
+      await this._client.head(cloudPath);
+      return true;
+    } catch (error) {
+      const status = Number(error?.status || error?.statusCode);
+      if (status === 404 || error?.code === 'NoSuchKey') {
+        return false;
+      }
+      
+      /*
+       * 网络、权限、签名等问题
+       * 不能被当成文件不存在。
+       */
+      throw error;
     }
   }
 

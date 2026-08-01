@@ -1,6 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { X, Play, RefreshCw, Trash2, CheckCircle2, AlertCircle, Copy, Link as LinkIcon, Info } from 'lucide-react';
 
+const ACTIVE_JOB_PHASES = new Set([
+  'preparing',
+  'uploading',
+  'creating',
+  'polling',
+  'generated',
+  'downloading'
+]);
+
+function isActiveJobPhase(phase?: string): boolean {
+  return ACTIVE_JOB_PHASES.has(String(phase || ''));
+}
+
+function isOssRelatedError(job: any): boolean {
+  const stage = String(job?.lastError?.stage || '').toLowerCase();
+  const code = String(job?.lastError?.code || job?.errorCode || '').toUpperCase();
+  const message = String(job?.lastError?.message || job?.error || '').toUpperCase();
+
+  if (stage === 'upload' || stage === 'oss') {
+    return true;
+  }
+
+  return (
+    code.includes('OSS') ||
+    code.includes('BUCKET') ||
+    code.includes('REFERENCE_UPLOAD') ||
+    code.includes('NO_OSS_CONFIG') ||
+    message.includes('OSS') ||
+    message.includes('BUCKET')
+  );
+}
+
 const translations = {
   en: {
     title: 'Network Job Center',
@@ -17,7 +49,8 @@ const translations = {
     deleteJob: 'Delete History',
     copyDiagnostic: 'Copy Diagnostic Info',
     bindToCell: 'Bind to Original Cell',
-    bound: 'Bound!'
+    bound: 'Bound!',
+    locateCell: 'Locate Original Cell'
   },
   zh: {
     title: '后台任务中心',
@@ -34,11 +67,24 @@ const translations = {
     deleteJob: '删除历史记录',
     copyDiagnostic: '复制诊断信息',
     bindToCell: '写回原单元格',
-    bound: '已写回!'
+    bound: '已写回!',
+    locateCell: '跳转原单元格'
   }
 };
 
-export const NetworkJobCenter = ({ onClose, lang = 'en', onBindToCell }: { onClose: () => void, lang?: string, onBindToCell?: (tableId: string, recordId: string, fieldId: string, path: string) => void }) => {
+export const NetworkJobCenter = ({ 
+  onClose, 
+  lang = 'en', 
+  onBindToCell,
+  currentOssBucket,
+  onLocateCell
+}: { 
+  onClose: () => void, 
+  lang?: string, 
+  onBindToCell?: (tableId: string, recordId: string, fieldId: string, path: string) => void,
+  currentOssBucket?: string,
+  onLocateCell?: (payload: { tableId: string, recordId: string, fieldId: string }) => void
+}) => {
   const [jobs, setJobs] = useState<any[]>([]);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [boundJob, setBoundJob] = useState<string | null>(null);
@@ -102,9 +148,40 @@ export const NetworkJobCenter = ({ onClose, lang = 'en', onBindToCell }: { onClo
         {jobs.length === 0 && (
           <div className="text-center text-gray-400 text-sm mt-10">{t.noJobs}</div>
         )}
-        {jobs.map(job => (
+        {jobs.map(job => {
+          const jobBucket = String(job?.ossBucket || job?.bucket || '').trim();
+          const currentBucket = String(currentOssBucket || '').trim();
+          const isDifferentBucket = Boolean(jobBucket && currentBucket && jobBucket !== currentBucket);
+          const showBucket = Boolean(jobBucket) && (isDifferentBucket || isOssRelatedError(job));
+          const canLocate = Boolean(job.tableId && job.recordId && job.fieldId && onLocateCell);
+
+          return (
           <div key={job.localJobId} className="border border-gray-200 rounded p-3 bg-white flex flex-col gap-2 relative group hover:border-blue-200 transition-colors">
-            <div className="flex items-start justify-between">
+            
+            <button 
+              type="button"
+              title={t.deleteJob}
+              aria-label={t.deleteJob}
+              className="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-md text-gray-400 hover:bg-red-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-100"
+              onClick={async (event) => {
+                event.stopPropagation();
+                const running = isActiveJobPhase(job.phase);
+                const confirmed = window.confirm(
+                  running
+                    ? ('该任务仍在运行中。\n\n' +
+                       '删除会移除本地 Job 记录，但不一定能取消远端任务；' +
+                       '后续结果可能无法自动下载和写回。\n\n' +
+                       '确定继续删除吗？')
+                    : '确定删除这条 Job 记录吗？'
+                );
+                if (!confirmed) return;
+                await handleDelete(job.localJobId);
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+            
+            <div className="flex items-start justify-between pr-10">
               <div className="text-xs font-mono text-gray-500 truncate w-48" title={job.localJobId}>{job.localJobId}</div>
               <div className="flex items-center gap-2">
                 <span className={[
@@ -116,13 +193,6 @@ export const NetworkJobCenter = ({ onClose, lang = 'en', onBindToCell }: { onClo
                 ].join(" ")}>
                   {job.phase}
                 </span>
-                <button 
-                  onClick={() => handleDelete(job.localJobId)}
-                  className="text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                  title={t.deleteJob}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
               </div>
             </div>
             
@@ -136,11 +206,19 @@ export const NetworkJobCenter = ({ onClose, lang = 'en', onBindToCell }: { onClo
             {job.taskId && (
               <div className="text-xs text-gray-500 font-mono">{t.taskId} {job.taskId}</div>
             )}
-            {job.ossBucket && (
-              <div className="text-[10px] text-gray-600 font-mono">
-                OSS Bucket: {job.ossBucket}
+
+            {showBucket && (
+              <div
+                className={
+                  isDifferentBucket
+                    ? 'mt-1 inline-flex rounded bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700 w-max'
+                    : 'mt-1 inline-flex rounded bg-red-50 px-2 py-0.5 text-[10px] text-red-600 w-max'
+                }
+              >
+                {isDifferentBucket ? '历史 Bucket' : 'OSS Bucket'}：{jobBucket}
               </div>
             )}
+            
             {job.lastError && (
               <div className="text-xs text-red-600 bg-red-50 p-2 rounded border border-red-100 mt-1">
                 {job.lastError.message}
@@ -164,15 +242,6 @@ export const NetworkJobCenter = ({ onClose, lang = 'en', onBindToCell }: { onClo
                    {t.saved} {job.localPath.split(/[/\\]/).pop()}
                  </div>
                  <div className="flex items-center gap-2 shrink-0">
-                   {job.recordId && job.fieldId && onBindToCell && (
-                      <button 
-                         onClick={() => handleBind(job)}
-                         className="text-[10px] text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                      >
-                         <LinkIcon className="w-3 h-3" />
-                         {boundJob === job.localJobId ? t.bound : t.bindToCell}
-                      </button>
-                   )}
                    <button 
                      onClick={() => (window as any).electronAPI.openLocalFile(job.localPath).catch(console.error)}
                      className="text-[10px] text-green-700 underline"
@@ -183,11 +252,36 @@ export const NetworkJobCenter = ({ onClose, lang = 'en', onBindToCell }: { onClo
               </div>
             )}
             
-            <div className="flex gap-2 mt-2">
+            <div className="flex flex-wrap gap-2 mt-2">
+               {canLocate && (
+                 <button
+                   type="button"
+                   className="rounded-md border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                   onClick={(event) => {
+                     event.stopPropagation();
+                     onLocateCell?.({
+                       tableId: job.tableId,
+                       recordId: job.recordId,
+                       fieldId: job.fieldId
+                     });
+                   }}
+                 >
+                   {t.locateCell}
+                 </button>
+               )}
+               {job.recordId && job.fieldId && job.localPath && onBindToCell && (
+                  <button 
+                     onClick={() => handleBind(job)}
+                     className="rounded-md border border-gray-200 px-2 py-1 text-[11px] text-blue-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 flex items-center gap-1"
+                  >
+                     <LinkIcon className="w-3 h-3" />
+                     {boundJob === job.localJobId ? t.bound : t.bindToCell}
+                  </button>
+               )}
                {(job.phase === 'generated' || job.phase === 'failed') && job.resultUrl && (
                   <button 
                     onClick={() => (window as any).electronAPI.retryDownloadJob(job.localJobId)}
-                    className="text-xs bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded flex items-center gap-1"
+                    className="text-[11px] bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded flex items-center gap-1"
                   >
                     <RefreshCw className="w-3 h-3" />
                     {t.retryDownload}
@@ -196,7 +290,7 @@ export const NetworkJobCenter = ({ onClose, lang = 'en', onBindToCell }: { onClo
                {job.phase === 'failed' && job.taskId && !job.resultUrl && (
                   <button 
                     onClick={() => handleContinuePolling(job.localJobId)}
-                    className="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-2 py-1 rounded flex items-center gap-1"
+                    className="text-[11px] bg-blue-50 text-blue-600 hover:bg-blue-100 px-2 py-1 rounded flex items-center gap-1"
                   >
                     <Play className="w-3 h-3" />
                     {t.continuePolling}
@@ -204,7 +298,7 @@ export const NetworkJobCenter = ({ onClose, lang = 'en', onBindToCell }: { onClo
                )}
             </div>
           </div>
-        ))}
+        )})}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { normalizeAttachmentKey } from './lib/attachmentUtils';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { NetworkJobCenter } from './components/NetworkJobCenter';
 import { initialGridData } from './initialData';
@@ -832,6 +832,14 @@ export default function App() {
   const [searchMatches, setSearchMatches] = useState<{ recordIndex: number, fieldIndex: number, recordId: string, fieldId: string }[]>([]);
   const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  type JobLocateRequest = {
+    requestId: number;
+    tableId: string;
+    recordId: string;
+    fieldId: string;
+  };
+  const [jobLocateRequest, setJobLocateRequest] = useState<JobLocateRequest | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1905,7 +1913,35 @@ export default function App() {
       });
   }
 
+  const handleLocateJobCell = useCallback(({ tableId, recordId, fieldId }: { tableId: string; recordId: string; fieldId: string; }) => {
+    const targetTable = tables.find(table => table.id === tableId);
+    if (!targetTable) {
+      window.alert('原表格不在当前工程中，可能已经被删除，或当前打开的不是原工程。');
+      return;
+    }
+    const recordExists = targetTable.data.records.some(record => record.id === recordId);
+    if (!recordExists) {
+      window.alert('原记录已经不存在，无法定位。');
+      return;
+    }
+    const fieldExists = targetTable.data.fields.some(field => field.id === fieldId);
+    if (!fieldExists) {
+      window.alert('原字段已经不存在，无法定位。');
+      return;
+    }
+    setActiveTableId(tableId);
+    setTables(previous => previous.map(table => table.id === tableId ? { ...table, activeViewMode: 'grid' } : table));
+    setJobLocateRequest({
+      requestId: Date.now(),
+      tableId,
+      recordId,
+      fieldId
+    });
+  }, [tables, setActiveTableId, setTables]);
+
   const displayData = { ...data, records: displayRecords };
+  
+  const currentOssBucket = String(modelSettings?.oss?.bucket || '').trim();
 
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900 font-sans overflow-hidden">
@@ -2625,6 +2661,16 @@ export default function App() {
           )}
           <Grid 
             tableId={activeTableId}
+            locateCellRequest={jobLocateRequest && jobLocateRequest.tableId === activeTableId ? jobLocateRequest : null}
+            onLocateCellResult={(result) => {
+              if (result.status === 'hidden') {
+                window.alert('目标单元格当前可能被筛选或折叠隐藏，请清除筛选或展开分组后重试。');
+              }
+              if (result.status === 'not-found') {
+                window.alert('没有找到目标单元格，记录或字段可能已经发生变化。');
+              }
+              setJobLocateRequest(null);
+            }}
             viewMode={activeViewMode}
             lang={lang}
             username={userSettings.username}
@@ -2889,7 +2935,12 @@ export default function App() {
         </div>
       )}
       {showJobCenter && (
-        <NetworkJobCenter lang={lang} onClose={() => setShowJobCenter(false)} onBindToCell={(jobTableId, recordId, fieldId, url) => {
+        <NetworkJobCenter 
+          lang={lang} 
+          onClose={() => setShowJobCenter(false)} 
+          currentOssBucket={currentOssBucket}
+          onLocateCell={handleLocateJobCell}
+          onBindToCell={(jobTableId, recordId, fieldId, url) => {
             if (jobTableId !== activeTableId) {
                 alert('该任务属于其他表格，请先切换到原表格后再写回。');
                 return;
