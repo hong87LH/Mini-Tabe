@@ -20,6 +20,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   generateLingwuImage: (options) => ipcRenderer.invoke('generate-lingwu-image', options),
   generateLingwuVideo: (options) => ipcRenderer.invoke('generate-lingwu-video', options),
-  openInPhotoshop: (filePath, psPath) => ipcRenderer.invoke('open-in-photoshop', filePath, psPath)
+  queryNetworkJob: (localJobId) => ipcRenderer.invoke('query-network-job', localJobId),
+  listNetworkJobs: () => ipcRenderer.invoke('list-network-jobs'),
+  retryDownloadJob: (localJobId) => ipcRenderer.invoke('retry-download-job', localJobId),
+  openLocalFile: (localPath) => ipcRenderer.invoke('open-local-file', localPath),
+  openInPhotoshop: (filePath, psPath) => ipcRenderer.invoke('open-in-photoshop', filePath, psPath),
+  deleteNetworkJob: (localJobId) => ipcRenderer.invoke('delete-network-job', localJobId),
+  continueNetworkJobPolling: (localJobId) => ipcRenderer.invoke('continue-network-job-polling', localJobId),
+  onNetworkJobUpdated: (callback) => {
+    const handler = (_event, job) => callback(job);
+    ipcRenderer.on('network-job-updated', handler);
+    return () => {
+      ipcRenderer.removeListener('network-job-updated', handler);
+    };
+  }
 });
 

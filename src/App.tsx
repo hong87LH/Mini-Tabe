@@ -1,11 +1,12 @@
 import { normalizeAttachmentKey } from './lib/attachmentUtils';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { NetworkJobCenter } from './components/NetworkJobCenter';
 import { initialGridData } from './initialData';
 import { Grid } from './components/Grid';
 import { ApiSettings } from './components/ApiSettings';
 import { FieldType, Attachment, GridData } from './types';
-import { Search, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy, Image as ImageIcon, Video, User, FileText, Folder } from 'lucide-react';
+import { Search, Activity, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy, Image as ImageIcon, Video, User, FileText, Folder } from 'lucide-react';
 import Papa from 'papaparse';
 import { Parser } from 'expr-eval';
 import { getStringColor } from './lib/utils';
@@ -736,6 +737,7 @@ export default function App() {
   const [showTableMenu, setShowTableMenu] = useState(false);
   const [showLoadMenu, setShowLoadMenu] = useState(false);
   const [showSaveMenu, setShowSaveMenu] = useState(false);
+  const [showJobCenter, setShowJobCenter] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [showRecentMenu, setShowRecentMenu] = useState(false);
   const [recentProjects, setRecentProjects] = useState<{name: string, handle: any, path?: string}[]>([]);
@@ -2202,8 +2204,15 @@ export default function App() {
                  )}
              </div>
 
+             <button 
+                onClick={() => setShowJobCenter(true)} 
+                className="flex items-center justify-center space-x-1.5 px-3 h-8 rounded-md transition-colors font-medium border border-gray-200 hover:bg-gray-50 text-gray-700 cursor-pointer"
+             >
+                <Activity className="w-4 h-4 text-blue-500" />
+                <span>Jobs</span>
+             </button>
              <div className="relative">
-                <div 
+                <div
                   className="flex items-center justify-center space-x-1.5 px-3 h-8 rounded-md transition-colors font-medium border border-gray-200 hover:bg-gray-50 cursor-pointer"
                   onClick={() => { setShowShareMenu(!showShareMenu); setShowLoadMenu(false); setShowSaveMenu(false); }}
                 >
@@ -2859,6 +2868,32 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {showJobCenter && (
+        <NetworkJobCenter lang={lang} onClose={() => setShowJobCenter(false)} onBindToCell={(jobTableId, recordId, fieldId, url) => {
+            if (jobTableId !== activeTableId) {
+                alert('该任务属于其他表格，请先切换到原表格后再写回。');
+                return;
+            }
+            const record = data.records.find(r => r.id === recordId);
+            const fieldExists = data.fields.some(field => field.id === fieldId);
+            
+            if (!record || !fieldExists) {
+                alert('原记录或字段已经不存在，无法自动写回。');
+                return;
+            }
+            const currentValues = Array.isArray(record[fieldId]) ? record[fieldId] : (record[fieldId] ? [record[fieldId]] : []);
+            const targetKey = normalizeAttachmentKey(url);
+            
+            const alreadyExists = currentValues.some(value => {
+                const itemUrl = typeof value === 'string' ? value : value?.url;
+                return normalizeAttachmentKey(itemUrl) === targetKey;
+            });
+            
+            if (!alreadyExists) {
+                handleUpdateRecord(recordId, fieldId, [...currentValues, url]);
+            }
+        }} />
       )}
       {toastMessage && (
         <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-[100] px-4 py-2 bg-gray-800 text-white rounded shadow-lg text-sm transition-opacity duration-300 pointer-events-none">

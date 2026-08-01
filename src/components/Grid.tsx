@@ -19,6 +19,20 @@ import {
   AttachmentReviewProps
 } from '../lib/attachmentUtils';
 
+type NetworkJobCellItem = {
+  type: 'networkJob';
+  jobId: string;
+};
+
+function isNetworkJobCellItem(value: unknown): value is NetworkJobCellItem {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as any).type === 'networkJob' &&
+    typeof (value as any).jobId === 'string'
+  );
+}
+
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   if (!query || !text) return <>{text}</>;
   const lowerText = String(text).toLowerCase();
@@ -970,7 +984,7 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
   if (thumbnailCache.has(pathStr)) return thumbnailCache.get(pathStr)!;
 
   const w = window as any;
-  const isElectronPath = pathStr.startsWith('/') || pathStr.match(/^[a-zA-Z]:\\/) || pathStr.startsWith('\\\\');
+  const isElectronPath = pathStr.startsWith('/') || pathStr.match(/^[a-zA-Z]:[\\/]/) || pathStr.startsWith('\\\\');
 
   if (isElectronPath && w.electronAPI && w.electronAPI.getThumbnail) {
     try {
@@ -1177,7 +1191,7 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
 };
 
 interface GridProps {
-  tableId?: string;
+  tableId: string;
   viewMode?: 'grid' | 'gallery';
   data: GridData;
   allRecords?: any[];
@@ -1943,7 +1957,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
     const renderImageCard = (img: any, idx: number | string) => {
         const path = img.url;
-        let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
+        let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:[\\/]/) || path.startsWith('\\\\') ? `file://${path}` : path);
         const infoTexts = displayFieldIds.map(id => {
             const f = data.fields.find((f: any) => f.id === id);
             const val = img.record[id];
@@ -1971,7 +1985,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
                             if (items.length > 0) {
                                 const urlsObj = items.map(it => {
                                     const u = typeof it === 'string' ? it : it.url;
-                                    if (u) return fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
+                                    if (u) return fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:[\\/]/) || u.startsWith('\\\\') ? `file://${u}` : u);
                                     return '';
                                 }).filter(Boolean);
                                 if (urlsObj.length > 0) {
@@ -2334,7 +2348,7 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
 
   const [previewImageState, setPreviewImageState] = useState<{ items: any[], currentIndex: number, sourceViewMode: 'table' | 'gallery', onUpdate?: (newItems: any[]) => void } | null>(null);
 
-  const setPreviewImage = (path: string | null, allItems: any[] = [], onUpdate?: (newItems: any[]) => void, sourceRecordId?: string) => {
+  const setPreviewImage = (path: string | null, allItems: any[] = [], onUpdate?: (newItems: any[]) => void, sourceRecordId?: string, preferredIndex?: number) => {
       if (!path) { setPreviewImageState(null); return; }
       if (allItems.length === 0) allItems = [{ url: path }];
       
@@ -2351,7 +2365,7 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
           const sourceItem = typeof raw === 'string' ? { url: raw } : raw;
           const baseItem = stripPreviewOnlyProps(sourceItem);
           const itemUrl = baseItem.url;
-          const mappedUrl = fullImageBlobCache.get(itemUrl) || ((itemUrl.startsWith('/') || itemUrl.match(/^[a-zA-Z]:\\\\/) || itemUrl.startsWith('\\\\')) ? `file://${itemUrl}` : itemUrl);
+          const mappedUrl = fullImageBlobCache.get(itemUrl) || ((itemUrl.startsWith('/') || itemUrl.match(/^[a-zA-Z]:[\\\\/]/) || itemUrl.startsWith('\\\\')) ? `file://${itemUrl}` : itemUrl);
           
           let rec = currentRecord;
           if (!rec) {
@@ -2384,7 +2398,7 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                        if (items.length > 0) {
                            const urlsObj = items.map(it => {
                                const u = it.url;
-                               if (u) return fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:\\\\/) || u.startsWith('\\\\') ? `file://${u}` : u);
+                               if (u) return fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:[\\\\/]/) || u.startsWith('\\\\') ? `file://${u}` : u);
                                return '';
                            }).filter(Boolean);
                            if (urlsObj.length > 0) {
@@ -2401,8 +2415,16 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
               refCells
           };
       });
-      const currentIndex = parsedItems.findIndex((it: any) => it.mappedUrl === path || it.url === path);
-      setPreviewImageState({ items: parsedItems, currentIndex: currentIndex === -1 ? 0 : currentIndex, sourceViewMode: viewMode, onUpdate });
+      const clickedKey = normalizeAttachmentKey(path || '');
+      const matchedIndex = parsedItems.findIndex((item: any) => {
+        return (
+          normalizeAttachmentKey(item.url) === clickedKey ||
+          normalizeAttachmentKey(item.mappedUrl) === clickedKey
+        );
+      });
+      const hasValidPreferredIndex = Number.isInteger(preferredIndex) && Number(preferredIndex) >= 0 && Number(preferredIndex) < parsedItems.length;
+      const currentIndex = hasValidPreferredIndex ? Number(preferredIndex) : (matchedIndex >= 0 ? matchedIndex : 0);
+      setPreviewImageState({ items: parsedItems, currentIndex, sourceViewMode: viewMode, onUpdate });
   };
 
   const handlePreviewPrev = () => {
@@ -2453,6 +2475,115 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
        }
     }
   }, [activeSearchMatch]);
+
+  useEffect(() => {
+    const w = window as any;
+    if (!w.electronAPI?.listNetworkJobs) return;
+    
+    // Find all networkJob placeholders in the current grid data
+    const placeholderJobs = new Map<string, {recordId: string, fieldId: string, values: any[]}>();
+    
+    data.records.forEach(r => {
+        data.fields.forEach(f => {
+            if (f.type !== 'aiImage' && f.type !== 'aiVideo') return;
+            const vals = Array.isArray(r[f.id]) ? r[f.id] : (r[f.id] ? [r[f.id]] : []);
+            vals.forEach(v => {
+                if (v && v.type === 'networkJob' && v.jobId) {
+                    if (!placeholderJobs.has(v.jobId)) {
+                        placeholderJobs.set(v.jobId, { recordId: r.id, fieldId: f.id, values: [...vals] });
+                    }
+                }
+            });
+        });
+    });
+    
+    if (placeholderJobs.size === 0) return;
+    
+    w.electronAPI.listNetworkJobs().then((jobs: any[]) => {
+        const updatesToApply = new Map<string, any[]>();
+        let hasChanges = false;
+        
+        jobs.forEach(job => {
+            if ((job.phase === 'completed' || job.phase === 'failed') && placeholderJobs.has(job.localJobId)) {
+                const info = placeholderJobs.get(job.localJobId)!;
+                const existingVals = info.values;
+                const newVals = existingVals.filter(v => !(v && v.type === 'networkJob' && v.jobId === job.localJobId));
+                
+                if (job.phase === 'completed' && job.localPath) {
+                    const localFileUrl = `file://${job.localPath}`;
+                    const targetKey = normalizeAttachmentKey(localFileUrl);
+                    
+                    const alreadyExists = newVals.some(value => {
+                        const itemUrl = typeof value === 'string' ? value : value?.url;
+                        return normalizeAttachmentKey(itemUrl) === targetKey;
+                    });
+                    
+                    if (!alreadyExists) {
+                        newVals.push(localFileUrl);
+                    }
+                }
+                
+                info.values = newVals;
+                const key = `${info.recordId}-${info.fieldId}`;
+                updatesToApply.set(key, info.values);
+                hasChanges = true;
+            }
+        });
+        
+        if (hasChanges && onUpdateRecordsBatch) {
+            const finalUpdates = Array.from(updatesToApply.entries()).map(([key, value]) => {
+                const [recordId, fieldId] = key.split('-');
+                return { recordId, fieldId, value };
+            });
+            onUpdateRecordsBatch(finalUpdates);
+        }
+    }).catch((err: any) => console.error("Reconciliation error:", err));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tableId]);
+
+  useEffect(() => {
+    const w = window as any;
+    if (!w.electronAPI?.onNetworkJobUpdated) {
+        return;
+    }
+
+    const unsubscribe = w.electronAPI.onNetworkJobUpdated((job: any) => {
+        if (job.tableId === tableId && (job.phase === 'completed' || job.phase === 'failed')) {
+            const record = data.records.find(r => r.id === job.recordId);
+            if (record) {
+                const existingVals = Array.isArray(record[job.fieldId]) ? record[job.fieldId] : (record[job.fieldId] ? [record[job.fieldId]] : []);
+                if (job.phase === 'completed' && job.localPath) {
+                    const newVals = existingVals.filter(v => !(v && v.type === 'networkJob' && v.jobId === job.localJobId));
+                    const localFileUrl = `file://${job.localPath}`;
+                    const targetKey = normalizeAttachmentKey(localFileUrl);
+                    
+                    const alreadyExists = newVals.some(value => {
+                        const itemUrl = typeof value === 'string' ? value : value?.url;
+                        return normalizeAttachmentKey(itemUrl) === targetKey;
+                    });
+                    
+                    if (!alreadyExists) {
+                        newVals.push(localFileUrl);
+                        onUpdateRecord(job.recordId, job.fieldId, newVals);
+                    } else if (newVals.length !== existingVals.length) { // still need to save if we removed the networkJob marker
+                        onUpdateRecord(job.recordId, job.fieldId, newVals);
+                    }
+                } else if (job.phase === 'failed') {
+                    const newVals = existingVals.filter(v => !(v && v.type === 'networkJob' && v.jobId === job.localJobId));
+                    if (newVals.length !== existingVals.length) {
+                        onUpdateRecord(job.recordId, job.fieldId, newVals);
+                    }
+                }
+            }
+        }
+    });
+
+    return () => {
+        if (typeof unsubscribe === 'function') {
+            unsubscribe();
+        }
+    };
+  }, [data.records, tableId, onUpdateRecord]);
 
   useEffect(() => {
     const handleCopy = (e: ClipboardEvent) => {
@@ -2943,24 +3074,64 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
             
             // Map the prompt and params
             const params: any = {
-                imageSize: cfg.resolution || '1024x1024',
+                imageSize: String(resolution || '1K').toUpperCase(),
                 aspectRatio: ratio,
-                images: finalOriginalUrls.length > 0 ? finalOriginalUrls : undefined,
-                quality: 'auto'
+                images: finalOriginalUrls.length > 0 ? finalOriginalUrls : undefined
             };
             
+            let finalFilename = '';
+            let finalFolderPath = '';
+            if (cfg.filenameTemplate || cfg.folderPath || cfg.isRetouchMode) {
+                const { filename: defaultFilename, folderPath: defaultFolderPath } = resolveFilenameAndFolder(cfg.filenameTemplate || 'image', cfg.folderPath || '', data.fields, record);
+                finalFilename = defaultFilename;
+                finalFolderPath = defaultFolderPath;
+                
+                if (cfg.isRetouchMode && finalSourceUrls.length > 0) {
+                    const firstUrl = finalSourceUrls[0];
+                    let match = firstUrl.match(/^file:\/\/(.*)[\/\\]([^\/\\]+)$/);
+                    if (!match) match = firstUrl.match(/^(.*)[\/\\]([^\/\\]+)$/);
+                    if (!firstUrl.startsWith('data:') && !firstUrl.startsWith('blob:') && match) {
+                        if (cfg.saveToSourceFolder) {
+                            let p = match[1];
+                            if (p.startsWith('file://')) p = p.replace('file://', '');
+                            if (p.startsWith('local-img://')) p = decodeURIComponent(p.replace('local-img://', ''));
+                            if (p.startsWith('local-video://')) p = decodeURIComponent(p.replace('local-video://', ''));
+                            if (p.startsWith('/') && p.length > 2 && p[2] === ':') p = p.substring(1);
+                            finalFolderPath = p;
+                        }
+                        const originalNameBase = match[2].split('.').slice(0, -1).join('.') || match[2];
+                        finalFilename = `${originalNameBase}-gan`;
+                    }
+                }
+            }
+
             const results = [];
             for (let i = 0; i < count; i++) {
-                const url = await w.electronAPI.generateLingwuImage({
-                    prompt: finalPrompt,
-                    model: resolvedModel,
-                    params: params,
-                    count: 1,
-                    apiKey: imgSet.key,
-                    endpoint: imgSet.endpoint || 'https://api.lingwu.example.com', // Set default
-                    ossConfig: modelSettings?.oss
-                });
-                results.push(url);
+                try {
+                    const jobInfo = await w.electronAPI.generateLingwuImage({
+                        tableId: tableId,
+                        recordId: record.id,
+                        fieldId: field.id,
+                        viewMode: viewMode,
+                        generationIndex: i,
+                        prompt: finalPrompt,
+                        model: resolvedModel,
+                        params: params,
+                        count: 1,
+                        apiKey: imgSet.key,
+                        endpoint: imgSet.endpoint || 'https://api.lingwu.example.com',
+                        ossConfig: modelSettings?.oss,
+                        downloadConfig: { filename: finalFilename, folderPath: finalFolderPath }
+                    });
+                    results.push({ type: 'networkJob', jobId: jobInfo.localJobId });
+                } catch (err) {
+                    if (results.length > 0) {
+                        console.error(`Partial failure creating image job ${i + 1}/${count}`, err);
+                        break;
+                    } else {
+                        throw err;
+                    }
+                }
             }
             resultParams = results;
           } else if (imgSet.provider === 'gemini-custom') {
@@ -2984,7 +3155,7 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                   }
                 };
               } else {
-                const geminiImageSize = cfg.resolution ? cfg.resolution.toUpperCase() : undefined;
+                const geminiImageSize = resolution ? resolution.toUpperCase() : undefined;
                 const imageConfig: any = { aspectRatio: ratio, numberOfImages: 1 };
                 if (geminiImageSize && geminiImageSize !== '1K') {
                    imageConfig.imageSize = geminiImageSize;
@@ -3122,7 +3293,20 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
               enhancePrompt: cfg.enhancePrompt === 'true'
            };
 
-           const resultUrl = await w.electronAPI.generateLingwuVideo({
+            let finalFilename = '';
+            let finalFolderPath = '';
+            if (cfg.filenameTemplate || cfg.folderPath) {
+                const { filename: defaultFilename, folderPath: defaultFolderPath } = resolveFilenameAndFolder(cfg.filenameTemplate || 'video', cfg.folderPath || '', data.fields, record);
+                finalFilename = defaultFilename;
+                finalFolderPath = defaultFolderPath;
+            }
+
+           const jobInfo = await w.electronAPI.generateLingwuVideo({
+                tableId: tableId,
+                recordId: record.id,
+                fieldId: field.id,
+                viewMode: viewMode,
+                generationIndex: 0,
                 prompt: promptString,
                 model: resolvedModel,
                 params: params,
@@ -3131,10 +3315,11 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                 audio: audio,
                 apiKey: vidSet.key,
                 endpoint: vidSet.endpoint || 'https://api.ai6700.com/api',
-                ossConfig: modelSettings?.oss
+                ossConfig: modelSettings?.oss,
+                downloadConfig: { filename: finalFilename, folderPath: finalFolderPath }
            });
-
-           resultParams = Array.isArray(resultUrl) ? resultUrl : [resultUrl];
+           
+           resultParams = [{ type: 'networkJob', jobId: jobInfo.localJobId }];
         } else {
           const cfg = field.aiTextConfig || {};
           const txtSetList = Array.isArray(modelSettings.text) ? modelSettings.text : [modelSettings.text || {}];
@@ -3230,9 +3415,19 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
         let finalResultParams = resultParams;
         if (field.type === 'aiImage' || field.type === 'aiVideo') {
            const existing = Array.isArray(record[field.id]) ? record[field.id] : (record[field.id] ? [record[field.id]] : []);
-           let downloadedUrls: string[] = [...(resultParams || [])];
+           const resultArray = Array.isArray(resultParams) ? resultParams : [resultParams];
+           const networkJobItems = resultArray.filter(isNetworkJobCellItem);
+
+           if (networkJobItems.length > 0) {
+             finalResultParams = [...existing, ...networkJobItems];
+             onUpdateRecord(record.id, field.id, finalResultParams);
+             return finalResultParams;
+           }
+
+           const directUrlResults = resultArray.filter((value): value is string => typeof value === 'string' && value.trim() !== '');
+           let downloadedUrls: string[] = [...directUrlResults];
            
-           if (resultParams && Array.isArray(resultParams)) {
+           if (directUrlResults && directUrlResults.length > 0) {
               const cfg: any = field.type === 'aiVideo' ? (field.aiVideoConfig || {}) : (field.aiImageConfig || {});
               if (cfg.filenameTemplate || cfg.folderPath || cfg.isRetouchMode) {
                  const { filename: defaultFilename, folderPath: defaultFolderPath } = resolveFilenameAndFolder(cfg.filenameTemplate || (field.type === 'aiVideo' ? 'video' : 'image'), cfg.folderPath || '', data.fields, record);
@@ -3286,8 +3481,11 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                  }
                  
                  const savedUrls: string[] = [];
-                 for (let i = 0; i < resultParams.length; i++) {
-                     let urlToDownload = resultParams[i];
+                 for (let i = 0; i < directUrlResults.length; i++) {
+                     let urlToDownload = directUrlResults[i];
+                     if (typeof urlToDownload !== 'string') {
+                         continue;
+                     }
                      let ext = field.type === 'aiVideo' ? '.mp4' : '.png'; // default fallback
                      if (urlToDownload.includes('.mp4')) ext = '.mp4';
                      else if (urlToDownload.includes('.mov')) ext = '.mov';
@@ -3421,8 +3619,10 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
 
               let attempts = 0;
               let success = false;
+              const isPaidMediaField = field.type === 'aiImage' || field.type === 'aiVideo';
+              const maxAttempts = isPaidMediaField ? 1 : 2;
               
-              while (attempts < 2 && !success) {
+              while (attempts < maxAttempts && !success) {
                   attempts++;
                   try {
                       setGeneratingCells(prev => new Set(prev).add(`${currentRecord.id}-${field.id}`));
@@ -3431,7 +3631,7 @@ export function Grid({ tableId, viewMode = 'grid', data, allRecords, searchQuery
                       success = true;
                   } catch (err: any) {
                       console.error(`Workflow generation failed for record ${currentRecord.id}, field ${field.id}, attempt ${attempts}`, err);
-                      if (attempts === 2) {
+                      if (attempts >= maxAttempts) {
                           rowFailed = true;
                       } else {
                           // Wait a bit before retry
@@ -5629,7 +5829,7 @@ interface CellProps {
   onActivate: () => void;
   onChange: (value: any) => void;
   onBlur: () => void;
-  onPreviewImage: (url: string, items?: any[], onUpdate?: (newItems: any[]) => void, sourceRecordId?: string) => void;
+  onPreviewImage: (url: string, items?: any[], onUpdate?: (newItems: any[]) => void, sourceRecordId?: string, preferredIndex?: number) => void;
   allFields: Field[];
   modelSettings: any;
   heightClass: string;
@@ -5645,7 +5845,6 @@ interface CellProps {
   isFrozenLast?: boolean;
   lang?: 'en' | 'zh';
   globalAttachmentPropsMap?: Map<string, AttachmentReviewProps>;
-  globalAttachmentPropsMap?: Map<string, any>;
   isLinked?: boolean;
   isLinkedTop?: boolean;
   isLinkedBottom?: boolean;
@@ -5965,7 +6164,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
             value={value} 
             onChange={onChange} 
             onClose={() => setIsEditingMode(false)}
-            onPreview={(url, items, update) => onPreviewImage(url, items, update, record.id)}
+            onPreview={(url, items, update, preferredIndex) => onPreviewImage(url, items, update, record.id, preferredIndex)}
             globalAttachmentPropsMap={globalAttachmentPropsMap}
           />
         );
@@ -6015,8 +6214,15 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
              ) : (
                <div className={`flex items-center gap-1 overflow-hidden w-full ${containerHeightClass}`}>
                   {fileItems.map((item, i) => {
+                    if (item.type === 'networkJob') {
+                       return (
+                         <div key={i} className={`flex items-center justify-center shrink-0 border border-gray-200 bg-blue-50/50 rounded ${imgSizeClass}`} title={`Job ID: ${item.jobId}`}>
+                           <Sparkles className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
+                         </div>
+                       );
+                    }
                     const path = item.url;
-                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
+                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:[\\/]/) || path.startsWith('\\\\') ? `file://${path}` : path);
                     const pendingCount = item.annotations?.filter((a: any) => a.status === 'pending').length || 0;
                     const resolvedCount = item.annotations?.filter((a: any) => a.status === 'resolved').length || 0;
                     const approvedCount = item.annotations?.filter((a: any) => a.status === 'approved').length || 0;
@@ -6030,7 +6236,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           title={path}
                           onClick={(e) => { 
                             e.stopPropagation(); 
-                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id); 
+                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id, i); 
                           }}
                         />
                         {item.cropData && (
@@ -6116,9 +6322,13 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
         else if (heightClass === 'h-[80px]') { imgSizeClass = 'h-[68px] w-[68px]'; containerHeightClass = 'h-[70px]'; }
         else if (heightClass === 'h-[120px]') { imgSizeClass = 'h-[108px] w-[108px]'; containerHeightClass = 'h-[110px]'; }
 
+        const networkJobItems = fileItems.filter(isNetworkJobCellItem);
+        const completedMediaItems = fileItems.filter(item => !isNetworkJobCellItem(item));
+        const showFullGenerating = isGeneratingCol || (networkJobItems.length > 0 && completedMediaItems.length === 0);
+
         return (
           <div className="px-1 py-1 h-full flex flex-col justify-center relative group/ai w-full overflow-hidden">
-             {isGeneratingCol ? (
+             {showFullGenerating ? (
                <div className="flex items-center gap-1.5 text-blue-500 font-medium text-xs px-1">
                  <Sparkles className="w-3.5 h-3.5 animate-pulse" />
                  <span>Generating...</span>
@@ -6126,8 +6336,15 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
              ) : fileItems.length > 0 ? (
                <div className={`flex items-center gap-1 overflow-hidden w-full ${containerHeightClass}`}>
                   {fileItems.map((item, i) => {
+                    if (item.type === 'networkJob') {
+                       return (
+                         <div key={i} className={`flex items-center justify-center shrink-0 border border-gray-200 bg-blue-50/50 rounded ${imgSizeClass}`} title={`Job ID: ${item.jobId}`}>
+                           <Sparkles className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
+                         </div>
+                       );
+                    }
                     const path = item.url;
-                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
+                    let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:[\\/]/) || path.startsWith('\\\\') ? `file://${path}` : path);
                     const pendingCount = item.annotations?.filter((a: any) => a.status === 'pending').length || 0;
                     const resolvedCount = item.annotations?.filter((a: any) => a.status === 'resolved').length || 0;
                     const approvedCount = item.annotations?.filter((a: any) => a.status === 'approved').length || 0;
@@ -6141,7 +6358,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                           title={path}
                           onClick={(e) => { 
                             e.stopPropagation(); 
-                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id); 
+                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id, i); 
                           }}
                         />
                         {item.cropData && (
@@ -6471,7 +6688,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                const fileObjects = files.map((file: any) => {
                  const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
                  getOrGenerateThumbnail(pathStr, file);
-                 if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/) && !pathStr.startsWith('\\\\')) {
+                 if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:[\\/]/) && !pathStr.startsWith('\\\\')) {
                    fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
                  }
                  return { url: pathStr };
@@ -6778,7 +6995,7 @@ function SelectCellEditor({ field, ids, isMulti, onChange, onClose, onUpdateFiel
   );
 }
 
-function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttachmentPropsMap }: { value: any, onChange: (v: any) => void, onClose: () => void, onPreview: (url: string, allUrls?: {url: string, annotations?: any[]}[], onUpdate?: (items: any[]) => void) => void, globalAttachmentPropsMap?: Map<string, any> }) {
+function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttachmentPropsMap }: { value: any, onChange: (v: any) => void, onClose: () => void, onPreview: (url: string, allUrls?: {url: string, annotations?: any[]}[], onUpdate?: (items: any[]) => void, preferredIndex?: number) => void, globalAttachmentPropsMap?: Map<string, any> }) {
   let fileItems: any[] = [];
   if (Array.isArray(value)) {
     fileItems = value.map((v: any) => {
@@ -6814,7 +7031,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
       const newItems = files.map((file: any) => {
         const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
         getOrGenerateThumbnail(pathStr, file);
-        if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/) && !pathStr.startsWith('\\\\')) {
+        if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:[\\/]/) && !pathStr.startsWith('\\\\')) {
           fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
         }
         return { url: pathStr };
@@ -6857,7 +7074,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
           // Add support for window.electronAPI.getPathForFile if exposed in preload
           const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
           getOrGenerateThumbnail(pathStr, file);
-          if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:\\/) && !pathStr.startsWith('\\\\')) {
+          if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:[\\/]/) && !pathStr.startsWith('\\\\')) {
             fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
           }
           return { url: pathStr };
@@ -6885,7 +7102,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
       <div className="flex flex-wrap gap-2 w-[340px]">
         {fileItems.map((item, index) => {
            let path = item.url;
-           let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:\\/) || path.startsWith('\\\\') ? `file://${path}` : path);
+           let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:[\\/]/) || path.startsWith('\\\\') ? `file://${path}` : path);
            
            const pendingCount = item.annotations?.filter((a: any) => a.status === 'pending').length || 0;
            const resolvedCount = item.annotations?.filter((a: any) => a.status === 'resolved').length || 0;
@@ -6914,7 +7131,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                onDrop={(e) => handleDrop(e, index)}
                onDragEnd={() => { setDraggedImgIndex(null); setDragOverImgIndex(null); }}
                onClick={() => onPreview(fullUrl, fileItems.map(p => {
-                 const mappedUrl = fullImageBlobCache.get(p.url) || (p.url.startsWith('/') || p.url.match(/^[a-zA-Z]:\\/) || p.url.startsWith('\\\\') ? `file://${p.url}` : p.url);
+                 const mappedUrl = fullImageBlobCache.get(p.url) || (p.url.startsWith('/') || p.url.match(/^[a-zA-Z]:[\\/]/) || p.url.startsWith('\\\\') ? `file://${p.url}` : p.url);
                  return { ...p, mappedUrl };
                }), (newItems) => onChange(newItems))}
              >

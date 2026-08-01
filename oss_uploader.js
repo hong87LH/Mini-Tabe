@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import OSS from 'ali-oss';
 import sharp from 'sharp';
 import dotenv from 'dotenv';
+import { getOssReferenceProfile } from './oss_reference_profiles.js';
+
 
 function safeFileURLToPath(urlStr) {
   try {
@@ -46,7 +48,7 @@ const SCRIPT_DIR = path.dirname(__filename);
 dotenv.config({ path: path.join(SCRIPT_DIR, '.env') });
 dotenv.config();
 
-const CSV_FILE = path.join(SCRIPT_DIR, 'oss_references_node.csv');
+
 
 const CSV_FIELDS = [
   'local_path',       // 本地文件绝对路径
@@ -61,9 +63,7 @@ const CSV_FIELDS = [
   'upload_time',      // ISO 时间戳
 ];
 
-const OSS_PREFIX = 'references-node';   // 独立前缀，不与 Python 版混用
 const DHASH_THRESHOLD = 20;             // dHash Hamming 距离阈值
-const CSV_BACKUP_PATH = `${OSS_PREFIX}/oss_references_node.csv`;  // OSS 备份路径
 
 // ============================================================
 //  核心类
@@ -169,9 +169,20 @@ class OssImageUploader {
 
   // ==================== CSV 管理 ====================
 
-  _loadRecords() {
-    if (!fs.existsSync(CSV_FILE)) return [];
-    const text = fs.readFileSync(CSV_FILE, 'utf-8').trim();
+  _getCsvFile(profile) {
+    // using SCRIPT_DIR or os temp? Wait, the previous code used SCRIPT_DIR
+    return path.join(SCRIPT_DIR, profile.csvFilename);
+  }
+
+  _getCloudCsvPath(profile) {
+    return profile.cloudCsvPath;
+  }
+
+
+  _loadRecords(profile) {
+    const csvFile = this._getCsvFile(profile);
+    if (!fs.existsSync(csvFile)) return [];
+    const text = fs.readFileSync(csvFile, 'utf-8').trim();
     if (!text) return [];
 
     const lines = text.split('\n');
@@ -186,28 +197,30 @@ class OssImageUploader {
     return records;
   }
 
-  async _appendRecord(record) {
-    const exists = fs.existsSync(CSV_FILE);
+  async _appendRecord(record, profile) {
+    const csvFile = this._getCsvFile(profile);
+    const exists = fs.existsSync(csvFile);
     const headers = CSV_FIELDS.join(',');
     const values = CSV_FIELDS.map(f => record[f] || '').join(',');
 
     if (!exists) {
-      fs.writeFileSync(CSV_FILE, headers + '\n' + values + '\n', 'utf-8');
+      fs.writeFileSync(csvFile, headers + '\n' + values + '\n', 'utf-8');
     } else {
-      fs.appendFileSync(CSV_FILE, values + '\n', 'utf-8');
+      fs.appendFileSync(csvFile, values + '\n', 'utf-8');
     }
-    console.log(`  [csv] 已记录 → ${CSV_FILE}`);
-    await this._syncCsvToOSS();
+    console.log(`  [csv] 已记录 → ${csvFile}`);
+    await this._syncCsvToOSS(profile);
   }
 
-  async _rewriteRecords(records) {
+  async _rewriteRecords(records, profile) {
     const headers = CSV_FIELDS.join(',');
+    const csvFile = this._getCsvFile(profile);
     const lines = records.map(r => CSV_FIELDS.map(f => r[f] || '').join(','));
-    fs.writeFileSync(CSV_FILE, headers + '\n' + lines.join('\n') + '\n', 'utf-8');
-    await this._syncCsvToOSS();
+    fs.writeFileSync(csvFile, headers + '\n' + lines.join('\n') + '\n', 'utf-8');
+    await this._syncCsvToOSS(profile);
   }
 
-  async syncCsvBiDirectional() {
+  async syncCsvBiDirectional(profile) {
     try {
       this._ensureOSS();
     } catch {
@@ -216,7 +229,8 @@ class OssImageUploader {
 
     let cloudStat = null;
     try {
-      const result = await this._client.head(CSV_BACKUP_PATH);
+      const cloudCsvPath = this._getCloudCsvPath(profile);
+      const result = await this._client.head(cloudCsvPath);
       if (result && result.res && result.res.headers) {
          cloudStat = { lastModified: new Date(result.res.headers['last-modified']).getTime() };
       }
@@ -224,21 +238,22 @@ class OssImageUploader {
       // 云端无文件或网络错误
     }
 
-    const localExists = fs.existsSync(CSV_FILE);
+    const csvFile = this._getCsvFile(profile);
+    const localExists = fs.existsSync(csvFile);
     let localStat = null;
     if (localExists) {
-      localStat = { mtime: fs.statSync(CSV_FILE).mtime.getTime() };
+      localStat = { mtime: fs.statSync(csvFile).mtime.getTime() };
     }
 
     if (!cloudStat && !localExists) return;
 
     if (!cloudStat && localExists) {
-      await this._syncCsvToOSS();
+      await this._syncCsvToOSS(profile);
       return;
     }
 
     if (cloudStat && !localExists) {
-      await this.restoreCsvFromOSS();
+      await this.restoreCsvFromOSS(profile);
       return;
     }
 
@@ -248,59 +263,63 @@ class OssImageUploader {
 
     if (cloudTime > localTime + 5000) {
       console.log(`[OSS] 云端 CSV 较新 (云:${new Date(cloudTime).toISOString()} > 本地:${new Date(localTime).toISOString()})，正在下载到本地...`);
-      await this.restoreCsvFromOSS();
+      await this.restoreCsvFromOSS(profile);
     } else if (localTime > cloudTime + 5000) {
       console.log(`[OSS] 本地 CSV 较新 (本地:${new Date(localTime).toISOString()} > 云:${new Date(cloudTime).toISOString()})，正在同步到云端...`);
-      await this._syncCsvToOSS();
+      await this._syncCsvToOSS(profile);
     }
   }
 
-  async _syncCsvToOSS() {
+  async _syncCsvToOSS(profile) {
     this._ensureOSS();
-    if (!fs.existsSync(CSV_FILE)) return;
+    const csvFile = this._getCsvFile(profile);
+    if (!fs.existsSync(csvFile)) return;
     try {
-      await this._client.put(CSV_BACKUP_PATH, CSV_FILE);
+      const cloudCsvPath = this._getCloudCsvPath(profile);
+      await this._client.put(cloudCsvPath, csvFile);
     } catch (err) {
       console.warn(`  [csv-backup] ⚠ 同步失败: ${err.message}`);
     }
   }
 
-  async restoreCsvFromOSS() {
+  async restoreCsvFromOSS(profile) {
     this._ensureOSS();
     try {
-      const result = await this._client.get(CSV_BACKUP_PATH);
-      if (fs.existsSync(CSV_FILE)) {
-        const bakPath = CSV_FILE + '.bak';
-        fs.copyFileSync(CSV_FILE, bakPath);
+      const cloudCsvPath = this._getCloudCsvPath(profile);
+      const result = await this._client.get(cloudCsvPath);
+      const csvFile = this._getCsvFile(profile);
+      if (fs.existsSync(csvFile)) {
+        const bakPath = csvFile + '.bak';
+        fs.copyFileSync(csvFile, bakPath);
       }
-      fs.writeFileSync(CSV_FILE, result.content);
+      fs.writeFileSync(csvFile, result.content);
     } catch (err) {
       throw new Error(`OSS 无备份或下载失败: ${err.message}`);
     }
   }
 
-  async _removeRecordsBy(field, value) {
-    const records = this._loadRecords();
+  async _removeRecordsBy(field, value, profile) {
+    const records = this._loadRecords(profile);
     const before = records.length;
     const filtered = records.filter(r => r[field] !== value);
     if (filtered.length < before) {
-      await this._rewriteRecords(filtered);
+      await this._rewriteRecords(filtered, profile);
     }
     return before - filtered.length;
   }
 
-  findByHash(fileHash) {
-    return this._loadRecords().find(r => r.file_hash === fileHash) || null;
+  findByHash(fileHash, profile) {
+    return this._loadRecords(profile).find(r => r.file_hash === fileHash) || null;
   }
 
-  findByLocalPath(localPath) {
+  findByLocalPath(localPath, profile) {
     const abs = path.resolve(localPath);
-    return this._loadRecords().find(r => r.local_path === abs) || null;
+    return this._loadRecords(profile).find(r => r.local_path === abs) || null;
   }
 
-  findByDHash(dhash, threshold = DHASH_THRESHOLD) {
+  findByDHash(dhash, threshold = DHASH_THRESHOLD, profile) {
     if (!dhash) return [];
-    const records = this._loadRecords();
+    const records = this._loadRecords(profile);
     const results = [];
     for (const r of records) {
       const rdHash = r.dhash;
@@ -314,10 +333,10 @@ class OssImageUploader {
     return results;
   }
 
-  async findBestDHashMatch(filePath, threshold = DHASH_THRESHOLD) {
+  async findBestDHashMatch(filePath, threshold = DHASH_THRESHOLD, profile) {
     const dhash = await this.computeDHash(filePath);
     if (!dhash) return null;
-    const matches = this.findByDHash(dhash, threshold);
+    const matches = this.findByDHash(dhash, threshold, profile);
     if (matches.length === 0) return null;
 
     const best = matches[0];
@@ -334,14 +353,15 @@ class OssImageUploader {
   async _ossExists(cloudPath) {
     this._ensureOSS();
     try {
-      return await this._client.get(cloudPath).then(() => true).catch(() => false);
+      return await this._client.head(cloudPath).then(() => true).catch(() => false);
     } catch {
       return false;
     }
   }
 
   async upload(filePath, options = {}) {
-    const { force = false, threshold = DHASH_THRESHOLD } = options;
+    const { force = false, threshold = DHASH_THRESHOLD, profileId, alreadyPrepared } = options;
+    const profile = getOssReferenceProfile(profileId);
     let absPath = filePath;
     if (filePath.startsWith('file://')) {
       absPath = safeFileURLToPath(filePath);
@@ -362,37 +382,57 @@ class OssImageUploader {
     const fileHash = this.getFileHash(originalAbsPath);
 
     // 首先同步一遍 CSV，确保拿到最新的云端数据
-    await this.syncCsvBiDirectional();
+    await this.syncCsvBiDirectional(profile);
 
     if (!force) {
-      const existing = this.findByHash(fileHash);
+      const existing = this.findByHash(fileHash, profile);
       if (existing) {
         const exists = await this._ossExists(existing.cloud_path);
         if (exists) return existing;
-        else await this._removeRecordsBy('cloud_path', existing.cloud_path);
+        else await this._removeRecordsBy('cloud_path', existing.cloud_path, profile);
       }
 
-      const dhashMatch = await this.findBestDHashMatch(originalAbsPath, threshold);
+      const dhashMatch = await this.findBestDHashMatch(originalAbsPath, threshold, profile);
       if (dhashMatch) return dhashMatch;
     }
 
-    // ==== 转换为 WEBP 压缩处理 ====
+    // ==== 根据 Profile 压缩处理 ====
     let uploadPath = originalAbsPath;
-    let isTempWebp = false;
+    let isTempFile = false;
 
     if (isCompressibleImage) {
-      try {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        const webpPath = path.join(os.tmpdir(), path.basename(originalAbsPath, ext) + '_' + uniqueSuffix + '.webp');
-        
-        await sharp(originalAbsPath)
-          .webp({ quality: 90 }) // 保持原图尺寸，质量 90
-          .toFile(webpPath);
-          
-        uploadPath = webpPath; // 实际上传 WEBP
-        isTempWebp = true;
-      } catch (err) {
-        console.warn(`[OssImageUploader] WEBP 转换异常，退回原图上传: ${err.message}`);
+      if (alreadyPrepared && profile.format === 'jpeg') {
+         // Grid 已经裁剪过并生成了 JPEG dataUrl，不要再重压了
+      } else {
+        try {
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+          if (profile.format === 'jpeg') {
+            const jpegPath = path.join(os.tmpdir(), path.basename(originalAbsPath, ext) + '_' + uniqueSuffix + '.jpg');
+            let pipeline = sharp(originalAbsPath).autoOrient();
+            const metadata = await pipeline.metadata();
+            if (metadata.hasAlpha) {
+              pipeline = pipeline.flatten({ background: '#000000' });
+            }
+            await pipeline
+              .jpeg({
+                quality: profile.quality,
+                chromaSubsampling: profile.chromaSubsampling || '4:4:4',
+                mozjpeg: true
+              })
+              .toFile(jpegPath);
+            uploadPath = jpegPath;
+            isTempFile = true;
+          } else {
+            const webpPath = path.join(os.tmpdir(), path.basename(originalAbsPath, ext) + '_' + uniqueSuffix + '.webp');
+            await sharp(originalAbsPath)
+              .webp({ quality: profile.quality })
+              .toFile(webpPath);
+            uploadPath = webpPath;
+            isTempFile = true;
+          }
+        } catch (err) {
+          console.warn(`[OssImageUploader] 图片转换异常，退回原图上传: ${err.message}`);
+        }
       }
     }
     // ==============================
@@ -404,24 +444,38 @@ class OssImageUploader {
     const uploadFilename = path.basename(uploadPath);
     const localFilename = path.basename(originalAbsPath);
     const cloudFilename = `${shortHash}_${uploadFilename}`;
-    const cloudPath = `${OSS_PREFIX}/${dateStr}/${cloudFilename}`;
+    const cloudPath = `${profile.prefix}/${dateStr}/${cloudFilename}`;
     const cloudUrl = `${this._domain}/${cloudPath}`;
     const fileSize = this._getFileSize(uploadPath);
     const dhash = await this.computeDHash(originalAbsPath);
     const now = new Date();
 
-    try {
-      const result = await this._client.put(cloudPath, uploadPath);
-      if (!result || !result.url) throw new Error('上传返回结果异常');
-    } catch (err) {
-      if (isTempWebp && fs.existsSync(uploadPath)) {
+    let attempt = 0;
+    let lastError;
+    while (attempt < 3) {
+      try {
+        const result = await this._client.put(cloudPath, uploadPath);
+        if (!result || !result.url) throw new Error('上传返回结果异常');
+        lastError = null;
+        break;
+      } catch (err) {
+        lastError = err;
+        attempt++;
+        if (attempt < 3) {
+           await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt) + Math.random() * 500));
+        }
+      }
+    }
+    
+    if (lastError) {
+      if (isTempFile && fs.existsSync(uploadPath)) {
         try { fs.unlinkSync(uploadPath); } catch (e) {}
       }
-      throw new Error(`上传失败: ${err.message}`);
+      throw new Error(`上传失败: ${lastError.message}`);
     }
 
     // 上传成功后，删除临时生成的 webp 文件
-    if (isTempWebp && fs.existsSync(uploadPath)) {
+    if (isTempFile && fs.existsSync(uploadPath)) {
       try { 
          fs.unlinkSync(uploadPath); 
       } catch (e) {
@@ -442,7 +496,7 @@ class OssImageUploader {
       upload_time: now.toISOString(),
     };
 
-    await this._appendRecord(record);
+    await this._appendRecord(record, profile);
     return record;
   }
 
@@ -451,4 +505,4 @@ class OssImageUploader {
   }
 }
 
-export { OssImageUploader, CSV_FILE, CSV_FIELDS, DHASH_THRESHOLD, OSS_PREFIX };
+export { OssImageUploader, CSV_FIELDS, DHASH_THRESHOLD };

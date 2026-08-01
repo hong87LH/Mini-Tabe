@@ -1,3 +1,4 @@
+import crypto from "crypto";
 // main.js （ES Module 版本）
 process.noDeprecation = true; // 忽略 Node.js 废弃警告 (如 punycode)
 import { app, BrowserWindow, protocol, ipcMain, nativeImage, dialog, shell } from 'electron';
@@ -6,6 +7,24 @@ import isDev from 'electron-is-dev';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
+import { LingwuClient } from './lingwu_client.js';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
+import { NetworkStageError } from "./network_utils.js";
+import { startPolling, resumePendingJobs } from './network_polling.js';
+import { NetworkJobStore } from './network_job_store.js';
+
+let networkJobStore = null;
+function getNetworkJobStore() {
+  if (!networkJobStore) {
+    networkJobStore = new NetworkJobStore();
+  }
+  return networkJobStore;
+}
+
+
+import { buildLingwuImageParams, getLingwuImageModelProfile } from './lingwu_image_model_profiles.js';
+
 
 function safeFileURLToPath(urlStr) {
   try {
@@ -98,7 +117,15 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  try {
+    const store = getNetworkJobStore();
+    await store.cleanupOldJobs();
+    await resumePendingJobs(store);
+  } catch(e) {
+    console.error("Failed to resume pending jobs", e);
+  }
+
   createWindow();
 
   // 自定义协议用于渲染本地图片
@@ -112,161 +139,11 @@ app.whenReady().then(() => {
   });
 
   // ▼▼▼ 监听前端请求，抓取系统级原生缩略图 (解决内存崩溃神兵利器) ▼▼▼
-  ipcMain.handle('generate-lingwu-image', async (event, { prompt, model, params, count, apiKey, endpoint, ossConfig }) => {
+  ipcMain.handle('generate-lingwu-image', async (event, options) => {
     try {
-      const { OssImageUploader } = await import('./oss_uploader.js');
-      const uploader = new OssImageUploader(ossConfig);
-      
-      // Upload references if needed (params.images)
-      let uploadedImages = [];
-      if (params && params.images && Array.isArray(params.images)) {
-        for (const imgUrl of params.images) {
-           if (imgUrl.startsWith('file://') || imgUrl.startsWith('local-img://') || fs.existsSync(imgUrl)) {
-             try {
-                const record = await uploader.upload(imgUrl);
-                uploadedImages.push(record.cloud_url);
-             } catch(err) {
-                console.error('Failed to upload image:', imgUrl, err);
-             }
-           } else if (imgUrl.startsWith('data:image/')) {
-             try {
-                // Parse base64
-                const matches = imgUrl.match(/^data:(image\/\w+);base64,(.+)$/);
-                if (matches && matches.length === 3) {
-                  const ext = matches[1].split('/')[1] || 'png';
-                  const base64Data = matches[2];
-                  const buffer = Buffer.from(base64Data, 'base64');
-                  const { app } = await import('electron');
-                  const tempPath = path.join(app.getPath('temp'), `temp_upload_${Date.now()}.${ext}`);
-                  fs.writeFileSync(tempPath, buffer);
-                  const record = await uploader.upload(tempPath);
-                  uploadedImages.push(record.cloud_url);
-                } else {
-                  uploadedImages.push(imgUrl);
-                }
-             } catch(err) {
-                console.error('Failed to upload base64 image:', err);
-             }
-           } else {
-             uploadedImages.push(imgUrl);
-           }
-        }
-        params.images = uploadedImages;
-      }
-
-      // Need to adjust params based on the size maps and mapping rules as in Python example
-      // (The python example says there's a 3-layer mapping, but let's just pass `size` roughly if not present, and map exact ones)
-      
-      const payload = {
-         model: model || 'gpt-image-2',
-         prompt,
-         count: count || 1
-      };
-      if (params) {
-         // GPT image series size mapping (naive map, the user mentioned exact 1536x1024 etc)
-         if (params.imageSize && params.aspectRatio && !params.size) {
-            const key = `${params.imageSize}_${params.aspectRatio}`.toLowerCase();
-            const EXACT_MAP = {
-                "1k_1:1":  "1024x1024",
-                "1k_2:3":  "1024x1536",
-                "1k_3:2":  "1536x1024",
-                "1k_3:4":  "960x1280",
-                "1k_4:3":  "1280x960",
-                "1k_9:16": "1088x1920",
-                "1k_16:9": "1920x1088",
-                "2k_1:1":  "2048x2048",
-                "2k_2:3":  "2048x3072",
-                "2k_3:2":  "3072x2048",
-                "2k_3:4":  "1920x2560",
-                "2k_4:3":  "2560x1920",
-                "2k_9:16": "1440x2560",
-                "2k_16:9": "2560x1440",
-                "4k_1:1":  "2880x2880",
-                "4k_2:3":  "2304x3456",
-                "4k_3:2":  "3456x2304",
-                "4k_3:4":  "2400x3200",
-                "4k_4:3":  "3200x2400",
-                "4k_9:16": "2160x3840",
-                "4k_16:9": "3840x2160",
-            };
-            const APPROX_MAP = {
-                "1k_21:9": "1920x1088",
-                "1k_4:5":  "960x1280",
-                "1k_5:4":  "1280x960",
-                "1k_1:2":  "1024x1536",
-                "1k_2:1":  "1536x1024",
-                "2k_21:9": "2560x1440",
-                "2k_4:5":  "1920x2560",
-                "2k_5:4":  "2560x1920",
-                "4k_21:9": "3840x2160",
-                "4k_4:5":  "2400x3200",
-                "4k_5:4":  "3200x2400",
-            };
-            params.size = EXACT_MAP[key] || APPROX_MAP[key] || (params.imageSize.includes('x') ? params.imageSize : "auto");
-            delete params.imageSize;
-            delete params.aspectRatio;
-         }
-         
-         payload.params = params;
-      }
-
-      const fetch = (await import('node-fetch')).default || globalThis.fetch;
-      
-      let baseUrl = endpoint || 'https://api.lingwu.example.com';
-      baseUrl = baseUrl.replace(/\/+$/, ''); // Strip trailing slash
-      
-      const reqHeaders = {
-         "Authorization": `Bearer ${apiKey}`,
-         "Content-Type": "application/json"
-      };
-
-      const startResp = await fetch(`${baseUrl}/v1/media/generate`, {
-        method: 'POST',
-        headers: reqHeaders,
-        body: JSON.stringify(payload)
-      });
-      const startData = await startResp.json();
-      
-      let dataObj = startData.data || startData;
-      const taskId = (dataObj['任务ids'] && dataObj['任务ids'][0]) || dataObj['任务id'] || dataObj['task_id'];
-
-      if (!taskId) {
-         throw new Error("Failed to get task ID: " + JSON.stringify(startData));
-      }
-
-      // Polling
-      const startTime = Date.now();
-      const timeout = 600 * 1000;
-      
-      // sleep 8s
-      await new Promise(r => setTimeout(r, 8000));
-      
-      while (Date.now() - startTime < timeout) {
-         const urlObj = new URL(`${baseUrl}/v1/skills/task-status`);
-         urlObj.searchParams.append('task_id', taskId);
-         
-         const statResp = await fetch(urlObj.toString(), {
-            method: 'GET',
-            headers: reqHeaders
-         });
-         const statDataRow = await statResp.json();
-         const status = statDataRow.data || statDataRow;
-         
-         if (status.is_final) {
-            if (status.result_url) {
-               return status.result_url;
-            } else if (status.result_urls && status.result_urls.length > 0) {
-               return status.result_urls[0];
-            } else {
-               throw new Error(status.error || "Generation failed");
-            }
-         }
-         
-         await new Promise(r => setTimeout(r, 5000));
-      }
-      
-      throw new Error("Polling timeout");
-
+      const { MediaJobRunner } = await import('./media_job_runner.js');
+      const runner = new MediaJobRunner({ jobStore: getNetworkJobStore() });
+      return await runner.createImageJob(options);
     } catch (err) {
        console.error("generate-lingwu-image error:", err);
        throw err;
@@ -275,129 +152,9 @@ app.whenReady().then(() => {
 
   ipcMain.handle('generate-lingwu-video', async (event, options) => {
     try {
-       const { prompt, model, params, images, videos, audio, apiKey, endpoint, ossConfig } = options;
-       
-       let uploader = null;
-       if (ossConfig && ossConfig.accessKeyId) {
-          const { OssImageUploader } = await import('./oss_uploader.js');
-          uploader = new OssImageUploader(ossConfig);
-       }
-
-       const uploadMediaList = async (mediaList) => {
-         if (!mediaList || !Array.isArray(mediaList)) return [];
-         let out = [];
-         for (const itemUrl of mediaList) {
-            let actualUrl = itemUrl;
-            if (actualUrl.startsWith('file://')) actualUrl = safeFileURLToPath(actualUrl);
-            else if (actualUrl.startsWith('local-img://')) actualUrl = decodeURIComponent(actualUrl.replace('local-img://', ''));
-            else if (actualUrl.startsWith('local-video://')) actualUrl = decodeURIComponent(actualUrl.replace('local-video://', ''));
-
-            if (uploader && (actualUrl.startsWith('data:') || fs.existsSync(actualUrl))) {
-                if (actualUrl.startsWith('data:')) {
-                   const matches = actualUrl.match(/^data:(\w+\/\w+);base64,(.+)$/);
-                   if (matches && matches.length === 3) {
-                       const ext = matches[1].split('/')[1] || 'bin';
-                       const buffer = Buffer.from(matches[2], 'base64');
-                       const { app } = await import('electron');
-                       const tempPath = path.join(app.getPath('temp'), `temp_upload_${Date.now()}.${ext}`);
-                       fs.writeFileSync(tempPath, buffer);
-                       try {
-                          const record = await uploader.upload(tempPath);
-                          out.push(record.cloud_url);
-                       } catch(e) { console.error(e); }
-                   } else out.push(itemUrl);
-                } else {
-                   try {
-                      const record = await uploader.upload(actualUrl);
-                      out.push(record.cloud_url);
-                   } catch(e) { console.error('Upload fail:', actualUrl, e); }
-                }
-            } else {
-               out.push(itemUrl);
-            }
-         }
-         return out;
-       };
-
-       const payload = { model, prompt };
-       const uploadedImages = await uploadMediaList(images);
-       const uploadedVideos = await uploadMediaList(videos);
-       const uploadedAudio = await uploadMediaList(audio);
-       
-       if (uploadedImages.length > 0) params.images = uploadedImages;
-       if (uploadedVideos.length > 0) params.videos = uploadedVideos;
-       if (uploadedAudio.length > 0) params.audio = uploadedAudio;
-       
-       if (params && Object.keys(params).length > 0) {
-           const { mapVideoParams } = await import('./video_param_mapper.js');
-           payload.params = mapVideoParams(model, params);
-       }
-
-       const fetch = (await import('node-fetch')).default || globalThis.fetch;
-       
-       let baseUrl = endpoint || 'https://api.ai6700.com/api';
-       baseUrl = baseUrl.replace(/\/+$/, ''); // Strip trailing slash
-       
-       const reqHeaders = {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-       };
-
-       console.log('generate-lingwu-video request:', JSON.stringify(payload));
-       const startResp = await fetch(`${baseUrl}/v1/media/generate`, {
-         method: 'POST',
-         headers: reqHeaders,
-         body: JSON.stringify(payload)
-       });
-       const startData = await startResp.json();
-       
-       let dataObj = startData.data || startData;
-       const taskId = (dataObj['任务ids'] && dataObj['任务ids'][0]) || dataObj['任务id'] || dataObj['task_id'];
-
-       if (!taskId) {
-           console.log('Failed startResp:', startData);
-          throw new Error("Failed to get task ID: " + JSON.stringify(startData));
-       }
-
-       // Polling
-       const startTime = Date.now();
-       const timeout = 600 * 1000 * 3; // 30 minutes timeout for video
-       
-       // sleep 10s initially
-       await new Promise(r => setTimeout(r, 10000));
-       
-       while (Date.now() - startTime < timeout) {
-          const urlObj = new URL(`${baseUrl}/v1/skills/task-status`);
-          urlObj.searchParams.append('task_id', taskId);
-          
-          const statResp = await fetch(urlObj.toString(), {
-             method: 'GET',
-             headers: reqHeaders
-          });
-          const statDataRow = await statResp.json();
-          const status = statDataRow.data || statDataRow;
-          
-          const state = status.state || status.status;
-
-          if (state === 'success' || state === 'completed' || status.is_final) {
-             const resultOutput = status.result_url || status.url || status.output || (status.result && status.result.video) || (status.result && status.result.videos && status.result.videos[0]) || (status.result_urls && status.result_urls[0]);
-             if (resultOutput) {
-                 return resultOutput; // Could be string or array
-             }
-             if (status.is_final && !resultOutput) {
-                 throw new Error(status.error || status.message || status.msg || "Generation failed without error message");
-             }
-          }
-          
-          if (state === 'failed' || state === 'error') {
-              throw new Error(status.error || status.message || status.msg || "Generation failed");
-          }
-          
-          await new Promise(r => setTimeout(r, 5000));
-       }
-       
-       throw new Error("Polling timeout");
-
+      const { MediaJobRunner } = await import('./media_job_runner.js');
+      const runner = new MediaJobRunner({ jobStore: getNetworkJobStore() });
+      return await runner.createVideoJob(options);
     } catch (err) {
        console.error("generate-lingwu-video error:", err);
        throw err;
@@ -500,10 +257,30 @@ app.whenReady().then(() => {
       } else if (fs.existsSync(url)) {
         await fs.promises.copyFile(url, finalTargetPath);
       } else {
-        const response = await fetch(url);
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        await fs.promises.writeFile(finalTargetPath, buffer);
+        const headRes = await fetch(url, { method: 'HEAD' });
+        let startBytes = 0;
+        const partPath = finalTargetPath + '.part';
+        if (fs.existsSync(partPath)) {
+          const stat = fs.statSync(partPath);
+          startBytes = stat.size;
+        }
+        const headers = {};
+        if (startBytes > 0) {
+          headers['Range'] = `bytes=${startBytes}-`;
+        }
+        const res = await fetch(url, { headers });
+        if (!res.ok) throw new Error('Download failed ' + res.status);
+        const fileStream = fs.createWriteStream(partPath, { flags: startBytes > 0 && res.status === 206 ? 'a' : 'w' });
+        
+        let bodyStream;
+        if (res.body && res.body.getReader) {
+          bodyStream = Readable.fromWeb(res.body);
+        } else {
+          bodyStream = res.body;
+        }
+        
+        await pipeline(bodyStream, fileStream);
+        fs.renameSync(partPath, finalTargetPath);
       }
 
       console.log(`[成功] 图片已保存至: ${finalTargetPath}`);
@@ -565,6 +342,48 @@ app.whenReady().then(() => {
   });
 });
 
+function stripSensitiveInfo(job) {
+  if (!job) return job;
+  const { encryptedCredentials, credentials, ...safeJob } = job;
+  return safeJob;
+}
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+ipcMain.handle('query-network-job', async (event, localJobId) => {
+  const jobStore = getNetworkJobStore();
+  const job = await jobStore.getJob(localJobId);
+  return stripSensitiveInfo(job);
+});
+
+ipcMain.handle('open-local-file', async (event, localPath) => {
+  const { shell } = await import('electron');
+  return shell.showItemInFolder(localPath);
+});
+
+ipcMain.handle('retry-download-job', async (event, localJobId) => {
+  const jobStore = getNetworkJobStore();
+  const { startDownload } = await import('./network_polling.js');
+  startDownload(localJobId, jobStore);
+});
+
+ipcMain.handle('list-network-jobs', async () => {
+  const jobStore = getNetworkJobStore();
+  const jobs = await jobStore.listAll();
+  return jobs.map(j => stripSensitiveInfo(j));
+});
+
+ipcMain.handle('delete-network-job', async (event, localJobId) => {
+  const jobStore = getNetworkJobStore();
+  await jobStore.remove(localJobId);
+});
+
+ipcMain.handle('continue-network-job-polling', async (event, localJobId) => {
+  const jobStore = getNetworkJobStore();
+  const job = await jobStore.getJob(localJobId);
+  if (job && job.taskId) {
+    const { startPolling } = await import('./network_polling.js');
+    startPolling(job.localJobId, job.taskId, jobStore);
+  }
 });
