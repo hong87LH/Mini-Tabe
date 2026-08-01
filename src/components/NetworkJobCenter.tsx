@@ -136,6 +136,11 @@ export const NetworkJobCenter = ({ onClose, lang = 'en', onBindToCell }: { onClo
             {job.taskId && (
               <div className="text-xs text-gray-500 font-mono">{t.taskId} {job.taskId}</div>
             )}
+            {job.ossBucket && (
+              <div className="text-[10px] text-gray-600 font-mono">
+                OSS Bucket: {job.ossBucket}
+              </div>
+            )}
             {job.lastError && (
               <div className="text-xs text-red-600 bg-red-50 p-2 rounded border border-red-100 mt-1">
                 {job.lastError.message}

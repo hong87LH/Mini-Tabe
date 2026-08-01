@@ -1,6 +1,19 @@
 import React, { useState, useRef } from 'react';
 import { Plus, Trash2, ChevronDown, ChevronUp, Database, Server, Image as ImageIcon, Video, Download, Upload, ServerCrash, Cpu } from 'lucide-react';
 
+function buildStandardOssDomain(endpoint: string, bucket: string): string {
+  const cleanBucket = String(bucket || '').trim();
+  if (!cleanBucket) return '';
+  const rawEndpoint = String(endpoint || '').trim();
+  const normalizedEndpoint = /^https?:\/\//i.test(rawEndpoint) ? rawEndpoint : `https://${rawEndpoint}`;
+  try {
+    const endpointUrl = new URL(normalizedEndpoint);
+    return `${endpointUrl.protocol}//${cleanBucket}.${endpointUrl.host}`;
+  } catch {
+    return '';
+  }
+}
+
 export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const [psPath, setPsPath] = useState(localStorage.getItem('bitable_ps_path') || '');
@@ -44,7 +57,14 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   };
 
   const updateOss = (updates: any) => {
-    setModelSettings({ ...modelSettings, oss: { ...ossConfig, ...updates } });
+    let nextOss = { ...ossConfig, ...updates };
+    
+    // Automatically rebuild domain when endpoint or bucket changes
+    if ('endpoint' in updates || 'bucket' in updates) {
+      nextOss.domain = buildStandardOssDomain(nextOss.endpoint, nextOss.bucket);
+    }
+    
+    setModelSettings({ ...modelSettings, oss: nextOss });
   };
 
   const renderProviderCard = (type: 'text' | 'image' | 'video', provider: any, idx: number) => {
@@ -323,10 +343,10 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
           />
           <input 
             type="text" 
-            placeholder="Domain (e.g. https://my-bucket.oss-cn-beijing.aliyuncs.com)" 
-            className="col-span-2 w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-400 font-mono text-gray-600"
-            value={ossConfig.domain}
-            onChange={e => updateOss({ domain: e.target.value })}
+            placeholder="Domain (Auto-generated)" 
+            className="col-span-2 w-full border border-gray-200 rounded p-2 text-sm outline-none bg-gray-50 font-mono text-gray-500 cursor-not-allowed"
+            value={ossConfig.domain || ''}
+            readOnly
           />
         </div>
       </div>

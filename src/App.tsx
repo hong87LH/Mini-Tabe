@@ -943,6 +943,25 @@ export default function App() {
 
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const initialOssBucketRef = useRef('');
+  
+  useEffect(() => {
+    if (showSettings) {
+      initialOssBucketRef.current = String(modelSettings.oss?.bucket || '').trim();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSettings]);
+
+  const handleSettingsClose = () => {
+    const currentBucket = String(modelSettings.oss?.bucket || '').trim();
+    const oldBucket = initialOssBucketRef.current;
+    
+    if (oldBucket && currentBucket && oldBucket !== currentBucket) {
+      alert(`正在切换 OSS Bucket：\n\n旧 Bucket：${oldBucket}\n新 Bucket：${currentBucket}\n\n程序不会把旧 Bucket 的本地 CSV 上传到新 Bucket。\n保存后，新任务将使用新 Bucket；旧任务仍使用创建时的 OSS 配置。`);
+    }
+    
+    setShowSettings(false);
+  };
   const [showRowHeightMenu, setShowRowHeightMenu] = useState(false);
   
   const [userSettings, setUserSettings] = useState(() => {
@@ -2738,7 +2757,7 @@ export default function App() {
           <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 shrink-0">
               <h2 className="text-xl font-semibold">{lang === 'en' ? 'Settings' : '设置'}</h2>
-              <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-gray-800"><X className="w-5 h-5"/></button>
+              <button onClick={handleSettingsClose} className="text-gray-500 hover:text-gray-800"><X className="w-5 h-5"/></button>
             </div>
             
             <div className="p-6 overflow-y-auto flex-1">
@@ -2864,7 +2883,7 @@ export default function App() {
             </div>
 
             <div className="px-6 py-4 border-t border-gray-100 flex justify-end shrink-0">
-               <button onClick={() => setShowSettings(false)} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium text-sm hover:bg-blue-700">Done</button>
+               <button onClick={handleSettingsClose} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium text-sm hover:bg-blue-700">Done</button>
             </div>
           </div>
         </div>

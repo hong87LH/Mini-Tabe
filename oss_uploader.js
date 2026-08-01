@@ -8,6 +8,41 @@ import sharp from 'sharp';
 import dotenv from 'dotenv';
 import { getOssReferenceProfile } from './oss_reference_profiles.js';
 
+function normalizeEndpoint(endpoint) {
+  const raw = String(endpoint || '').trim();
+  const normalized = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  return normalized.replace(/\/+$/, '');
+}
+
+function getEndpointHost(endpoint) {
+  try {
+    return new URL(normalizeEndpoint(endpoint)).host.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function buildOssDomain(endpoint, bucket) {
+  const cleanBucket = String(bucket || '').trim();
+  if (!cleanBucket) {
+    return '';
+  }
+  const endpointUrl = new URL(normalizeEndpoint(endpoint));
+  return `${endpointUrl.protocol}//${cleanBucket}.${endpointUrl.host}`;
+}
+
+function inferBucketFromCloudUrl(cloudUrl, endpointHost) {
+  try {
+    const host = new URL(cloudUrl).host.toLowerCase();
+    const suffix = `.${String(endpointHost || '').toLowerCase()}`;
+    if (suffix !== '.' && host.endsWith(suffix)) {
+      return host.slice(0, -suffix.length);
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
 
 function safeFileURLToPath(urlStr) {
   try {
@@ -61,6 +96,9 @@ const CSV_FIELDS = [
   'cloud_url',        // 完整访问 URL
   'upload_date',      // YYYY-MM-DD
   'upload_time',      // ISO 时间戳
+  'bucket',
+  'endpoint_host',
+  'reference_profile_id'
 ];
 
 const DHASH_THRESHOLD = 20;             // dHash Hamming 距离阈值
@@ -76,9 +114,15 @@ class OssImageUploader {
   constructor(ossConfig = null) {
     this._akId = ossConfig?.accessKeyId || process.env.OSS_ACCESS_KEY_ID;
     this._akSecret = ossConfig?.accessKeySecret || process.env.OSS_ACCESS_KEY_SECRET;
-    this._endpoint = ossConfig?.endpoint || process.env.OSS_ENDPOINT || 'https://oss-cn-beijing.aliyuncs.com';
-    this._bucket = ossConfig?.bucket || process.env.OSS_BUCKET;
-    this._domainRaw = ossConfig?.domain || process.env.OSS_DOMAIN;
+    
+    this._endpoint = normalizeEndpoint(
+      ossConfig?.endpoint || process.env.OSS_ENDPOINT || 'https://oss-cn-beijing.aliyuncs.com'
+    );
+    this._endpointHost = getEndpointHost(this._endpoint);
+    this._bucket = String(ossConfig?.bucket || process.env.OSS_BUCKET || '').trim();
+    
+    // Domain 永远由当前 Endpoint + Bucket 自动生成。不读取旧配置中残留的 domain。
+    this._domainRaw = buildOssDomain(this._endpoint, this._bucket);
 
     // OSS 客户端懒初始化（list/stats/find 等 CSV 操作不需要 OSS）
     this._client = null;
@@ -113,6 +157,95 @@ class OssImageUploader {
       bucket: this._bucket,
     });
     this._domain = this._domainRaw.replace(/\/+$/, '');
+  }
+
+  _getLocalCsvScope(records, profile) {
+    const meaningfulRecords = Array.isArray(records)
+      ? records.filter(record => record && (record.cloud_path || record.cloud_url || record.file_hash))
+      : [];
+
+    if (meaningfulRecords.length === 0) {
+      return {
+        bucket: '',
+        endpointHost: '',
+        profileId: profile.id,
+        isEmpty: true
+      };
+    }
+
+    const explicitBuckets = new Set(
+      meaningfulRecords
+        .map(record => String(record.bucket || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+
+    if (explicitBuckets.size === 1) {
+      return {
+        bucket: [...explicitBuckets][0],
+        endpointHost: String(meaningfulRecords[0].endpoint_host || '').trim().toLowerCase(),
+        profileId: String(meaningfulRecords[0].reference_profile_id || profile.id),
+        isEmpty: false
+      };
+    }
+
+    /* 兼容旧 CSV：从 cloud_url 推断 Bucket。*/
+    const inferredBuckets = new Set(
+      meaningfulRecords
+        .map(record => inferBucketFromCloudUrl(record.cloud_url, this._endpointHost))
+        .filter(Boolean)
+    );
+
+    if (inferredBuckets.size === 1) {
+      return {
+        bucket: [...inferredBuckets][0],
+        endpointHost: this._endpointHost,
+        profileId: profile.id,
+        isEmpty: false,
+        inferredFromLegacyUrl: true
+      };
+    }
+
+    return {
+      bucket: '',
+      endpointHost: '',
+      profileId: profile.id,
+      isEmpty: false,
+      ambiguous: true
+    };
+  }
+
+  _validateLocalCsvScope(records, profile) {
+    const scope = this._getLocalCsvScope(records, profile);
+    
+    if (scope.isEmpty) {
+      return { valid: true, scope };
+    }
+    
+    if (scope.ambiguous) {
+      return {
+        valid: false,
+        code: 'OSS_CSV_SCOPE_AMBIGUOUS',
+        message: '无法确认本地 CSV 所属 Bucket'
+      };
+    }
+
+    if (scope.bucket && scope.bucket !== this._bucket.toLowerCase()) {
+      return {
+        valid: false,
+        code: 'OSS_CSV_BUCKET_MISMATCH',
+        message: `本地 CSV 属于 ${scope.bucket}，当前 Bucket 为 ${this._bucket}`
+      };
+    }
+    
+    if (scope.profileId && scope.profileId !== profile.id) {
+      return {
+        valid: false,
+        code: 'OSS_CSV_PROFILE_MISMATCH',
+        message: '本地 CSV 的模型索引类型不匹配'
+      };
+    }
+
+    return { valid: true, scope };
   }
 
   // ==================== 哈希方法 ====================
@@ -220,6 +353,47 @@ class OssImageUploader {
     await this._syncCsvToOSS(profile);
   }
 
+  async _getCloudCsvStat(profile) {
+    this._ensureOSS();
+    try {
+      const result = await this._client.head(profile.cloudCsvPath);
+      return {
+        exists: true,
+        etag: result?.res?.headers?.etag || '',
+        lastModified: new Date(result?.res?.headers['last-modified']).getTime()
+      };
+    } catch (error) {
+      const status = Number(error?.status || error?.statusCode);
+      if (status === 404 || error?.code === 'NoSuchKey') {
+        return { exists: false };
+      }
+      throw error;
+    }
+  }
+
+  _writeEmptyCsv(profile) {
+    const csvFile = this._getCsvFile(profile);
+    const headers = CSV_FIELDS.join(',');
+    fs.writeFileSync(csvFile, headers + '\n', 'utf-8');
+    console.log(`[OSS] 已在本地写入空缓存 → ${csvFile}`);
+  }
+
+  async _mergeCurrentBucketCsv(profile, cloud, localRecords) {
+    const csvFile = this._getCsvFile(profile);
+    const localStat = fs.existsSync(csvFile) ? { mtime: fs.statSync(csvFile).mtime.getTime() } : null;
+    
+    const cloudTime = cloud.lastModified;
+    const localTime = localStat ? localStat.mtime : 0;
+    
+    if (cloudTime > localTime + 5000) {
+      console.log(`[OSS] 云端 CSV 较新 (云:${new Date(cloudTime).toISOString()} > 本地:${new Date(localTime).toISOString()})，正在下载到本地...`);
+      await this.restoreCsvFromOSS(profile);
+    } else if (localTime > cloudTime + 5000) {
+      console.log(`[OSS] 本地 CSV 较新 (本地:${new Date(localTime).toISOString()} > 云:${new Date(cloudTime).toISOString()})，正在同步到云端...`);
+      await this._syncCsvToOSS(profile);
+    }
+  }
+
   async syncCsvBiDirectional(profile) {
     try {
       this._ensureOSS();
@@ -227,45 +401,44 @@ class OssImageUploader {
       return; // 缺少配置直接跳过
     }
 
-    let cloudStat = null;
+    let cloud;
     try {
-      const cloudCsvPath = this._getCloudCsvPath(profile);
-      const result = await this._client.head(cloudCsvPath);
-      if (result && result.res && result.res.headers) {
-         cloudStat = { lastModified: new Date(result.res.headers['last-modified']).getTime() };
-      }
+      cloud = await this._getCloudCsvStat(profile);
     } catch (e) {
-      // 云端无文件或网络错误
+      console.warn(`[OSS] 获取云端 CSV 状态发生错误:`, e);
+      return; // 网络错误，停止同步
     }
 
-    const csvFile = this._getCsvFile(profile);
-    const localExists = fs.existsSync(csvFile);
-    let localStat = null;
-    if (localExists) {
-      localStat = { mtime: fs.statSync(csvFile).mtime.getTime() };
-    }
+    const localExists = fs.existsSync(this._getCsvFile(profile));
+    const localRecords = localExists ? this._loadRecords(profile) : [];
+    
+    const scopeCheck = this._validateLocalCsvScope(localRecords, profile);
 
-    if (!cloudStat && !localExists) return;
-
-    if (!cloudStat && localExists) {
-      await this._syncCsvToOSS(profile);
+    if (cloud.exists) {
+      if (!scopeCheck.valid) {
+        console.log(`[OSS] ${scopeCheck.message}。正在下载当前 Bucket 的云端 CSV...`);
+        await this.restoreCsvFromOSS(profile);
+        return;
+      }
+      
+      await this._mergeCurrentBucketCsv(profile, cloud, localRecords);
       return;
     }
 
-    if (cloudStat && !localExists) {
-      await this.restoreCsvFromOSS(profile);
+    // 云端明确 404
+    if (!localExists) {
+      this._writeEmptyCsv(profile);
       return;
     }
 
-    // 都存在，对比时间，给予 5 秒缓冲 (5000 ms) 避免时钟微小偏差导致疯狂往返
-    const cloudTime = cloudStat.lastModified;
-    const localTime = localStat.mtime;
+    if (!scopeCheck.valid) {
+      console.log(`[OSS] ${scopeCheck.message}。禁止上传。本地切换为空缓存。`);
+      this._writeEmptyCsv(profile);
+      return;
+    }
 
-    if (cloudTime > localTime + 5000) {
-      console.log(`[OSS] 云端 CSV 较新 (云:${new Date(cloudTime).toISOString()} > 本地:${new Date(localTime).toISOString()})，正在下载到本地...`);
-      await this.restoreCsvFromOSS(profile);
-    } else if (localTime > cloudTime + 5000) {
-      console.log(`[OSS] 本地 CSV 较新 (本地:${new Date(localTime).toISOString()} > 云:${new Date(cloudTime).toISOString()})，正在同步到云端...`);
+    if (localRecords.length > 0) {
+      console.log(`[OSS] 云端无 CSV 且本地作用域正确，正在上传到云端...`);
       await this._syncCsvToOSS(profile);
     }
   }
@@ -452,10 +625,11 @@ class OssImageUploader {
 
     let attempt = 0;
     let lastError;
+    let uploadResult = null;
     while (attempt < 3) {
       try {
-        const result = await this._client.put(cloudPath, uploadPath);
-        if (!result || !result.url) throw new Error('上传返回结果异常');
+        uploadResult = await this._client.put(cloudPath, uploadPath);
+        if (!uploadResult || (!uploadResult.url && !uploadResult.res)) throw new Error('上传返回结果异常');
         lastError = null;
         break;
       } catch (err) {
@@ -483,6 +657,8 @@ class OssImageUploader {
       }
     }
 
+    const finalCloudUrl = uploadResult?.url || `${this._domainRaw}/${cloudPath}`;
+
     const record = {
       local_path: originalAbsPath,
       file_hash: fileHash,
@@ -491,9 +667,12 @@ class OssImageUploader {
       local_filename: localFilename,
       cloud_filename: cloudFilename,
       cloud_path: cloudPath,
-      cloud_url: cloudUrl,
+      cloud_url: finalCloudUrl,
       upload_date: dateStr,
       upload_time: now.toISOString(),
+      bucket: this._bucket,
+      endpoint_host: this._endpointHost,
+      reference_profile_id: profile.id
     };
 
     await this._appendRecord(record, profile);

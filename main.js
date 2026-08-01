@@ -345,6 +345,9 @@ app.whenReady().then(async () => {
 function stripSensitiveInfo(job) {
   if (!job) return job;
   const { encryptedCredentials, credentials, ...safeJob } = job;
+  if (credentials?.ossConfig?.bucket) {
+    safeJob.ossBucket = credentials.ossConfig.bucket;
+  }
   return safeJob;
 }
 
