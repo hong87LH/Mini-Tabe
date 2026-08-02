@@ -33,6 +33,66 @@ function isNetworkJobCellItem(value: unknown): value is NetworkJobCellItem {
   );
 }
 
+const normalizeProviderList = (value: any): any[] => {
+  if (Array.isArray(value)) {
+    return value.filter(Boolean);
+  }
+
+  return value ? [value] : [];
+};
+
+const parseProviderModels = (provider: any): string[] => {
+  return String(provider?.modelName || '')
+    .split(',')
+    .map(model => model.trim())
+    .filter(Boolean);
+};
+
+const isProviderEnabled = (provider: any): boolean => {
+  return provider?.enabled !== false;
+};
+
+const getEnabledProviders = (value: any): any[] => {
+  return normalizeProviderList(value).filter(isProviderEnabled);
+};
+
+const getAllConfiguredModels = (value: any): string[] => {
+  return Array.from(
+    new Set(
+      normalizeProviderList(value).flatMap(parseProviderModels)
+    )
+  );
+};
+
+const findEnabledProviderForModel = (
+  providerValue: any,
+  modelName: string,
+  categoryLabel: string,
+  lang: 'en' | 'zh' = 'zh'
+): any => {
+  const matches = getEnabledProviders(providerValue).filter(provider =>
+    parseProviderModels(provider).includes(modelName)
+  );
+
+  if (matches.length === 0) {
+    throw new Error(
+      lang === 'en'
+        ? `The model "${modelName}" has no enabled ${categoryLabel} API configuration. Open API Settings and enable the protocol you want to use.`
+        : `模型“${modelName}”当前没有启用的${categoryLabel} API 配置。请前往“API 和模型配置”打开对应协议的眼睛。`
+    );
+  }
+
+  if (matches.length > 1) {
+    throw new Error(
+      lang === 'en'
+        ? `The model "${modelName}" has multiple enabled ${categoryLabel} API configurations. Open API Settings and click the protocol you want to use.`
+        : `模型“${modelName}”同时启用了多个${categoryLabel} API 配置。请前往“API 和模型配置”，点击希望使用的协议。`
+    );
+  }
+
+  return matches[0];
+};
+
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   if (!query || !text) return <>{text}</>;
   const lowerText = String(text).toLowerCase();
@@ -3099,13 +3159,17 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
           };
           const sizeStr = (resolution === '4k') ? (res4kMap[ratio] || '4096x4096') : (resolution === '2k') ? (res2kMap[ratio] || '2048x2048') : (hdMap[ratio] || "1024x1024");
           
-          const imgSetList = Array.isArray(modelSettings.image) ? modelSettings.image : [modelSettings.image || {}];
-          
-          let resolvedModel = 'dall-e-3';
-          const defaultImgSet = imgSetList[0] || {};
-          if (defaultImgSet.modelName) {
-            resolvedModel = defaultImgSet.modelName.split(',')[0].trim();
+          const enabledImageProviders = getEnabledProviders(modelSettings.image);
+          if (enabledImageProviders.length === 0) {
+            throw new Error(
+              lang === 'en'
+                ? 'No image API configuration is currently enabled. Open API Settings and enable one.'
+                : '当前没有启用任何图片 API 配置。请前往“API 和模型配置”打开一项。'
+            );
           }
+
+          const defaultImgSet = enabledImageProviders[0];
+          let resolvedModel = parseProviderModels(defaultImgSet)[0] || 'dall-e-3';
 
           if (cfg.modelTemplate) {
              let template = resolveTemplateString(cfg.modelTemplate, data.fields, record);
@@ -3113,8 +3177,13 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                resolvedModel = template.trim();
              }
           }
-          
-          const imgSet = imgSetList.find((s: any) => s.modelName ? s.modelName.split(',').map((m: string) => m.trim()).includes(resolvedModel) : false) || defaultImgSet;
+
+          const imgSet = findEnabledProviderForModel(
+            modelSettings.image,
+            resolvedModel,
+            lang === 'en' ? 'image' : '图片',
+            lang
+          );
 
           let finalPrompt = promptString;
           let imageParts: any[] = [...promptImageParts];
@@ -3314,17 +3383,27 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
               finalSourceUrls = [...finalSourceUrls, ...(sourceUrls || [])];
            }
            
-           const vidSetList = Array.isArray(modelSettings.video) ? modelSettings.video : [modelSettings.video || {}];
-           const defaultVidSet = vidSetList[0] || {};
-           let resolvedModel = 'video-v1';
-           if (defaultVidSet.modelName) {
-              resolvedModel = defaultVidSet.modelName.split(',')[0].trim();
+           const enabledVideoProviders = getEnabledProviders(modelSettings.video);
+           if (enabledVideoProviders.length === 0) {
+              throw new Error(
+                lang === 'en'
+                  ? 'No video API configuration is currently enabled. Open API Settings and enable one.'
+                  : '当前没有启用任何视频 API 配置。请前往“API 和模型配置”打开一项。'
+              );
            }
+
+           const defaultVidSet = enabledVideoProviders[0];
+           let resolvedModel = parseProviderModels(defaultVidSet)[0] || 'video-v1';
            if (cfg.modelTemplate) {
               let template = resolveTemplateString(cfg.modelTemplate, data.fields, record);
               if (template.trim()) resolvedModel = template.trim();
            }
-           const vidSet = vidSetList.find((s: any) => s.modelName ? s.modelName.split(',').map((m:string)=>m.trim()).includes(resolvedModel) : false) || defaultVidSet;
+           const vidSet = findEnabledProviderForModel(
+             modelSettings.video,
+             resolvedModel,
+             lang === 'en' ? 'video' : '视频',
+             lang
+           );
 
            if (vidSet.provider !== 'lingwu') {
               throw new Error("Only Lingwu provider is currently supported for aiVideo.");
@@ -3389,13 +3468,17 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
            resultParams = [{ type: 'networkJob', jobId: jobInfo.localJobId }];
         } else {
           const cfg = field.aiTextConfig || {};
-          const txtSetList = Array.isArray(modelSettings.text) ? modelSettings.text : [modelSettings.text || {}];
-          
-          const defaultTxtSet = txtSetList[0] || {};
-          let resolvedModel = 'gpt-3.5-turbo';
-          if (defaultTxtSet.modelName) {
-            resolvedModel = defaultTxtSet.modelName.split(',')[0].trim();
+          const enabledTextProviders = getEnabledProviders(modelSettings.text);
+          if (enabledTextProviders.length === 0) {
+            throw new Error(
+              lang === 'en'
+                ? 'No text API configuration is currently enabled. Open API Settings and enable one.'
+                : '当前没有启用任何文本 API 配置。请前往“API 和模型配置”打开一项。'
+            );
           }
+
+          const defaultTxtSet = enabledTextProviders[0];
+          let resolvedModel = parseProviderModels(defaultTxtSet)[0] || 'gpt-3.5-turbo';
 
           if (cfg.modelTemplate) {
              let template = cfg.modelTemplate;
@@ -3405,16 +3488,19 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
              if (template.trim()) {
                resolvedModel = template.trim();
              }
+          } else if (defaultTxtSet.provider === 'gemini' && parseProviderModels(defaultTxtSet).length === 0) {
+             resolvedModel = 'gemini-1.5-flash';
           }
 
-          let txtSet = txtSetList.find((s: any) => s.modelName ? s.modelName.split(',').map((m: string) => m.trim()).includes(resolvedModel) : false);
-          if (!txtSet) {
-             txtSet = defaultTxtSet;
-             if (txtSet.provider === 'gemini' && (!cfg.modelTemplate)) {
-               resolvedModel = 'gemini-1.5-flash';
-             }
-          }
-          
+          const txtSet = parseProviderModels(defaultTxtSet).length === 0 && !cfg.modelTemplate
+            ? defaultTxtSet
+            : findEnabledProviderForModel(
+                modelSettings.text,
+                resolvedModel,
+                lang === 'en' ? 'text' : '文本',
+                lang
+              );
+
           let textParts: any[] = [{ text: promptString }];
           if (cfg.sourceImageTemplate) {
              const { parts } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record, cfg);
@@ -5493,7 +5579,7 @@ function HeaderCell({
                             onMouseDown={e => e.stopPropagation()}
                           />
                           <datalist id={`model-suggestions-${field.id}`}>
-                            {(Array.isArray(modelSettings?.image) ? modelSettings.image : [modelSettings?.image]).flatMap((s: any) => s?.modelName ? s.modelName.split(',') : []).map((m: string) => m?.trim()).filter(Boolean).map((m: string) => (
+                            {getAllConfiguredModels(modelSettings?.image).map((m: string) => (
                                <option key={m} value={m} />
                             ))}
                           </datalist>
@@ -5739,7 +5825,7 @@ function HeaderCell({
                                onMouseDown={e => e.stopPropagation()}
                              />
                              <datalist id={`model-suggestions-${field.id}`}>
-                               {(Array.isArray(modelSettings?.video) ? modelSettings.video : [modelSettings?.video]).flatMap((s: any) => s?.modelName ? s.modelName.split(',') : []).map((m: string) => m?.trim()).filter(Boolean).map((m: string) => (
+                               {getAllConfiguredModels(modelSettings?.video).map((m: string) => (
                                  <option key={m} value={m} />
                                ))}
                              </datalist>
@@ -5816,7 +5902,7 @@ function HeaderCell({
                             onMouseDown={e => e.stopPropagation()}
                           />
                           <datalist id={`txt-model-suggestions-${field.id}`}>
-                            {(Array.isArray(modelSettings?.text) ? modelSettings.text : [modelSettings?.text]).flatMap((s: any) => s?.modelName ? s.modelName.split(',') : []).map((m: string) => m?.trim()).filter(Boolean).map((m: string) => (
+                            {getAllConfiguredModels(modelSettings?.text).map((m: string) => (
                                <option key={m} value={m} />
                             ))}
                           </datalist>

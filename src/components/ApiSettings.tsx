@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronUp, Database, Server, Image as ImageIcon, Video, Download, Upload, ServerCrash, Cpu } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronUp, Database, Server, Image as ImageIcon, Video, Download, Upload, ServerCrash, Cpu, Eye, EyeOff } from 'lucide-react';
 
 function buildStandardOssDomain(endpoint: string, bucket: string): string {
   const cleanBucket = String(bucket || '').trim();
@@ -13,6 +13,25 @@ function buildStandardOssDomain(endpoint: string, bucket: string): string {
     return '';
   }
 }
+
+
+type ProviderCategory = 'text' | 'image' | 'video';
+
+const parseProviderModels = (provider: any): string[] => {
+  return String(provider?.modelName || '')
+    .split(',')
+    .map(model => model.trim())
+    .filter(Boolean);
+};
+
+const isProviderEnabled = (provider: any): boolean => {
+  return provider?.enabled !== false;
+};
+
+const hasModelOverlap = (firstProvider: any, secondProvider: any): boolean => {
+  const firstModels = new Set(parseProviderModels(firstProvider));
+  return parseProviderModels(secondProvider).some(model => firstModels.has(model));
+};
 
 export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
@@ -67,6 +86,37 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
     setModelSettings({ ...modelSettings, [type]: list });
   };
 
+
+  const toggleProviderEnabled = (type: ProviderCategory, idx: number) => {
+    const list = [...ensureArray(modelSettings[type])];
+    const target = list[idx];
+    if (!target) return;
+
+    const targetIsEnabled = isProviderEnabled(target);
+    const hasEnabledConflict = list.some((provider, providerIdx) => {
+      if (providerIdx === idx) return false;
+      return isProviderEnabled(provider) && hasModelOverlap(target, provider);
+    });
+
+    // 停用项点击后启用；旧配置若有多个同名项默认启用，
+    // 点击目标项会保留目标并关闭冲突项；唯一启用项再次点击则停用。
+    const shouldEnable = !targetIsEnabled || hasEnabledConflict;
+
+    const nextList = list.map((provider, providerIdx) => {
+      if (providerIdx === idx) {
+        return { ...provider, enabled: shouldEnable };
+      }
+
+      if (shouldEnable && hasModelOverlap(target, provider)) {
+        return { ...provider, enabled: false };
+      }
+
+      return provider;
+    });
+
+    setModelSettings({ ...modelSettings, [type]: nextList });
+  };
+
   const addProvider = (type: 'text' | 'image' | 'video') => {
     const list = [...ensureArray(modelSettings[type])];
     const newId = Math.random().toString(36).substr(2, 9);
@@ -76,7 +126,8 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
       provider: 'openai', 
       endpoint: '', 
       key: '', 
-      modelName: '' 
+      modelName: '',
+      enabled: true
     });
     setModelSettings({ ...modelSettings, [type]: list });
     setExpandedSections(prev => ({ ...prev, [`${type}_${list.length - 1}`]: true }));
@@ -101,10 +152,16 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
 
   const renderProviderCard = (type: 'text' | 'image' | 'video', provider: any, idx: number) => {
     const isExpanded = expandedSections[`${type}_${idx}`];
-    const modelCount = provider.modelName ? provider.modelName.split(',').filter(Boolean).length : 0;
+    const modelCount = parseProviderModels(provider).length;
+    const enabled = isProviderEnabled(provider);
     
     return (
-      <div key={provider.id || idx} className="border border-gray-200 rounded-lg mb-3 overflow-hidden bg-white shadow-sm transition-all">
+      <div
+        key={provider.id || idx}
+        className={`border border-gray-200 rounded-lg mb-3 overflow-hidden shadow-sm transition-all ${
+          enabled ? 'bg-white' : 'bg-gray-50 opacity-60'
+        }`}
+      >
         <div 
           className={`flex items-center justify-between p-3 cursor-pointer hover:bg-gray-50 ${isExpanded ? 'bg-gray-50 border-b border-gray-100' : ''}`}
           onClick={() => toggleExpand(`${type}_${idx}`)}
@@ -118,12 +175,53 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
               <p className="text-[10px] text-gray-500 uppercase tracking-wider">{provider.provider}</p>
             </div>
           </div>
-          <div className="flex items-center space-x-3 text-sm">
+          <div className="flex items-center space-x-2 text-sm">
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                enabled
+                  ? 'bg-green-50 text-green-700'
+                  : 'bg-gray-100 text-gray-500'
+              }`}
+            >
+              {enabled
+                ? (lang === 'en' ? 'Enabled' : '启用')
+                : (lang === 'en' ? 'Disabled' : '停用')}
+            </span>
             {!isExpanded && (
               <span className="text-gray-400 border border-gray-200 rounded px-2 py-0.5 text-xs bg-white">
                 {modelCount} {lang === 'en' ? 'Models' : '模型'}
               </span>
             )}
+            <button
+              type="button"
+              aria-pressed={enabled}
+              aria-label={
+                enabled
+                  ? (lang === 'en' ? 'Disable this API configuration' : '停用此 API 配置')
+                  : (lang === 'en' ? 'Enable this API configuration' : '启用此 API 配置')
+              }
+              title={
+                enabled
+                  ? (lang === 'en' ? 'Enabled — click to disable' : '已启用，点击停用')
+                  : (lang === 'en' ? 'Disabled — click to enable' : '已停用，点击启用')
+              }
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleProviderEnabled(type, idx);
+              }}
+              className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
+                enabled
+                  ? 'text-blue-600 hover:bg-blue-50'
+                  : 'text-gray-400 hover:bg-gray-100'
+              }`}
+            >
+              {enabled ? (
+                <Eye className="h-4 w-4" />
+              ) : (
+                <EyeOff className="h-4 w-4" />
+              )}
+            </button>
             {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
           </div>
         </div>
