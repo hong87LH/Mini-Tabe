@@ -14,6 +14,34 @@ function isActiveJobPhase(phase?: string): boolean {
   return ACTIVE_JOB_PHASES.has(String(phase || ''));
 }
 
+
+function normalizeLocalPathForStorage(value: unknown): string {
+  let normalized = String(value || '').trim();
+  if (!normalized) return '';
+
+  if (/^file:\/\//i.test(normalized)) {
+    normalized = normalized.replace(/^file:\/\//i, '');
+
+    try {
+      normalized = decodeURIComponent(normalized);
+    } catch {
+      // Keep the undecoded path if it contains invalid escape sequences.
+    }
+
+    if (/^\/[a-zA-Z]:[\\/]/.test(normalized)) {
+      normalized = normalized.slice(1);
+    }
+
+    if (/^\/\/[^/]/.test(normalized)) {
+      normalized = `\\\\${normalized.slice(2).replace(/\//g, '\\')}`;
+    } else if (/^[a-zA-Z]:\//.test(normalized)) {
+      normalized = normalized.replace(/\//g, '\\');
+    }
+  }
+
+  return normalized;
+}
+
 function isOssRelatedError(job: any): boolean {
   const stage = String(job?.lastError?.stage || '').toLowerCase();
   const code = String(job?.lastError?.code || job?.errorCode || '').toUpperCase();
@@ -130,7 +158,9 @@ export const NetworkJobCenter = ({
 
   const handleBind = (job: any) => {
     if (onBindToCell && job.localPath && job.recordId && job.fieldId && job.tableId) {
-       onBindToCell(job.tableId, job.recordId, job.fieldId, `file://${job.localPath}`);
+       const storedPath = normalizeLocalPathForStorage(job.localPath);
+       if (!storedPath) return;
+       onBindToCell(job.tableId, job.recordId, job.fieldId, storedPath);
        setBoundJob(job.localJobId);
        setTimeout(() => setBoundJob(null), 2000);
     }
@@ -162,7 +192,7 @@ export const NetworkJobCenter = ({
               type="button"
               title={t.deleteJob}
               aria-label={t.deleteJob}
-              className="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-md text-gray-400 hover:bg-red-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-100"
+              className="absolute right-2 top-2 z-10 h-7 min-w-7 rounded-md px-2 text-[11px] text-gray-400 hover:bg-red-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-100"
               onClick={async (event) => {
                 event.stopPropagation();
                 const running = isActiveJobPhase(job.phase);
@@ -178,7 +208,7 @@ export const NetworkJobCenter = ({
                 await handleDelete(job.localJobId);
               }}
             >
-              <Trash2 className="h-4 w-4" />
+              删除
             </button>
             
             <div className="flex items-start justify-between pr-10">

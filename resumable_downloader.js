@@ -50,6 +50,94 @@ function computeBackoff(attempt) {
 
 const activeDownloadJobIds = new Set();
 
+
+function getValidImageResize(job) {
+    if (job?.mediaType !== 'image') return null;
+
+    const config = job?.downloadConfig?.imageResize;
+    const width = Math.round(Number(config?.width));
+    const height = Math.round(Number(config?.height));
+
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return null;
+    }
+
+    return { width, height };
+}
+
+async function resizeDownloadedImage(finalPath, resizeConfig) {
+    const { width, height } = resizeConfig;
+    const ext = path.extname(finalPath).toLowerCase() || '.png';
+    const directory = path.dirname(finalPath);
+    const basename = path.basename(finalPath, path.extname(finalPath));
+    const uniqueSuffix = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempPath = path.join(directory, `.${basename}.resize-${uniqueSuffix}${ext}`);
+    const backupPath = path.join(directory, `.${basename}.resize-backup-${uniqueSuffix}${ext}`);
+
+    let originalMoved = false;
+
+    try {
+        const sharpModule = await import('sharp');
+        const sharp = sharpModule.default || sharpModule;
+
+        let pipeline = sharp(finalPath, { failOn: 'none' })
+            .rotate()
+            .resize(width, height, { fit: 'fill' });
+
+        if (ext === '.jpg' || ext === '.jpeg') {
+            pipeline = pipeline.jpeg({
+                quality: 95,
+                chromaSubsampling: '4:4:4'
+            });
+        } else if (ext === '.png') {
+            pipeline = pipeline.png();
+        } else if (ext === '.webp') {
+            pipeline = pipeline.webp({ quality: 95 });
+        } else if (ext === '.avif') {
+            pipeline = pipeline.avif({ quality: 90 });
+        }
+
+        await pipeline.toFile(tempPath);
+
+        if (fs.existsSync(backupPath)) {
+            fs.rmSync(backupPath, { force: true });
+        }
+
+        fs.renameSync(finalPath, backupPath);
+        originalMoved = true;
+        fs.renameSync(tempPath, finalPath);
+
+        // Backup cleanup failure should not invalidate an otherwise successful resize.
+        try {
+            fs.rmSync(backupPath, { force: true });
+        } catch (cleanupError) {
+            console.warn('Failed to remove image resize backup:', cleanupError);
+        }
+    } catch (error) {
+        try {
+            if (fs.existsSync(tempPath)) {
+                fs.rmSync(tempPath, { force: true });
+            }
+        } catch {}
+
+        try {
+            if (originalMoved && !fs.existsSync(finalPath) && fs.existsSync(backupPath)) {
+                fs.renameSync(backupPath, finalPath);
+            }
+        } catch {}
+
+        throw new NetworkStageError(
+            `Image resize failed: ${error?.message || String(error)}`,
+            {
+                stage: 'postprocess',
+                code: 'IMAGE_RESIZE_FAILED',
+                retryable: false,
+                details: { finalPath, width, height }
+            }
+        );
+    }
+}
+
 export class ResumableDownloader {
     constructor(jobStore, getDownloadsDir = () => path.join(app.getPath('userData'), 'downloads')) {
         this.jobStore = jobStore;
@@ -127,7 +215,31 @@ export class ResumableDownloader {
 
                 await this._performDownload(job.resultUrl, partPath, finalPath, localJobId);
 
-                // Download completed
+                const imageResize = getValidImageResize(job);
+                if (imageResize) {
+                    try {
+                        await resizeDownloadedImage(finalPath, imageResize);
+                    } catch (resizeError) {
+                        releaseReservedPath(finalPath);
+
+                        // Remove the unprocessed result and reset paths so "Retry Download"
+                        // can download and post-process the file again.
+                        try {
+                            if (fs.existsSync(finalPath)) {
+                                fs.rmSync(finalPath, { force: true });
+                            }
+                        } catch {}
+
+                        await this.jobStore.patch(localJobId, {
+                            finalPath: null,
+                            partPath: null
+                        });
+
+                        throw resizeError;
+                    }
+                }
+
+                // Download and optional image post-processing completed
                 await this.jobStore.patch(localJobId, {
                     phase: 'completed',
                     localPath: finalPath
@@ -139,7 +251,7 @@ export class ResumableDownloader {
                 console.error(`Download attempt ${attempt + 1} failed for ${localJobId}:`, err);
                 lastError = err;
                 
-                const isRetryable = err.name === 'AbortError' || ['ECONNRESET', 'ETIMEDOUT', 'ENETUNREACH', 'EAI_AGAIN'].includes(err.code) || (err.httpStatus && err.httpStatus >= 500) || err.httpStatus === 429 || err.httpStatus === 416;
+                const isRetryable = err.retryable === true || err.name === 'AbortError' || ['ECONNRESET', 'ETIMEDOUT', 'ENETUNREACH', 'EAI_AGAIN'].includes(err.code) || (err.httpStatus && err.httpStatus >= 500) || err.httpStatus === 429 || err.httpStatus === 416;
                 if (!isRetryable) {
                     break;
                 }
@@ -154,7 +266,11 @@ export class ResumableDownloader {
         const errorMessage = lastError ? lastError.message : 'Unknown download error';
         await this.jobStore.patch(localJobId, {
             phase: 'generated',
-            lastError: { stage: 'download', message: errorMessage }
+            lastError: {
+                stage: lastError?.stage || 'download',
+                code: lastError?.code,
+                message: errorMessage
+            }
         });
         await this._notify(localJobId);
     }

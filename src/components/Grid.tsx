@@ -93,6 +93,108 @@ const findEnabledProviderForModel = (
   return matches[0];
 };
 
+
+type RetouchImageResize = {
+  width: number;
+  height: number;
+};
+
+function normalizeLocalPathForStorage(value: unknown): string {
+  let normalized = String(value || '').trim();
+  if (!normalized) return '';
+
+  if (/^file:\/\//i.test(normalized)) {
+    normalized = normalized.replace(/^file:\/\//i, '');
+
+    try {
+      normalized = decodeURIComponent(normalized);
+    } catch {
+      // Keep the undecoded path if it contains invalid escape sequences.
+    }
+
+    // file:///C:/folder/file.png -> C:\folder\file.png
+    if (/^\/[a-zA-Z]:[\\/]/.test(normalized)) {
+      normalized = normalized.slice(1);
+    }
+
+    // file:////server/share/file.png -> \\server\share\file.png
+    if (/^\/\/[^/]/.test(normalized)) {
+      normalized = `\\\\${normalized.slice(2).replace(/\//g, '\\')}`;
+    } else if (/^[a-zA-Z]:\//.test(normalized)) {
+      normalized = normalized.replace(/\//g, '\\');
+    }
+  }
+
+  return normalized;
+}
+
+function resolveRetouchImageResize(
+  config: any,
+  fields: Field[],
+  record: BaseRecord
+): RetouchImageResize | null {
+  if (!config?.isRetouchMode || config.scaleToSource === false) {
+    return null;
+  }
+
+  const template = String(config.sourceImageTemplate || '');
+  const matches = fields
+    .map(field => ({
+      field,
+      index: template.indexOf(`{${field.name}}`)
+    }))
+    .filter(match => match.index !== -1)
+    .sort((a, b) => a.index - b.index);
+
+  for (const match of matches) {
+    const value = record[match.field.id];
+    if (!value) continue;
+
+    const items = Array.isArray(value)
+      ? value
+      : (typeof value === 'string' ? value.split(',') : [value]);
+    const first = items[0];
+
+    if (!first || typeof first !== 'object' || !first.cropData) {
+      continue;
+    }
+
+    const crop = first.cropData;
+    const requiredMetrics = [
+      crop.imgW,
+      crop.imgH,
+      crop.naturalW,
+      crop.naturalH,
+      crop.scale,
+      crop.maskW,
+      crop.maskH
+    ];
+
+    if (!requiredMetrics.every(metric => Number(metric) > 0)) {
+      return null;
+    }
+
+    const width = Math.max(
+      1,
+      Math.round(
+        (Number(crop.maskW) / Number(crop.scale)) *
+        (Number(crop.naturalW) / Number(crop.imgW))
+      )
+    );
+    const height = Math.max(
+      1,
+      Math.round(
+        (Number(crop.maskH) / Number(crop.scale)) *
+        (Number(crop.naturalH) / Number(crop.imgH))
+      )
+    );
+
+    return { width, height };
+  }
+
+  return null;
+}
+
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   if (!query || !text) return <>{text}</>;
   const lowerText = String(text).toLowerCase();
@@ -168,7 +270,7 @@ function parseTSV(text: string): string[][] {
 }
 
 const copyImageToClipboardMagic = (path: string) => {
-   navigator.clipboard.writeText(path);
+   navigator.clipboard.writeText(normalizeLocalPathForStorage(path));
 };
 
 const zoomLevels = [0.125, 0.25, 0.5, 0.707, 1, 1.414, 2, 2.828, 4, 5.656, 8];
@@ -1043,12 +1145,13 @@ async function processThumbnailQueue() {
 async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<string> {
   if (thumbnailCache.has(pathStr)) return thumbnailCache.get(pathStr)!;
 
+  const sourcePath = normalizeLocalPathForStorage(pathStr);
   const w = window as any;
-  const isElectronPath = pathStr.startsWith('/') || pathStr.match(/^[a-zA-Z]:[\\/]/) || pathStr.startsWith('\\\\');
+  const isElectronPath = sourcePath.startsWith('/') || sourcePath.match(/^[a-zA-Z]:[\\/]/) || sourcePath.startsWith('\\\\');
 
   if (isElectronPath && w.electronAPI && w.electronAPI.getThumbnail) {
     try {
-      const dataUrl = await w.electronAPI.getThumbnail(pathStr, { width: 150, height: 150 });
+      const dataUrl = await w.electronAPI.getThumbnail(sourcePath, { width: 150, height: 150 });
       if (dataUrl) {
         thumbnailCache.set(pathStr, dataUrl);
         return dataUrl;
@@ -1056,16 +1159,16 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
     } catch (e) {}
   }
 
-  const isVideo = pathStr.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/) || file?.type.startsWith('video/');
+  const isVideo = sourcePath.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/) || file?.type.startsWith('video/');
 
   if (!isVideo) {
-      let resultUrl = pathStr;
+      let resultUrl = sourcePath;
       if (file) {
           resultUrl = URL.createObjectURL(file);
       } else if (fullImageBlobCache.has(pathStr)) {
           resultUrl = fullImageBlobCache.get(pathStr)!;
       } else if (isElectronPath) {
-          resultUrl = `file://${pathStr.replace(/\\/g, '/')}`;
+          resultUrl = `file://${sourcePath.replace(/\\/g, '/')}`;
       }
       thumbnailCache.set(pathStr, resultUrl);
       return resultUrl;
@@ -1092,9 +1195,9 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
       } else if (fullImageBlobCache.has(pathStr)) {
         urlToLoad = fullImageBlobCache.get(pathStr)!;
       } else if (isElectronPath) {
-        urlToLoad = `file://${pathStr.replace(/\\/g, '/')}`;
+        urlToLoad = `file://${sourcePath.replace(/\\/g, '/')}`;
       } else {
-        urlToLoad = pathStr;
+        urlToLoad = sourcePath;
       }
 
       await new Promise<void>((mediaResolve) => {
@@ -2637,16 +2740,16 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 const newVals = existingVals.filter(v => !(v && v.type === 'networkJob' && v.jobId === job.localJobId));
                 
                 if (job.phase === 'completed' && job.localPath) {
-                    const localFileUrl = `file://${job.localPath}`;
-                    const targetKey = normalizeAttachmentKey(localFileUrl);
+                    const storedPath = normalizeLocalPathForStorage(job.localPath);
+                    const targetKey = normalizeAttachmentKey(storedPath);
                     
                     const alreadyExists = newVals.some(value => {
                         const itemUrl = typeof value === 'string' ? value : value?.url;
                         return normalizeAttachmentKey(itemUrl) === targetKey;
                     });
                     
-                    if (!alreadyExists) {
-                        newVals.push(localFileUrl);
+                    if (storedPath && !alreadyExists) {
+                        newVals.push(storedPath);
                     }
                 }
                 
@@ -2681,16 +2784,16 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 const existingVals = Array.isArray(record[job.fieldId]) ? record[job.fieldId] : (record[job.fieldId] ? [record[job.fieldId]] : []);
                 if (job.phase === 'completed' && job.localPath) {
                     const newVals = existingVals.filter(v => !(v && v.type === 'networkJob' && v.jobId === job.localJobId));
-                    const localFileUrl = `file://${job.localPath}`;
-                    const targetKey = normalizeAttachmentKey(localFileUrl);
+                    const storedPath = normalizeLocalPathForStorage(job.localPath);
+                    const targetKey = normalizeAttachmentKey(storedPath);
                     
                     const alreadyExists = newVals.some(value => {
                         const itemUrl = typeof value === 'string' ? value : value?.url;
                         return normalizeAttachmentKey(itemUrl) === targetKey;
                     });
                     
-                    if (!alreadyExists) {
-                        newVals.push(localFileUrl);
+                    if (storedPath && !alreadyExists) {
+                        newVals.push(storedPath);
                         onUpdateRecord(job.recordId, job.fieldId, newVals);
                     } else if (newVals.length !== existingVals.length) { // still need to save if we removed the networkJob marker
                         onUpdateRecord(job.recordId, job.fieldId, newVals);
@@ -3241,6 +3344,12 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 }
             }
 
+            const imageResize = resolveRetouchImageResize(
+                cfg,
+                data.fields,
+                record
+            );
+
             const results = [];
             for (let i = 0; i < count; i++) {
                 try {
@@ -3257,7 +3366,11 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                         apiKey: imgSet.key,
                         endpoint: imgSet.endpoint || 'https://api.lingwu.example.com',
                         ossConfig: modelSettings?.oss,
-                        downloadConfig: { filename: finalFilename, folderPath: finalFolderPath }
+                        downloadConfig: {
+                            filename: finalFilename,
+                            folderPath: finalFolderPath,
+                            ...(imageResize ? { imageResize } : {})
+                        }
                     });
                     results.push({ type: 'networkJob', jobId: jobInfo.localJobId });
                 } catch (err) {
