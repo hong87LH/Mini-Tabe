@@ -163,15 +163,37 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('check-oss-storage', async (event, ossConfig) => {
     try {
-      const { OssStorageManager, OSS_STORAGE_POLICY } = await import('./oss_storage_manager.js');
+      const {
+        OssStorageManager,
+        OSS_STORAGE_POLICY,
+        serializeCmsError
+      } = await import('./oss_storage_manager.js');
+
       if (!ossConfig || !ossConfig.accessKeyId) throw new Error("Missing OSS Config");
+
       const manager = new OssStorageManager(ossConfig);
       const usageBytes = await manager.getBucketUsage();
       const plan = await manager.planCleanup(usageBytes, 0);
+
+      let traffic = null;
+      try {
+        traffic = await manager.getMonthlyInternetTraffic();
+      } catch (trafficError) {
+        console.warn("check-oss-storage traffic query failed:", trafficError);
+        traffic = {
+          bucketName: ossConfig.bucket || '',
+          bucketMonthlyInternetTxBytes: null,
+          accountMonthlyInternetTxBytes: null,
+          dataTimestamp: null,
+          error: serializeCmsError(trafficError)
+        };
+      }
+
       return {
-          usageBytes,
-          policy: OSS_STORAGE_POLICY,
-          plan
+        usageBytes,
+        policy: OSS_STORAGE_POLICY,
+        plan,
+        traffic
       };
     } catch (e) {
       console.error("check-oss-storage error:", e);

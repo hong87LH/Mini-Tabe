@@ -14,6 +14,31 @@ function buildStandardOssDomain(endpoint: string, bucket: string): string {
   }
 }
 
+const BYTES_PER_GB = 1024 ** 3;
+
+function bytesToGb(bytes: unknown): number {
+  const value = Number(bytes);
+  return Number.isFinite(value) && value > 0 ? value / BYTES_PER_GB : 0;
+}
+
+function formatGb(value: number): string {
+  return `${value.toFixed(2)} GB`;
+}
+
+function formatUsageTimestamp(value: unknown, lang: 'en' | 'zh'): string {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '--';
+
+  return new Date(timestamp).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+}
+
 
 type ProviderCategory = 'text' | 'image' | 'video';
 
@@ -78,7 +103,45 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const textProviders = ensureArray(modelSettings.text);
   const imageProviders = ensureArray(modelSettings.image);
   const videoProviders = ensureArray(modelSettings.video);
-  const ossConfig = modelSettings.oss || { accessKeyId: '', accessKeySecret: '', endpoint: '', bucket: '', domain: '' };
+  const ossConfig = modelSettings.oss || { accessKeyId: '', accessKeySecret: '', endpoint: '', bucket: '', domain: '', monthlyTrafficLimitGB: 100 };
+
+  const monthlyTrafficLimitGB = Number(ossConfig.monthlyTrafficLimitGB) > 0
+    ? Number(ossConfig.monthlyTrafficLimitGB)
+    : 100;
+  const monthlyTrafficLimitBytes = monthlyTrafficLimitGB * BYTES_PER_GB;
+
+  const bucketStorageGb = bytesToGb(storageData?.usageBytes);
+  const bucketStorageLimitGb = bytesToGb(storageData?.policy?.packageBytes);
+  const bucketStorageRemainingGb = Math.max(0, bucketStorageLimitGb - bucketStorageGb);
+  const bucketStoragePercent = bucketStorageLimitGb > 0
+    ? (bucketStorageGb / bucketStorageLimitGb) * 100
+    : 0;
+
+  const trafficData = storageData?.traffic;
+  const hasTrafficData = Number.isFinite(Number(trafficData?.accountMonthlyInternetTxBytes));
+  const bucketTrafficBytes = hasTrafficData
+    ? Math.max(0, Number(trafficData?.bucketMonthlyInternetTxBytes) || 0)
+    : 0;
+  const accountTrafficBytes = hasTrafficData
+    ? Math.max(bucketTrafficBytes, Number(trafficData?.accountMonthlyInternetTxBytes) || 0)
+    : 0;
+  const otherTrafficBytes = Math.max(0, accountTrafficBytes - bucketTrafficBytes);
+  const remainingTrafficBytes = Math.max(0, monthlyTrafficLimitBytes - accountTrafficBytes);
+  const accountTrafficPercent = monthlyTrafficLimitBytes > 0
+    ? (accountTrafficBytes / monthlyTrafficLimitBytes) * 100
+    : 0;
+  const bucketTrafficBarPercent = monthlyTrafficLimitBytes > 0
+    ? Math.min(100, (bucketTrafficBytes / monthlyTrafficLimitBytes) * 100)
+    : 0;
+  const otherTrafficBarPercent = monthlyTrafficLimitBytes > 0
+    ? Math.min(
+        Math.max(0, 100 - bucketTrafficBarPercent),
+        (otherTrafficBytes / monthlyTrafficLimitBytes) * 100
+      )
+    : 0;
+  const bucketTrafficSharePercent = accountTrafficBytes > 0
+    ? (bucketTrafficBytes / accountTrafficBytes) * 100
+    : 0;
 
   const updateProvider = (type: 'text' | 'image' | 'video', idx: number, updates: any) => {
     const list = [...ensureArray(modelSettings[type])];
@@ -485,7 +548,7 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
           <div className="flex items-center justify-between mb-2">
             <h4 className="text-sm font-medium text-gray-700 flex items-center">
               <Database className="w-4 h-4 mr-2 text-gray-500" />
-              {lang === 'en' ? 'OSS Storage Management' : 'OSS 容量管理'}
+              {lang === 'en' ? 'OSS Usage' : 'OSS 使用情况'}
             </h4>
             <div className="flex gap-2">
               <button
@@ -493,7 +556,7 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
                 disabled={storageLoading || !ossConfig.accessKeyId}
                 className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded transition-colors disabled:opacity-50"
               >
-                {storageLoading ? (lang === 'en' ? 'Checking...' : '检查中...') : (lang === 'en' ? 'Check Storage' : '刷新容量')}
+                {storageLoading ? (lang === 'en' ? 'Checking...' : '查询中...') : (lang === 'en' ? 'Refresh Usage' : '刷新用量')}
               </button>
               {storageData?.plan?.plannedDeletions?.length > 0 && (
                 <button
@@ -508,44 +571,150 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
           </div>
           
           {storageData && (
-            <div className="text-xs bg-gray-50 p-3 rounded-lg border border-gray-100">
-              <div className="flex justify-between mb-1">
-                <span className="text-gray-500">{lang === 'en' ? 'Current Usage' : '当前用量'}</span>
-                <span className={`font-mono ${storageData.usageBytes > storageData.policy.triggerBytes ? 'text-orange-600 font-bold' : 'text-gray-700'}`}>
-                  {(storageData.usageBytes / 1024 / 1024 / 1024).toFixed(2)} GB / {(storageData.policy.packageBytes / 1024 / 1024 / 1024).toFixed(2)} GB
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-1.5 mb-3">
-                <div 
-                  className={`h-1.5 rounded-full ${storageData.usageBytes > storageData.policy.triggerBytes ? 'bg-orange-500' : 'bg-green-500'}`} 
-                  style={{ width: `${Math.min(100, (storageData.usageBytes / storageData.policy.packageBytes) * 100)}%` }}
-                ></div>
-              </div>
-              
-              {storageData.plan?.plannedDeletions?.length > 0 ? (
-                <div>
-                  <div className="text-orange-600 mb-1">
-                    {lang === 'en' ? 'Cleanup Recommended: Exceeds ' : '建议清理：已超过 '}
-                    {(storageData.policy.triggerBytes / 1024 / 1024 / 1024).toFixed(2)} GB
+            <div className="text-xs bg-gray-50 p-3 rounded-lg border border-gray-100 space-y-2">
+              {/* 当前 Bucket 存储空间 */}
+              <div className="bg-white border border-gray-200 rounded-lg px-3 py-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-medium text-gray-700">
+                      {lang === 'en' ? 'Current Bucket Storage' : '当前 Bucket 存储空间'}
+                    </div>
+                    <div className="mt-1 text-[10px] text-gray-400">
+                      references/ {lang === 'en' ? 'actual directory usage' : '目录实际占用'}
+                    </div>
                   </div>
-                  <div className="text-gray-500 pl-2 border-l-2 border-orange-200">
-                    {storageData.plan.plannedDeletions.map((f: any, i: number) => (
-                      <div key={i} className="flex justify-between">
-                        <span>{f.prefix}</span>
-                        <span>{(f.bytes / 1024 / 1024).toFixed(2)} MB</span>
-                      </div>
-                    ))}
-                    <div className="flex justify-between font-medium mt-1 pt-1 border-t border-orange-100 text-orange-700">
-                      <span>{lang === 'en' ? 'Projected Usage' : '预计清理后'}</span>
-                      <span>{(storageData.plan.projectedBytes / 1024 / 1024 / 1024).toFixed(2)} GB</span>
+
+                  <div className="text-right shrink-0">
+                    <div className={`font-mono text-xs font-semibold ${storageData.usageBytes > storageData.policy.triggerBytes ? 'text-orange-600' : 'text-gray-900'}`}>
+                      {bucketStorageGb.toFixed(2)} GB&nbsp; / &nbsp;{bucketStorageLimitGb.toFixed(0)} GB
+                    </div>
+                    <div className="mt-1 text-[10px] text-gray-400">
+                      {lang === 'en' ? 'Remaining' : '剩余'} {bucketStorageRemainingGb.toFixed(2)} GB · {bucketStoragePercent.toFixed(1)}%
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="text-green-600">
-                  {lang === 'en' ? 'Storage is within healthy limits.' : '当前容量健康，无需清理。'}
+
+                <div className="mt-3 w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className={`h-1.5 rounded-full ${storageData.usageBytes > storageData.policy.triggerBytes ? 'bg-orange-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${Math.min(100, bucketStoragePercent)}%` }}
+                  ></div>
+                </div>
+              </div>
+
+              {/* 账号本月公网流出：当前 Bucket / 其他 Bucket 共用一条额度轴 */}
+              <div className="bg-white border border-gray-200 rounded-lg px-3 py-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="text-xs font-medium text-gray-700">
+                      {lang === 'en' ? 'Monthly Internet Outbound Traffic' : '本月公网流出'}
+                    </div>
+                    <label className="flex items-center gap-1.5 text-[10px] text-gray-400">
+                      {lang === 'en' ? 'Monthly quota' : '月额度'}
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        className="w-14 h-7 rounded-md border border-gray-200 bg-white px-2 text-center font-mono text-[10px] text-gray-700 outline-none focus:border-blue-400"
+                        value={monthlyTrafficLimitGB}
+                        onChange={e => {
+                          const value = Number(e.target.value);
+                          updateOss({ monthlyTrafficLimitGB: Number.isFinite(value) && value > 0 ? value : 100 });
+                        }}
+                      />
+                      GB
+                    </label>
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <div className="font-mono text-xs font-semibold text-gray-900">
+                      {hasTrafficData ? `${bytesToGb(accountTrafficBytes).toFixed(2)} GB` : '--'}&nbsp; / &nbsp;{monthlyTrafficLimitGB.toFixed(0)} GB
+                    </div>
+                    <div className="mt-1 text-[10px] text-gray-400">
+                      {hasTrafficData ? (
+                        <>
+                          {lang === 'en' ? 'Remaining' : '剩余'} {formatGb(bytesToGb(remainingTrafficBytes))} · {accountTrafficPercent.toFixed(1)}%
+                        </>
+                      ) : (
+                        lang === 'en' ? 'Traffic data unavailable' : '暂无流量数据'
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="h-1.5 bg-blue-800 transition-all"
+                    style={{ width: `${bucketTrafficBarPercent}%` }}
+                    title={lang === 'en' ? 'Current Bucket' : '当前 Bucket'}
+                  ></div>
+                  <div
+                    className="h-1.5 bg-blue-300 transition-all"
+                    style={{ width: `${otherTrafficBarPercent}%` }}
+                    title={lang === 'en' ? 'Other Buckets' : '其他 Bucket'}
+                  ></div>
+                </div>
+
+                {hasTrafficData ? (
+                  <div className="mt-2 flex items-center flex-wrap gap-y-1 text-[10px] text-gray-500">
+                    <div className="flex items-center gap-1.5 pr-3">
+                      <span className="w-1.5 h-1.5 rounded-sm bg-blue-800"></span>
+                      <span>{lang === 'en' ? 'Current Bucket' : '当前 Bucket'}</span>
+                      <span className="font-mono font-semibold text-gray-700">{formatGb(bytesToGb(bucketTrafficBytes))}</span>
+                      <span className="text-gray-400">· {lang === 'en' ? 'Share' : '已用占比'} {bucketTrafficSharePercent.toFixed(1)}%</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 px-3 border-l border-gray-200">
+                      <span className="w-1.5 h-1.5 rounded-sm bg-blue-300"></span>
+                      <span>{lang === 'en' ? 'Other Buckets' : '其他 Bucket'}</span>
+                      <span className="font-mono font-semibold text-gray-700">{formatGb(bytesToGb(otherTrafficBytes))}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 pl-3 border-l border-gray-200">
+                      <span className="w-1.5 h-1.5 rounded-sm bg-gray-200"></span>
+                      <span>{lang === 'en' ? 'Remaining' : '剩余'}</span>
+                      <span className="font-mono font-semibold text-gray-700">{formatGb(bytesToGb(remainingTrafficBytes))}</span>
+                      <span className="text-gray-400">
+                        · {accountTrafficPercent >= 100
+                          ? (lang === 'en' ? 'Quota exceeded' : '已超过额度')
+                          : accountTrafficPercent >= 90
+                            ? (lang === 'en' ? 'Near quota' : '接近额度')
+                            : (lang === 'en' ? 'Quota sufficient' : '额度充足')}
+                      </span>
+                    </div>
+                  </div>
+                ) : trafficData?.error ? (
+                  <div className="mt-2 rounded-md bg-amber-50 px-2.5 py-2 text-[10px] leading-5 text-amber-700">
+                    {lang === 'en'
+                      ? `Traffic query failed: ${trafficData.error.message || 'CloudMonitor permission or network error'}`
+                      : `流量查询失败：${trafficData.error.message || '请检查云监控读取权限或网络连接'}`}
+                  </div>
+                ) : null}
+              </div>
+
+              {storageData.plan?.plannedDeletions?.length > 0 && (
+                <div className="rounded-md bg-orange-50 px-3 py-2 text-[10px] text-orange-700">
+                  <div className="font-medium mb-1">
+                    {lang === 'en' ? 'Cleanup recommended' : '容量接近上限，建议清理'}
+                  </div>
+                  {storageData.plan.plannedDeletions.map((folder: any, index: number) => (
+                    <div key={index} className="flex justify-between gap-4 text-orange-600">
+                      <span className="truncate">{folder.prefix}</span>
+                      <span className="font-mono shrink-0">{(folder.bytes / 1024 / 1024).toFixed(2)} MB</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between gap-4 mt-1 pt-1 border-t border-orange-100 font-medium">
+                    <span>{lang === 'en' ? 'Projected usage' : '预计清理后'}</span>
+                    <span className="font-mono">{bytesToGb(storageData.plan.projectedBytes).toFixed(2)} GB</span>
+                  </div>
                 </div>
               )}
+
+              <div className="flex items-center justify-between gap-4 px-0.5 text-[9px] text-gray-400">
+                <span>
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 ${trafficData?.error ? 'bg-amber-400' : 'bg-emerald-500'}`}></span>
+                  {lang === 'en' ? 'Statistics through:' : '统计截止：'} {formatUsageTimestamp(trafficData?.dataTimestamp || trafficData?.queryEndTime, lang)}
+                </span>
+                <span>{lang === 'en' ? 'CloudMonitor data may be delayed and is for reference only.' : '云监控数据可能存在延迟，仅供用量参考'}</span>
+              </div>
             </div>
           )}
         </div>

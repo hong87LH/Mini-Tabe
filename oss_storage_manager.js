@@ -2,6 +2,8 @@ import { OssImageUploader } from './oss_uploader.js';
 import { getOssReferenceProfile } from './oss_reference_profiles.js';
 import OSS from 'ali-oss';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
+import https from 'node:https';
 
 const MANAGED_NAMESPACES = [
   {
@@ -26,14 +28,98 @@ export const OSS_STORAGE_POLICY = {
   dryRun: false
 };
 
+
+const CMS_NAMESPACE = 'acs_oss_dashboard';
+const CMS_METRIC_INTERNET_TX = 'MeteringInternetTX';
+const CMS_API_VERSION = '2019-01-01';
+const CMS_PERIOD_SECONDS = '3600';
+const CMS_PAGE_LENGTH = '1440';
+const CMS_REQUEST_TIMEOUT_MS = 20_000;
+
+function encodeRfc3986(value) {
+  return encodeURIComponent(String(value))
+    .replace(/!/g, '%21')
+    .replace(/'/g, '%27')
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29')
+    .replace(/\*/g, '%2A');
+}
+
+function deriveRegionFromOssEndpoint(endpoint) {
+  const raw = String(endpoint || '').trim();
+  if (!raw) return 'cn-hangzhou';
+
+  try {
+    const normalized = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const host = new URL(normalized).hostname.toLowerCase();
+    const match = host.match(/(?:^|\.)oss-([a-z0-9-]+?)(?:-internal)?\.aliyuncs\.com$/i);
+    return match?.[1] || 'cn-hangzhou';
+  } catch {
+    return 'cn-hangzhou';
+  }
+}
+
+function getMetricPointTimestamp(point) {
+  const value = Number(point?.timestamp ?? point?.Timestamp ?? point?.time ?? point?.Time);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function getMetricPointValue(point) {
+  const candidates = [
+    point?.Value,
+    point?.value,
+    point?.Sum,
+    point?.sum,
+    point?.Average,
+    point?.average,
+    point?.Maximum,
+    point?.maximum,
+    point?.Minimum,
+    point?.minimum
+  ];
+
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+
+  return 0;
+}
+
+function parseCmsDatapoints(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function serializeCmsError(error) {
+  return {
+    code: error?.code || error?.name || 'OSS_TRAFFIC_QUERY_FAILED',
+    message: error?.message || String(error || 'OSS traffic query failed'),
+    statusCode: Number(error?.statusCode || error?.status || 0) || undefined
+  };
+}
+
 export class OssStorageManager {
-  constructor(ossConfig) {
+  constructor(ossConfig = {}) {
     this._ossConfig = { ...ossConfig };
     this._bucket = ossConfig?.bucket || process.env.OSS_BUCKET;
+    this._accessKeyId = ossConfig?.accessKeyId || process.env.OSS_ACCESS_KEY_ID;
+    this._accessKeySecret = ossConfig?.accessKeySecret || process.env.OSS_ACCESS_KEY_SECRET;
+    this._ossEndpoint = ossConfig?.endpoint || process.env.OSS_ENDPOINT || 'https://oss-cn-beijing.aliyuncs.com';
+    this._region = deriveRegionFromOssEndpoint(this._ossEndpoint);
+    this._cmsEndpoint = `metrics.${this._region}.aliyuncs.com`;
+
     this._client = new OSS({
-      accessKeyId: ossConfig?.accessKeyId || process.env.OSS_ACCESS_KEY_ID,
-      accessKeySecret: ossConfig?.accessKeySecret || process.env.OSS_ACCESS_KEY_SECRET,
-      endpoint: ossConfig?.endpoint || process.env.OSS_ENDPOINT || 'https://oss-cn-beijing.aliyuncs.com',
+      accessKeyId: this._accessKeyId,
+      accessKeySecret: this._accessKeySecret,
+      endpoint: this._ossEndpoint,
       bucket: this._bucket
     });
   }
@@ -60,6 +146,164 @@ export class OssStorageManager {
       // fallback
       return 0;
     }
+  }
+
+  async getMonthlyInternetTraffic(now = new Date()) {
+    if (!this._accessKeyId || !this._accessKeySecret) {
+      const error = new Error('Missing OSS AccessKey for CloudMonitor query');
+      error.code = 'MISSING_OSS_ACCESS_KEY';
+      throw error;
+    }
+    if (!this._bucket) {
+      const error = new Error('Missing OSS Bucket name');
+      error.code = 'MISSING_OSS_BUCKET';
+      throw error;
+    }
+
+    const startTime = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      1,
+      0,
+      0,
+      0,
+      0
+    ).getTime();
+    const endTime = now.getTime();
+
+    const [bucketPoints, accountPoints] = await Promise.all([
+      this._queryCmsMetric({
+        startTime,
+        endTime,
+        dimensions: JSON.stringify({ BucketName: this._bucket })
+      }),
+      this._queryCmsMetric({ startTime, endTime })
+    ]);
+
+    // Bucket-level metering points are hourly usage values, so add the current month's points.
+    const bucketMonthlyInternetTxBytes = bucketPoints.reduce(
+      (total, point) => total + getMetricPointValue(point),
+      0
+    );
+
+    // Account-level MeteringInternetTX is a monthly cumulative series. Use the latest point.
+    const latestAccountPoint = [...accountPoints].sort(
+      (a, b) => getMetricPointTimestamp(b) - getMetricPointTimestamp(a)
+    )[0];
+    const accountMonthlyInternetTxBytes = getMetricPointValue(latestAccountPoint);
+
+    const latestTimestamp = Math.max(
+      0,
+      ...bucketPoints.map(getMetricPointTimestamp),
+      ...accountPoints.map(getMetricPointTimestamp)
+    );
+
+    return {
+      metricName: CMS_METRIC_INTERNET_TX,
+      bucketName: this._bucket,
+      bucketMonthlyInternetTxBytes,
+      accountMonthlyInternetTxBytes,
+      dataTimestamp: latestTimestamp || null,
+      queryStartTime: startTime,
+      queryEndTime: endTime,
+      cmsEndpoint: this._cmsEndpoint
+    };
+  }
+
+  async _queryCmsMetric({ startTime, endTime, dimensions }) {
+    const points = [];
+    let nextToken = '';
+
+    do {
+      const params = {
+        Namespace: CMS_NAMESPACE,
+        MetricName: CMS_METRIC_INTERNET_TX,
+        Period: CMS_PERIOD_SECONDS,
+        StartTime: String(startTime),
+        EndTime: String(endTime),
+        Length: CMS_PAGE_LENGTH
+      };
+
+      if (dimensions) params.Dimensions = dimensions;
+      if (nextToken) params.NextToken = nextToken;
+
+      const response = await this._requestCmsRpc('DescribeMetricList', params);
+      points.push(...parseCmsDatapoints(response?.Datapoints));
+      nextToken = String(response?.NextToken || '').trim();
+    } while (nextToken);
+
+    return points;
+  }
+
+  async _requestCmsRpc(action, apiParams) {
+    const commonParams = {
+      AccessKeyId: this._accessKeyId,
+      Action: action,
+      Format: 'JSON',
+      SignatureMethod: 'HMAC-SHA1',
+      SignatureNonce: crypto.randomUUID?.() || crypto.randomBytes(16).toString('hex'),
+      SignatureVersion: '1.0',
+      Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      Version: CMS_API_VERSION
+    };
+
+    const unsignedParams = { ...commonParams, ...apiParams };
+    const canonicalQuery = Object.keys(unsignedParams)
+      .sort()
+      .map(key => `${encodeRfc3986(key)}=${encodeRfc3986(unsignedParams[key])}`)
+      .join('&');
+
+    const stringToSign = `GET&%2F&${encodeRfc3986(canonicalQuery)}`;
+    const signature = crypto
+      .createHmac('sha1', `${this._accessKeySecret}&`)
+      .update(stringToSign)
+      .digest('base64');
+
+    const query = `${canonicalQuery}&Signature=${encodeRfc3986(signature)}`;
+    const requestUrl = `https://${this._cmsEndpoint}/?${query}`;
+
+    return await new Promise((resolve, reject) => {
+      const request = https.get(requestUrl, response => {
+        const chunks = [];
+        response.on('data', chunk => chunks.push(chunk));
+        response.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          let body;
+
+          try {
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            const error = new Error(`CloudMonitor returned invalid JSON: ${raw.slice(0, 300)}`);
+            error.code = 'CMS_INVALID_JSON';
+            error.statusCode = response.statusCode;
+            reject(error);
+            return;
+          }
+
+          const responseCode = String(body?.Code ?? response.statusCode ?? '');
+          const success = response.statusCode >= 200 && response.statusCode < 300 && body?.Success !== false && (responseCode === '200' || !body?.Code);
+
+          if (!success) {
+            const error = new Error(body?.Message || body?.message || `CloudMonitor request failed (${response.statusCode})`);
+            error.code = body?.Code || body?.code || 'CMS_REQUEST_FAILED';
+            error.statusCode = response.statusCode;
+            error.requestId = body?.RequestId;
+            reject(error);
+            return;
+          }
+
+          resolve(body);
+        });
+      });
+
+      request.setTimeout(CMS_REQUEST_TIMEOUT_MS, () => {
+        const error = new Error('CloudMonitor request timed out');
+        error.code = 'CMS_REQUEST_TIMEOUT';
+        request.destroy(error);
+      });
+
+      request.on('error', reject);
+    });
   }
 
   async listManagedFolders() {
@@ -216,3 +460,5 @@ export class OssStorageManager {
     }
   }
 }
+
+export { serializeCmsError };
