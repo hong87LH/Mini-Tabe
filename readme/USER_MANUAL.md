@@ -27,30 +27,17 @@ If you create a **Formula** column, you can reference other columns by putting t
 - **Example (Excel Mode)**: Start your formula with an equal sign `=`. E.g., `={Inventory} - {Sold}`.
 If you rename a referenced column, make sure to update your formula so it points to the correct new name.
 
-### Image Review, Cropping & Callout Annotations
+### Image Review & Callout Annotations
 When viewing images within an attachment column or generative image field:
-- **View Fullscreen**: Click the image to open the immersive Zoom Viewer. You can also use your mouse wheel to zoom continuously and drag to pan around the image for a comprehensive inspection.
+- **View Fullscreen**: Click the image to open the immersive Zoom Viewer.
 - **Add Annotations**: **Double-Click** anywhere directly on the image to drop a "Review Marker" (Annotation Pin).
 - **Manage Feedback**: You can define the state of an annotation marker (e.g., "Pending", "Resolved", or "Approved"). 
 - **Discussion Threads**: Reply inside an annotation pin to leave notes for tracking iterative design changes or QA tracking.
-- **Cropping & Composition Limits**: Switch to "Crop Mode" to pull up an aspect ratio reticle. Pan and zoom your master image freely behind the bounds and save the final crop to your record. The system supports full **editing and deletion** of any existing crops. The thumbnail will feature a specific "Crop" badge to easily distinguish it on your grid. *(Note: While in Standard Crop mode, bounding-box physics are enforced; you cannot drag the image out of bounds and accidentally expose negative space.)*
-- **Advanced Outpaint Mode**: Toggling the "Outpaint" checkbox unlocking the restrictive bounds and dropping you into an **Intelligent Intent-Recognizing** outpaint engine:
-    - **Auto Top-Aligned Strategy**: Every time you switch ratios or enter Outpaint mode, the system auto-calculates the relative dimensions of your image vs the target frame. It strategically defaults to a "Top-Aligned" position out of the box. This saves massive amounts of manual adjusting, particularly optimized for the frequent portrait/character "chest-up to full-body" expansions. 
-    - **Intelligent Intent Tracking**: While panning, the engine interprets your dragging pattern. If you drag vertically, it rigidly locks horizontal drifting, clamping you neatly to the center for up/down compositions. Similarly, dragging horizontally locks your vertical axis. Diagonal motion breaks these locks entirely, offering absolute freedom of movement over the background.
-    - **Pixel-Perfect Freedom**: By eliminating all previously forced 15px magnetic edge-snaps, you can define negative space and offset coordinates down to the precise pixel.
-    - An Outpaint configuration yields an **"Expand" badge** instead of a regular Crop pin! A saved outpaint image natively functions as a compositional base template, ready to be driven into Generative AI flows.
-    - (Note: Mouse-wheel zooming step sensitivity has been fine-tuned for Outpaint scenarios to provide a gentle, hyper-controlled zoom behavior against extreme boundary manipulations.)
 
 ### Desktop-First Local File Routing
 If you are running this application comprehensively as a desktop-installed app:
 - **Do Not Upload, Just Link**: You do not have to manually click and upload images taking up memory. You can directly paste the physical path of the image sitting on your computer (e.g., `C:\Users\YourName\Pictures\design.png`).
 - The system will intelligently mount these system paths and read them instantly, keeping your local performance perfectly sharp and bridging the gap between web capabilities and your desktop environment.
-
-### Data Link & Sync Between Cells
-When you select continuous vertical cells of the same column, you can establish a linkage between them:
-- **Establish Link**: Select two or more continuous vertical cells, right-click, and choose **Link cells**. When linked, a light purple border with a link icon will visually indicate the grouped status.
-- **Shared Data Engine**: Editing any cell within the linked group will simultaneously and automatically update all the other cells chained within that specific linkage.
-- **Unlink Content**: Right-click the linked group and select **Unlink cells** to break the bond, allowing cells to hold independent distinct data moving forward.
 
 ### AI Workflows & Batch Generation
 If your table features columns specifically geared towards artificial intelligence (like **Smart Text** or **AI Image** field types):
@@ -71,7 +58,6 @@ If you provide an OSS (Aliyun Object Storage) configuration through the settings
 ### Drag and Drop
 - **Columns**: Click and hold a column header to drag it left or right, reordering the grid.
 - **Rows**: Use the grip handle located at the far left edge of any row to reorder the row structure vertically.
-- **Column Coloring**: You can visually highlight columns by assigning a custom top border color to the header. Right-click the column header and select "Set field title color" or use the top edge option in the column dropdown menu, making crucial columns stand out instantly on the grid.
 - **Tables**: You can drag and drop table names in the left sidebar to sort them by relevance.
 
 ## 4. Advanced: Auto-Save & Backup Settings

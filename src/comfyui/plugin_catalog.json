@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-12",
+  "plugins": {
+    "comfyui-core-h3": {
+      "name": "ComfyUI Core with MiniMax H3",
+      "kind": "core",
+      "required": true,
+      "minimumVersion": "0.31.0",
+      "repository": "https://github.com/comfyanonymous/ComfyUI",
+      "portableDownload": "https://github.com/comfyanonymous/ComfyUI/releases/latest/download/ComfyUI_windows_portable_nvidia.7z",
+      "installMethod": "Upgrade ComfyUI itself; do not install this under custom_nodes.",
+      "providedNodeTypes": [
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3ReferenceToVideo",
+        "ResolutionSelector",
+        "PrimitiveFloat",
+        "ComfyMathExpression",
+        "LoadVideo",
+        "GetVideoComponents",
+        "LoadAudio",
+        "CreateVideo",
+        "SaveVideo",
+        "VAEDecodeAudio"
+      ]
+    },
+    "minimax-h3-turbo": {
+      "name": "ComfyUI-MiniMax-H3-Turbo",
+      "kind": "custom_node",
+      "required": true,
+      "repository": "https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git",
+      "installDirectory": "ComfyUI-MiniMax-H3-Turbo",
+      "installCommand": "git clone https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git ComfyUI-MiniMax-H3-Turbo",
+      "providedNodeTypes": ["MiniMaxH3TurboLoRA"],
+      "requiredForModes": ["fast"],
+      "notes": "Required by the registered Fast/Turbo templates. Quality mode does not use the Turbo LoRA node."
+    },
+    "hongs-node": {
+      "name": "Hongs-node",
+      "kind": "custom_node",
+      "required": true,
+      "repository": "https://github.com/hong87LH/Hongs-node.git",
+      "repositoryStatus": "published",
+      "bundledSourcePath": "ComfyUI/custom_nodes/Hongs-node",
+      "installDirectory": "Hongs-node",
+      "installCommand": "git clone https://github.com/hong87LH/Hongs-node.git Hongs-node",
+      "providedNodeTypes": ["H3TurboMixedReferenceFix"],
+      "requiredForWorkflows": ["minimax-h3-reference-router"],
+      "requiredForModes": ["fast"],
+      "notes": "Used when Fast mode combines an image or video reference with independent audio. No extra Python dependencies."
+    }
+  }
+}

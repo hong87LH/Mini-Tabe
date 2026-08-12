@@ -12,6 +12,7 @@ import { Parser } from 'expr-eval';
 import { getStringColor } from './lib/utils';
 import { getHandle, setHandle } from './lib/idb';
 import { resolveFieldValueForAI } from './components/Grid';
+import { parseSelectText, selectValueToText } from './lib/selectFieldConversion.js';
 
 const computeFormulaValue = (field: any, record: any, fields: any[]) => {
   if (!field.prompt) return '';
@@ -409,6 +410,51 @@ const GlobalFilterRule = ({ rule, index, data, lang, updateRule, removeRule }: {
     </div>
   );
 };
+
+function withDefaultComfyUIProvider(settings: any) {
+  const source = settings && typeof settings === 'object' ? settings : {};
+  const existingVideoProviders = Array.isArray(source.video)
+    ? source.video.filter(Boolean)
+    : source.video
+      ? [source.video]
+      : [];
+  const requiredLocalModels = ['minimax-h3-local', 'minimax-h3-Ref-local'];
+  const compatibleLocalAliases = [
+    'h3-fl', 'h3-ref', 'minimax-h3-first-last-local', 'minimax-h3-reference-local'
+  ];
+  const comfyIndex = existingVideoProviders.findIndex((provider: any) =>
+    provider?.provider === 'comfyui' ||
+    String(provider?.modelName || '').split(',').map((value: string) => value.trim()).includes('minimax-h3-local')
+  );
+  if (comfyIndex >= 0) {
+    const upgradedProviders = [...existingVideoProviders];
+    const current = upgradedProviders[comfyIndex];
+    const currentModels = String(current?.modelName || '').split(',').map((value: string) => value.trim()).filter(Boolean);
+    upgradedProviders[comfyIndex] = {
+      ...current,
+      name: current?.name || 'ComfyUI 本地 MiniMax H3 路由',
+      modelName: requiredLocalModels.join(', '),
+      modelAliases: Array.from(new Set([...compatibleLocalAliases, ...currentModels])).join(', ')
+    };
+    return { ...source, video: upgradedProviders };
+  }
+  return {
+    ...source,
+    video: [
+      ...existingVideoProviders,
+      {
+        id: 'comfyui-minimax-h3-local',
+        name: 'ComfyUI 本地 MiniMax H3 路由',
+        provider: 'comfyui',
+        endpoint: 'http://127.0.0.1:8188',
+        key: '',
+        modelName: requiredLocalModels.join(', '),
+        modelAliases: compatibleLocalAliases.join(', '),
+        enabled: true
+      }
+    ]
+  };
+}
 
 export default function App() {
   const [tables, setTablesInternal] = useState<any[]>(() => {
@@ -990,12 +1036,12 @@ export default function App() {
   const [modelSettings, setModelSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('bitable_model_settings_v2');
-      if (saved) return JSON.parse(saved);
+      if (saved) return withDefaultComfyUIProvider(JSON.parse(saved));
       // fallback to migration
       const savedV1 = localStorage.getItem('bitable_model_settings');
       if (savedV1) {
         const v1 = JSON.parse(savedV1);
-        return {
+        return withDefaultComfyUIProvider({
           text: {
             provider: v1.activeModel || 'openai',
             key: v1.activeModel === 'gemini' ? (v1.geminiKey || '') : (v1.openaiKey || ''),
@@ -1008,10 +1054,10 @@ export default function App() {
             endpoint: 'https://api.openai.com/v1',
             modelName: 'dall-e-3'
           }
-        };
+        });
       }
     } catch (e) {}
-    return {
+    return withDefaultComfyUIProvider({
       text: {
         provider: 'openai',
         key: '',
@@ -1024,7 +1070,7 @@ export default function App() {
         endpoint: 'https://api.openai.com/v1',
         modelName: 'dall-e-3'
       }
-    };
+    });
   });
 
   useEffect(() => {
@@ -1494,27 +1540,30 @@ export default function App() {
 
       // Converting TO text from select
       if ((type === 'text' || type === 'aiText') && (field.type === 'singleSelect' || field.type === 'multiSelect')) {
-         const optMap = new Map(options.map(o => [o.id, o.name]));
          newRecords = newRecords.map(r => {
             const v = r[fieldId];
-            if (!v) return r;
-            if (Array.isArray(v)) {
-              return { ...r, [fieldId]: v.map(id => optMap.get(id) || id).join(', ') };
-            }
-            return { ...r, [fieldId]: optMap.get(v) || v };
+            return { ...r, [fieldId]: selectValueToText(v, options) };
          });
       } 
       // Converting TO select FROM text
       else if ((type === 'singleSelect' || type === 'multiSelect') && (field.type === 'text' || field.type === 'aiText' || field.type === 'url')) {
-         const newOptions = [...options];
+         // Rebuild the option list from the current text values. Existing options
+         // are reused by name (stable id/color), but unused/orphaned tags disappear.
+         const existingOptionsByName = new Map(options.map(option => [option.name.trim(), option]));
+         const newOptions: typeof options = [];
          
          const getOrCreateOption = (val: string) => {
            const trimmed = val.trim();
            if (!trimmed) return null;
            let opt = newOptions.find(o => o.name === trimmed);
            if (!opt) {
+             opt = existingOptionsByName.get(trimmed);
+           }
+           if (!opt) {
              const colors = ['bg-blue-100 text-blue-800', 'bg-green-100 text-green-800', 'bg-orange-100 text-orange-800', 'bg-red-100 text-red-800', 'bg-purple-100 text-purple-800', 'bg-yellow-100 text-yellow-800'];
-             opt = { id: `opt_${Date.now()}_${Math.floor(Math.random()*1000)}`, name: trimmed, color: colors[newOptions.length % colors.length] };
+             opt = { id: `opt_${Date.now()}_${Math.floor(Math.random()*1000000)}`, name: trimmed, color: colors[newOptions.length % colors.length] };
+           }
+           if (!newOptions.some(option => option.id === opt!.id)) {
              newOptions.push(opt);
            }
            return opt.id;
@@ -1522,16 +1571,11 @@ export default function App() {
 
          newRecords = newRecords.map(r => {
             const v = r[fieldId];
-            if (typeof v === 'string') {
-               if (type === 'multiSelect') {
-                 const parts = v.split(',').map(s => s.trim()).filter(Boolean);
-                 const mapped = parts.map(getOrCreateOption).filter(Boolean);
-                 return { ...r, [fieldId]: mapped };
-               } else {
-                 return { ...r, [fieldId]: getOrCreateOption(v) };
-               }
+            const parts = parseSelectText(v, type === 'multiSelect');
+            if (type === 'multiSelect') {
+              return { ...r, [fieldId]: parts.map(getOrCreateOption).filter(Boolean) };
             }
-            return r;
+            return { ...r, [fieldId]: parts[0] ? getOrCreateOption(parts[0]) : '' };
          });
          options = newOptions;
 

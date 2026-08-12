@@ -1,20 +1,23 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "0.0.0",
+  "version": "2.5.5",
   "type": "module",
   "main": "main.js",
   "homepage": "./",
   "scripts": {
-    "dev:react": "vite --port=3000 --host=0.0.0.0",
-    "dev:electron": "wait-on http://127.0.0.1:3000 && electron .",
+    "dev:react": "vite --port=5173 --host=0.0.0.0 --strictPort",
+    "dev:electron": "wait-on http://127.0.0.1:5173 && electron .",
+    "dev:local": "concurrently -k -s first \"npm run dev:react\" \"npm run dev:electron\"",
     "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev:web": "vite --port=3000 --host=0.0.0.0 --strictPort",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
+    "test:comfyui": "node --test tests/comfyui_protocol.test.mjs",
+    "check:comfyui": "node scripts/check_comfyui_protocol.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "dist": "vite build && electron-builder",
-    "dev:local": "concurrently -k -s first \"npm run dev:react\" \"npm run dev:electron\""
+    "dist": "vite build && electron-builder"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
@@ -76,6 +79,9 @@
       "oss_reference_profiles.js",
       "oss_storage_manager.js",
       "media_job_runner.js",
+      "provider_registry.js",
+      "comfyui_launcher.js",
+      "comfyui/**/*",
       "resumable_downloader.js",
       "package.json"
     ],

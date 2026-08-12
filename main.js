@@ -54,6 +54,85 @@ function safeFileURLToPath(urlStr) {
   }
 }
 
+function readSynchsafeInt(buffer, offset) {
+  return ((buffer[offset] & 0x7f) << 21) | ((buffer[offset + 1] & 0x7f) << 14) |
+    ((buffer[offset + 2] & 0x7f) << 7) | (buffer[offset + 3] & 0x7f);
+}
+
+function imageMimeFromBuffer(buffer, fallback = 'image/jpeg') {
+  if (buffer?.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  if (buffer?.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) return 'image/jpeg';
+  if (buffer?.subarray(0, 4).toString('ascii') === 'RIFF' && buffer?.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return fallback || 'image/jpeg';
+}
+
+function extractId3Artwork(buffer) {
+  if (buffer.subarray(0, 3).toString('ascii') !== 'ID3' || buffer.length < 10) return null;
+  const version = buffer[3];
+  const tagEnd = Math.min(buffer.length, 10 + readSynchsafeInt(buffer, 6));
+  let offset = 10;
+  while (offset + 10 <= tagEnd) {
+    const id = buffer.subarray(offset, offset + 4).toString('ascii');
+    if (!id.trim()) break;
+    const size = version === 4 ? readSynchsafeInt(buffer, offset + 4) : buffer.readUInt32BE(offset + 4);
+    const body = buffer.subarray(offset + 10, Math.min(tagEnd, offset + 10 + size));
+    if (id === 'APIC' && body.length > 8) {
+      const encoding = body[0];
+      const mimeEnd = body.indexOf(0, 1);
+      if (mimeEnd < 0) return null;
+      const mime = body.subarray(1, mimeEnd).toString('latin1') || 'image/jpeg';
+      let imageStart = mimeEnd + 2;
+      const terminator = encoding === 1 || encoding === 2 ? Buffer.from([0, 0]) : Buffer.from([0]);
+      const descriptionEnd = body.indexOf(terminator, imageStart);
+      imageStart = descriptionEnd >= 0 ? descriptionEnd + terminator.length : imageStart;
+      const artwork = body.subarray(imageStart);
+      if (artwork.length > 32) return { mime: imageMimeFromBuffer(artwork, mime), buffer: artwork };
+    }
+    offset += 10 + size;
+  }
+  return null;
+}
+
+function extractFlacArtwork(buffer) {
+  if (buffer.subarray(0, 4).toString('ascii') !== 'fLaC') return null;
+  let offset = 4;
+  while (offset + 4 <= buffer.length) {
+    const header = buffer[offset];
+    const type = header & 0x7f;
+    const size = buffer.readUIntBE(offset + 1, 3);
+    const body = buffer.subarray(offset + 4, offset + 4 + size);
+    if (type === 6 && body.length > 32) {
+      let cursor = 4;
+      const mimeLength = body.readUInt32BE(cursor); cursor += 4;
+      const mime = body.subarray(cursor, cursor + mimeLength).toString('utf8'); cursor += mimeLength;
+      const descriptionLength = body.readUInt32BE(cursor); cursor += 4 + descriptionLength + 16;
+      const dataLength = body.readUInt32BE(cursor); cursor += 4;
+      const artwork = body.subarray(cursor, cursor + dataLength);
+      if (artwork.length > 32) return { mime: imageMimeFromBuffer(artwork, mime), buffer: artwork };
+    }
+    offset += 4 + size;
+    if (header & 0x80) break;
+  }
+  return null;
+}
+
+function extractMp4Artwork(buffer) {
+  const covr = buffer.indexOf(Buffer.from('covr'));
+  if (covr < 4) return null;
+  const atomSize = buffer.readUInt32BE(covr - 4);
+  const atomEnd = Math.min(buffer.length, covr - 4 + atomSize);
+  const data = buffer.indexOf(Buffer.from('data'), covr + 4);
+  if (data < 4 || data >= atomEnd) return null;
+  const dataSize = buffer.readUInt32BE(data - 4);
+  const artwork = buffer.subarray(data + 12, Math.min(atomEnd, data - 4 + dataSize));
+  return artwork.length > 32 ? { mime: imageMimeFromBuffer(artwork), buffer: artwork } : null;
+}
+
+function extractEmbeddedAudioArtwork(filePath) {
+  const buffer = fs.readFileSync(filePath);
+  return extractId3Artwork(buffer) || extractFlacArtwork(buffer) || extractMp4Artwork(buffer);
+}
+
 const __filename = safeFileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -231,6 +310,22 @@ app.whenReady().then(async () => {
     }
   });
 
+  ipcMain.handle('check-comfyui', async (event, options = {}) => {
+    try {
+      const { ensureComfyUIAvailable } = await import('./comfyui_launcher.js');
+      await ensureComfyUIAvailable({
+        endpoint: options.endpoint || 'http://127.0.0.1:8188',
+        batPath: options.comfyuiBatPath
+      });
+      const { ComfyUIClient } = await import('./comfyui/comfyui_client.js');
+      const client = new ComfyUIClient('', options.endpoint || 'http://127.0.0.1:8188');
+      return await client.healthCheck(options.model || 'minimax-h3-local');
+    } catch (err) {
+      console.error('check-comfyui error:', err);
+      return { ok: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('read-local-file', async (event, filePath, options = {}) => {
     try {
       if (filePath.startsWith('file://')) {
@@ -275,9 +370,24 @@ app.whenReady().then(async () => {
     return null;
   });
 
+  ipcMain.handle('select-comfyui-bat', async () => {
+    const win = BrowserWindow.getFocusedWindow();
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      title: 'Select ComfyUI startup BAT',
+      properties: ['openFile'],
+      filters: [{ name: 'Windows batch file', extensions: ['bat'] }]
+    });
+    if (!canceled && filePaths.length > 0) return filePaths[0];
+    return null;
+  });
+
   ipcMain.handle('get-thumbnail', async (event, filePath, size = { width: 150, height: 150 }) => {
     try {
       if (!fs.existsSync(filePath)) return null;
+      if (/\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(filePath)) {
+        const artwork = extractEmbeddedAudioArtwork(filePath);
+        return artwork ? `data:${artwork.mime};base64,${artwork.buffer.toString('base64')}` : null;
+      }
       // 调用操作系统底层的缩略图服务！速度极快且省内存。
       const thumbnail = await nativeImage.createThumbnailFromPath(filePath, size);
       if(thumbnail && !thumbnail.isEmpty()) {
@@ -456,7 +566,13 @@ ipcMain.handle('continue-network-job-polling', async (event, localJobId) => {
   const jobStore = getNetworkJobStore();
   const job = await jobStore.getJob(localJobId);
   if (job && job.taskId) {
+    await jobStore.patch(localJobId, {
+      phase: 'polling',
+      pollingStartedAt: new Date().toISOString(),
+      lastError: null
+    });
     const { startPolling } = await import('./network_polling.js');
     startPolling(job.localJobId, job.taskId, jobStore);
+    await notifyRenderer(jobStore, localJobId);
   }
 });

@@ -41,24 +41,12 @@ The engine dynamically computes fields whenever a record changes.
 ### 4.3 Animation & Splash Screen
 The initial splash screen uses SVG drawing animations (`stroke-dasharray/offset`) combined with CSS `fractalNoise` displacement filters to create a rough, hand-drawn paper look. React detects when the component mounts and dispatches `window.removeInitialSplash()` to unmount the CSS layer smoothly once the JS engine is fully initialized.
 
-### 4.4 Image Annotation, Cropping, & Outpainting Engine
-The platform includes an advanced spatial rendering layer within `Grid.tsx` for complex image manipulation:
-- **Review Markers**: Converts continuous `X/Y` coordinate clicks into visual markers overlaying the `ZoomableImage` component. Review threads map back to record IDs.
-- **Cropping Mathematics**: Standard cropping relies on CSS mask boundaries. The engine calculates precise drag-and-drop deltas clamped strictly against image bounds (`maxPosX/Y`), mathematically refusing drags that would expose negative space. The engine translates visible crops onto a temporary HTML `<canvas>` to generate final Base64 representations.
-- **Outpaint Bypass**: When `isOutpaintMode` is toggled true, the clamping logic is deliberately removed. The engine permits the drag vectors to move beyond the image's coordinate limits, drawing explicit black fill (`ctx.fillRect(0, 0, targetW, targetH)`) over the newly exposed canvas area. This prepares composite negative-space templates directly injectable into an upstream AI-Generative Stable Diffusion model.
-
-### 4.5 Desktop & Electron Integration
+### 4.4 Desktop & Electron Integration
 If embedded within an Electron environment (such as `main.js` execution):
 - **Local File System Parsing via Direct Paths**: The image processing engine effortlessly bridges the gap between web URLs and absolute system paths. Paste an absolute path (`C:\` / `/Users/`) and the UI renders it as a `file://` protocol dynamically without demanding traditional file blob uploads.
 - **IPC File Downloader**: Instead of relying on jarring HTML file-save dialogues, the system integrates seamlessly with `electronAPI.downloadFile` using IPC. This allows background downloading and continuous caching integrations without interrupting the user.
 - **Image Annotations & Reviews**: Features an independent overlay matrix tied to the `ZoomableImage` component, converting `X/Y` coordinate clicks into visual markers. These review threads map directly back into the dataset objects, binding design feedback physically to the active cell record.
 - **Ali-OSS Cloud Backup**: Contains an integrated `oss_uploader` utilizing Node's `sharp` library to automatically resize and transcode assets into maximal 3072px width `.webp` resources. The service leverages a Bi-directional CSV synchronization mechanic that continuously checks mapping timestamps to keep cloud and local directories unified.
-
-### 4.6 Cell Linking & Two-Way Sync
-The `Grid` component supports logical data grouping known as "Linked Cells".
-- **Tracking Mechanism**: Link relationships are tracked inside the `GridData.cellLinks` property using a dictionary format mapping `recordId-fieldId` to a unique `groupId` (e.g., `group_16843232...`).
-- **Cascade Updates**: The core `handleUpdateRecord` and `handleUpdateRecordsBatch` logic dynamically detects if a modified cell possesses a `groupId`. If so, it broadcasts identical `[fieldId]: value` property changes to all sibling records mapped to that specific group ID.
-- **Visual Presentation**: Linked cells leverage intelligent border/shadow manipulation (`inset 1px 0 0 0 #c084fc`) within `Cell` rendering to draw grouped bounding boxes natively, reducing unnecessary DOM clutter while retaining pristine visual separation from standard selections.
 
 ## 5. Deployment Details
 Since the primary logic exists on the client side, the project compiles to static assets (`dist` folder). 

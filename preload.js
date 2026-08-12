@@ -18,10 +18,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getThumbnail: (path, size) => ipcRenderer.invoke('get-thumbnail', path, size),
   readLocalFile: (filePath, options) => ipcRenderer.invoke('read-local-file', filePath, options),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
+  selectComfyUIBat: () => ipcRenderer.invoke('select-comfyui-bat'),
   generateLingwuImage: (options) => ipcRenderer.invoke('generate-lingwu-image', options),
   checkOssStorage: (ossConfig) => ipcRenderer.invoke('check-oss-storage', ossConfig),
   executeOssCleanup: (ossConfig) => ipcRenderer.invoke('execute-oss-cleanup', ossConfig),
   generateLingwuVideo: (options) => ipcRenderer.invoke('generate-lingwu-video', options),
+  checkComfyUI: (options) => ipcRenderer.invoke('check-comfyui', options),
   queryNetworkJob: (localJobId) => ipcRenderer.invoke('query-network-job', localJobId),
   listNetworkJobs: () => ipcRenderer.invoke('list-network-jobs'),
   retryDownloadJob: (localJobId) => ipcRenderer.invoke('retry-download-job', localJobId),
@@ -37,4 +39,3 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   }
 });
-

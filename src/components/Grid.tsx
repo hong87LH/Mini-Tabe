@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
-import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste } from 'lucide-react';
+import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -42,10 +42,16 @@ const normalizeProviderList = (value: any): any[] => {
 };
 
 const parseProviderModels = (provider: any): string[] => {
-  return String(provider?.modelName || '')
+  return [provider?.modelName, provider?.modelAliases]
+    .filter(Boolean)
+    .join(',')
     .split(',')
     .map(model => model.trim())
     .filter(Boolean);
+};
+
+const parseProviderDisplayModels = (provider: any): string[] => {
+  return String(provider?.modelName || '').split(',').map(model => model.trim()).filter(Boolean);
 };
 
 const isProviderEnabled = (provider: any): boolean => {
@@ -59,7 +65,7 @@ const getEnabledProviders = (value: any): any[] => {
 const getAllConfiguredModels = (value: any): string[] => {
   return Array.from(
     new Set(
-      normalizeProviderList(value).flatMap(parseProviderModels)
+      normalizeProviderList(value).flatMap(parseProviderDisplayModels)
     )
   );
 };
@@ -295,7 +301,9 @@ const ZoomableImage = ({
   sourceViewMode?: 'table' | 'gallery'
 }) => {
   const src = item.mappedUrl;
-  const isVideo = src.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/);
+  const mediaPath = String(src || '').toLowerCase();
+  const isVideo = /\.(mp4|webm|mov|mkv)(\?|$)/.test(mediaPath) || mediaPath.startsWith('data:video');
+  const isAudio = /\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/.test(mediaPath) || mediaPath.startsWith('data:audio');
   const refCellsData: any[] = item.refCells || item.refUrls || [];
   // normalize so refCells is always string[][]
   const refCells: string[][] = refCellsData.map(r => Array.isArray(r) ? r : [r]);
@@ -953,7 +961,24 @@ const ZoomableImage = ({
            setIsDragging(false);
         }}
       >
-        {isVideo ? (
+        {isAudio ? (
+           <div className="w-[min(680px,90vw)] rounded-xl bg-gray-950 border border-white/10 shadow-2xl p-8 flex flex-col items-center gap-5 pointer-events-auto">
+             <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center shadow-lg">
+               <Music2 className="w-12 h-12 text-white" />
+             </div>
+             <div className="text-white text-sm max-w-full truncate px-4" title={item.name || item.url || src}>
+               {item.name || String(item.url || src).split('/').pop()?.split('\\').pop() || '音频附件'}
+             </div>
+             <audio
+               src={src}
+               className="w-full"
+               controls
+               autoPlay
+               preload="metadata"
+               onLoadedData={() => setImageLoaded(true)}
+             />
+           </div>
+        ) : isVideo ? (
            <video 
              ref={imgRef as any}
              src={src} 
@@ -1160,6 +1185,8 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
   }
 
   const isVideo = sourcePath.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/) || file?.type.startsWith('video/');
+  const isAudio = sourcePath.toLowerCase().match(/\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/) || file?.type.startsWith('audio/');
+  if (isAudio) return '';
 
   if (!isVideo) {
       let resultUrl = sourcePath;
@@ -1307,7 +1334,15 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
         setSrc(''); // Reset when path changes and it's not cached yet, instead of keeping old image
     }
 
-    const isVideo = path.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/);
+    const lowerPath = path.toLowerCase();
+    const isAudio = /\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/.test(lowerPath) || lowerPath.startsWith('data:audio');
+    const isVideo = /\.(mp4|webm|mov|mkv)(\?|$)/.test(lowerPath);
+    if (isAudio) {
+       getOrGenerateThumbnail(path).then(fetched => {
+         if (isMounted) setSrc(fetched);
+       });
+       return;
+    }
     
     if (!isVideo) {
        // Images resolve very quickly without blocking now, we rely on native loading="lazy" and decoding="async"
@@ -1341,16 +1376,21 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
     };
   }, [path]);
 
-  return <img 
-    ref={imgRef} 
-    src={src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='} 
-    alt={alt} 
-    className={className} 
-    title={title} 
-    onClick={onClick} 
-    loading="lazy" 
-    decoding="async"
-  />;
+  const isAudio = /\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/.test(path.toLowerCase()) || path.toLowerCase().startsWith('data:audio');
+  if (isAudio) {
+    return (
+      <span className="relative block w-full h-full">
+        {src ? <img src={src} alt={alt} className={className} title={title} onClick={onClick} loading="lazy" decoding="async" /> : (
+          <button type="button" className={`${className} bg-gradient-to-br from-slate-800 to-indigo-900`} title={title || alt} onClick={onClick} />
+        )}
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-indigo-950/20 rounded">
+          <Music2 className="w-1/2 h-1/2 text-white/90 drop-shadow-md" />
+        </span>
+      </span>
+    );
+  }
+
+  return <img ref={imgRef} src={src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='} alt={alt} className={className} title={title} onClick={onClick} loading="lazy" decoding="async" />;
 };
 
 type LocateCellRequest = {
@@ -3304,12 +3344,12 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
 
           if (imgSet.provider === 'gemini') {
             throw new Error("Local Gemini Image generation not natively supported in this preview without vertex AI. Please use OpenAI-compatible proxy for images.");
-          } else if (imgSet.provider === 'lingwu') {
+          } else if (imgSet.provider === 'lingwu' || imgSet.provider === 'comfyui') {
             const w = window as any;
             if (!w.electronAPI || !w.electronAPI.generateLingwuImage) {
-               throw new Error("Lingwu AI Image generation requires the application to run inside the electron client.");
+               throw new Error("Local image generation requires the application to run inside the Electron client.");
             }
-            if (!imgSet.key) throw new Error("Lingwu API Key is required for Image Generation");
+            if (imgSet.provider === 'lingwu' && !imgSet.key) throw new Error("Lingwu API Key is required for Image Generation");
             
             // Map the prompt and params
             const params: any = {
@@ -3358,13 +3398,15 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                         recordId: record.id,
                         fieldId: field.id,
                         viewMode: viewMode,
-                        generationIndex: i,
-                        prompt: finalPrompt,
+                         generationIndex: i,
+                         provider: imgSet.provider,
+                         prompt: finalPrompt,
                         model: resolvedModel,
                         params: params,
                         count: 1,
                         apiKey: imgSet.key,
-                        endpoint: imgSet.endpoint || 'https://api.lingwu.example.com',
+                        endpoint: imgSet.endpoint || (imgSet.provider === 'comfyui' ? 'http://127.0.0.1:8188' : 'https://api.lingwu.example.com'),
+                        comfyuiBatPath: imgSet.provider === 'comfyui' ? (localStorage.getItem('bitable_comfyui_bat_path') || '') : '',
                         ossConfig: modelSettings?.oss,
                         downloadConfig: {
                             filename: finalFilename,
@@ -3518,14 +3560,14 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
              lang
            );
 
-           if (vidSet.provider !== 'lingwu') {
-              throw new Error("Only Lingwu provider is currently supported for aiVideo.");
+           if (vidSet.provider !== 'lingwu' && vidSet.provider !== 'comfyui') {
+              throw new Error("This video provider is not supported. Please select Lingwu or ComfyUI.");
            }
            const w = window as any;
            if (!w.electronAPI || !w.electronAPI.generateLingwuVideo) {
               throw new Error("Lingwu AI Video generation requires the application to run inside the electron client.");
            }
-           if (!vidSet.key) throw new Error("Lingwu API Key is required for Video Generation");
+           if (vidSet.provider === 'lingwu' && !vidSet.key) throw new Error("Lingwu API Key is required for Video Generation");
 
            // Categorize media into images, videos, audio based on extension or prefix
            const images: string[] = [];
@@ -3534,9 +3576,9 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
            finalOriginalUrls.forEach(url => {
               if (!url) return;
               const lowerUrl = url.toLowerCase();
-              if (lowerUrl.includes('.mp4') || lowerUrl.includes('.webm') || lowerUrl.includes('.mov') || lowerUrl.startsWith('local-video:')) {
+              if (lowerUrl.includes('.mp4') || lowerUrl.includes('.webm') || lowerUrl.includes('.mov') || lowerUrl.includes('.mkv') || lowerUrl.startsWith('local-video:')) {
                  videos.push(url);
-              } else if (lowerUrl.includes('.mp3') || lowerUrl.includes('.wav') || lowerUrl.startsWith('data:audio')) {
+              } else if (lowerUrl.includes('.mp3') || lowerUrl.includes('.wav') || lowerUrl.includes('.flac') || lowerUrl.includes('.m4a') || lowerUrl.includes('.aac') || lowerUrl.includes('.ogg') || lowerUrl.includes('.opus') || lowerUrl.startsWith('data:audio') || lowerUrl.startsWith('local-audio:')) {
                  audio.push(url);
               } else {
                  images.push(url);
@@ -3566,6 +3608,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 fieldId: field.id,
                 viewMode: viewMode,
                 generationIndex: 0,
+                provider: vidSet.provider,
                 prompt: promptString,
                 model: resolvedModel,
                 params: params,
@@ -3573,7 +3616,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 videos: videos,
                 audio: audio,
                 apiKey: vidSet.key,
-                endpoint: vidSet.endpoint || 'https://api.ai6700.com/api',
+                endpoint: vidSet.endpoint || (vidSet.provider === 'comfyui' ? 'http://127.0.0.1:8188' : 'https://api.ai6700.com/api'),
+                comfyuiBatPath: vidSet.provider === 'comfyui' ? (localStorage.getItem('bitable_comfyui_bat_path') || '') : '',
                 ossConfig: modelSettings?.oss,
                 downloadConfig: { filename: finalFilename, folderPath: finalFolderPath }
            });
@@ -5755,7 +5799,7 @@ function HeaderCell({
                        
                        <div className="grid grid-cols-2 gap-2">
                          <div className="flex flex-col">
-                            <label className="block text-[10px] text-gray-500 mb-1">分辨率/FPS (选)</label>
+                            <label className="block text-[10px] text-gray-500 mb-1">清晰度（可引用字段）</label>
                             <div className="flex items-stretch border border-gray-300 bg-white rounded">
                               <div className="relative flex-1 w-0">
                                 <select 
@@ -5763,9 +5807,11 @@ function HeaderCell({
                                    value={draftAiVideoConfig.resolution || '1080P'}
                                    onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, resolution: e.target.value }))}
                                 >
-                                   {!['720p', '1080p', '2k', '4k'].includes((draftAiVideoConfig.resolution || '1080P').toLowerCase()) && (
+                                   {!['360p', '480p', '720p', '1080p', '2k', '4k'].includes((draftAiVideoConfig.resolution || '1080P').toLowerCase()) && (
                                       <option value={draftAiVideoConfig.resolution}>{draftAiVideoConfig.resolution}</option>
                                    )}
+                                   <option value="360P">360P</option>
+                                   <option value="480P">480P</option>
                                    <option value="720P">720P</option>
                                    <option value="1080P">1080P</option>
                                    <option value="2K">2K</option>
@@ -5861,10 +5907,12 @@ function HeaderCell({
                                    value={draftAiVideoConfig.duration || '10'}
                                    onChange={e => setDraftAiVideoConfig(prev => ({ ...prev, duration: e.target.value }))}
                                 >
-                                   {!['5', '10', '15', '20', '25', '30'].includes(String(draftAiVideoConfig.duration || '10')) && (
+                                   {!['3', '5', '8', '10', '15', '20', '25', '30'].includes(String(draftAiVideoConfig.duration || '10')) && (
                                       <option value={draftAiVideoConfig.duration}>{draftAiVideoConfig.duration}</option>
                                    )}
-                                   <option value="5">5</option>
+                                    <option value="3">3</option>
+                                    <option value="5">5</option>
+                                    <option value="8">8</option>
                                    <option value="10">10</option>
                                    <option value="15">15</option>
                                    <option value="20">20</option>
@@ -7453,7 +7501,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
       <input 
         type="file" 
         multiple 
-        accept="image/*,video/*" 
+        accept="image/*,video/*,audio/*" 
         className="hidden" 
         ref={fileInputRef} 
         onChange={handleFileChange} 

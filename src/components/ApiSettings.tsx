@@ -61,6 +61,7 @@ const hasModelOverlap = (firstProvider: any, secondProvider: any): boolean => {
 export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const [psPath, setPsPath] = useState(localStorage.getItem('bitable_ps_path') || '');
+  const [comfyuiBatPath, setComfyuiBatPath] = useState(localStorage.getItem('bitable_comfyui_bat_path') || '');
   const [storageData, setStorageData] = useState<any>(null);
   const [storageLoading, setStorageLoading] = useState(false);
 
@@ -309,8 +310,9 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
                  >
                    <option value="openai">OpenAI Format</option>
                    <option value="gemini">Gemini Format</option>
-                   <option value="gemini-custom">Gemini Custom</option>
-                   <option value="lingwu">灵悟AI Format</option>
+                    <option value="gemini-custom">Gemini Custom</option>
+                    <option value="lingwu">灵悟AI Format</option>
+                    <option value="comfyui">ComfyUI Local</option>
                  </select>
               </div>
               <button 
@@ -741,6 +743,40 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
               }
             }}
           />
+          <div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder={lang === 'en' ? 'Optional ComfyUI startup BAT path' : '可选：ComfyUI 启动 BAT 路径'}
+                className="flex-1 border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-mono text-gray-600"
+                value={comfyuiBatPath}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setComfyuiBatPath(val);
+                  if (val) localStorage.setItem('bitable_comfyui_bat_path', val);
+                  else localStorage.removeItem('bitable_comfyui_bat_path');
+                }}
+              />
+              <button
+                type="button"
+                className="px-3 py-2 rounded border border-gray-200 text-sm text-gray-600 hover:bg-gray-50"
+                onClick={async () => {
+                  const selected = await (window as any).electronAPI?.selectComfyUIBat?.();
+                  if (selected) {
+                    setComfyuiBatPath(selected);
+                    localStorage.setItem('bitable_comfyui_bat_path', selected);
+                  }
+                }}
+              >
+                {lang === 'en' ? 'Browse' : '选择'}
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-gray-400">
+              {lang === 'en'
+                ? 'Optional. If a localhost ComfyUI endpoint cannot be reached, the app starts this BAT in a visible command window and waits for recovery.'
+                : '非必填。本地 ComfyUI 端口无法连接时，应用会用可见黑色窗口启动此 BAT，并等待服务恢复。'}
+            </p>
+          </div>
         </div>
       </div>
     </div>

@@ -1,0 +1,88 @@
+{
+  "id": "minimax-h3-reference-router",
+  "aliases": [
+    "h3-ref",
+    "minimax-h3-Ref-local",
+    "minimax-h3-reference-local",
+    "minimax-h3-multiref-local",
+    "minimax-h3-multimodal-local"
+  ],
+  "name": "MiniMax H3 多参素材路由",
+  "provider": "comfyui",
+  "mediaType": "video",
+  "templates": {
+    "fast": "fast_api.json",
+    "quality": "quality_api.json"
+  },
+  "defaults": {
+    "mode": "fast",
+    "resolution": "720P",
+    "aspectRatio": "16:9",
+    "duration": 5,
+    "sound": false
+  },
+  "capabilities": {
+    "inputImages": { "min": 0, "max": 9 },
+    "inputVideos": { "min": 0, "max": 3 },
+    "inputAudio": { "min": 0, "max": 3 },
+    "minTotalReferences": 1,
+    "aspectRatios": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"],
+    "resolutions": ["360P", "480P", "720P", "1080P"],
+    "rawMegapixels": { "min": 0.1, "max": 16.0 },
+    "modes": ["fast", "quality"],
+    "durations": [3, 5, 8, 10, 15],
+    "audio": true
+  },
+  "bindings": {
+    "prompt": "136.inputs.prompt",
+    "aspectRatio": "115.inputs.aspect_ratio",
+    "megapixels": "115.inputs.megapixels",
+    "duration": "132.inputs.value",
+    "seed": "129.inputs.noise_seed",
+    "outputPrefix": "92.inputs.filename_prefix",
+    "createVideoAudio": "130.inputs.audio"
+  },
+  "routing": {
+    "type": "reference-multimodal",
+    "conditioningNodeId": "136",
+    "dynamicNodeBase": 200,
+    "videoEmbeddedAudio": "disabled-turbo-shape-mismatch",
+    "fastMixedReferenceFix": {
+      "nodeType": "H3TurboMixedReferenceFix",
+      "nodeId": "280",
+      "guiderNodeId": "126",
+      "sharedReferenceTime": 1.0
+    }
+  },
+  "maps": {
+    "aspectRatio": {
+      "1:1": "1:1 (Square)",
+      "2:3": "2:3 (Portrait Photo)",
+      "3:2": "3:2 (Photo)",
+      "3:4": "3:4 (Portrait Standard)",
+      "4:3": "4:3 (Standard)",
+      "9:16": "9:16 (Portrait Widescreen)",
+      "16:9": "16:9 (Widescreen)",
+      "21:9": "21:9 (Ultrawide)"
+    },
+    "resolutionTiers": { "360P": 360, "480P": 480, "720P": 720, "1080P": 1080 },
+    "rawMegapixels": { "min": 0.1, "max": 16.0 }
+  },
+  "output": { "node": "92", "type": "video" },
+  "requiredNodeTypes": [
+    "MiniMaxH3ReferenceToVideo",
+    "MiniMaxH3TurboLoRA",
+    "ResolutionSelector",
+    "LoadVideo",
+    "GetVideoComponents",
+    "LoadAudio",
+    "H3TurboMixedReferenceFix",
+    "SaveVideo",
+    "CreateVideo"
+  ],
+  "pluginRequirements": [
+    { "pluginId": "comfyui-core-h3", "modes": ["fast", "quality"] },
+    { "pluginId": "minimax-h3-turbo", "modes": ["fast"] },
+    { "pluginId": "hongs-node", "modes": ["fast"] }
+  ]
+}

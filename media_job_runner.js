@@ -1,11 +1,12 @@
-import { LingwuClient } from './lingwu_client.js';
 import { NetworkJobStore } from './network_job_store.js';
 import { startPolling } from './network_polling.js';
 import { OssStorageManager } from './oss_storage_manager.js';
+import { createMediaProviderClient, normalizeProviderName } from './provider_registry.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { NetworkStageError } from './network_utils.js';
+import { ensureComfyUIAvailable } from './comfyui_launcher.js';
 
 async function safeImportElectron() {
     return await import('electron');
@@ -91,17 +92,18 @@ export class MediaJobRunner {
     }
 
     async createJob({ type, options }) {
-        const { prompt, model, params, count, apiKey, endpoint, ossConfig, tableId, recordId, fieldId, generationIndex, viewMode, downloadConfig } = options;
+        const { prompt, model, params, count, apiKey, endpoint, ossConfig, comfyuiBatPath, tableId, recordId, fieldId, generationIndex, viewMode, downloadConfig } = options;
+        const provider = normalizeProviderName(options.provider);
         const localJobId = crypto.randomUUID();
 
         // 1. Create Job with preparing phase
         await this.jobStore.upsert({
             localJobId,
-            provider: 'lingwu',
+            provider,
             mediaType: type,
             model,
             phase: 'preparing',
-            credentials: { apiKey, endpoint, ossConfig },
+            credentials: { apiKey, endpoint, ossConfig, comfyuiBatPath },
             downloadConfig,
             tableId,
             recordId,
@@ -112,6 +114,9 @@ export class MediaJobRunner {
         });
 
         try {
+            if (provider === 'comfyui') {
+                await ensureComfyUIAvailable({ endpoint, batPath: comfyuiBatPath });
+            }
             await this.jobStore.patch(localJobId, { phase: 'uploading' });
 
             let uploader = null;
@@ -130,13 +135,21 @@ export class MediaJobRunner {
             let uploadedImages = [], uploadedVideos = [], uploadedAudio = [];
             
             if (type === 'image' && params && params.images) {
-                uploadedImages = await this.uploadMediaList(params.images, uploader, modelProfile);
+                uploadedImages = provider === 'comfyui'
+                    ? [...params.images]
+                    : await this.uploadMediaList(params.images, uploader, modelProfile);
                 params.images = uploadedImages;
             } else if (type === 'video') {
                 const { images, videos, audio } = options;
-                uploadedImages = await this.uploadMediaList(images, uploader);
-                uploadedVideos = await this.uploadMediaList(videos, uploader);
-                uploadedAudio = await this.uploadMediaList(audio, uploader);
+                if (provider === 'comfyui') {
+                    uploadedImages = Array.isArray(images) ? [...images] : [];
+                    uploadedVideos = Array.isArray(videos) ? [...videos] : [];
+                    uploadedAudio = Array.isArray(audio) ? [...audio] : [];
+                } else {
+                    uploadedImages = await this.uploadMediaList(images, uploader);
+                    uploadedVideos = await this.uploadMediaList(videos, uploader);
+                    uploadedAudio = await this.uploadMediaList(audio, uploader);
+                }
                 
                 if (uploadedImages.length > 0) { params.images = uploadedImages; }
                 if (uploadedVideos.length > 0) { params.videos = uploadedVideos; }
@@ -147,7 +160,7 @@ export class MediaJobRunner {
             const uploadedUrls = [...uploadedImages, ...uploadedVideos, ...uploadedAudio];
             
             // Asynchronously trigger OSS cleanup
-            if (uploadedUrls.length > 0 && ossConfig) {
+            if (provider !== 'comfyui' && uploadedUrls.length > 0 && ossConfig) {
                 const storageManager = new OssStorageManager(ossConfig);
                 storageManager.runAutomaticCleanup(0).catch(e => console.error('OSS cleanup check failed:', e));
             }
@@ -159,17 +172,17 @@ export class MediaJobRunner {
 
             // Prepare payload
             let finalParams = params || {};
-            if (type === 'video') {
+            if (type === 'video' && provider !== 'comfyui') {
                 if (Object.keys(finalParams).length > 0) {
                     const { mapVideoParams } = await import('./video_param_mapper.js');
                     finalParams = mapVideoParams(model, finalParams);
                 }
-            } else if (type === 'image') {
+            } else if (type === 'image' && provider !== 'comfyui') {
                 const { buildLingwuImageParams } = await import('./lingwu_image_model_profiles.js');
                 finalParams = buildLingwuImageParams({ model, params: finalParams });
             }
 
-            const client = new LingwuClient(apiKey, endpoint);
+            const client = createMediaProviderClient(provider, { apiKey, endpoint });
             
             // 4. POST createTask
             let startData;

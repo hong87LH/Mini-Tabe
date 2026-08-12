@@ -1,0 +1,88 @@
+{
+  "id": "minimax-h3-first-last-router",
+  "aliases": [
+    "h3-fl",
+    "minimax-h3-local",
+    "minimax-h3-first-last-local",
+    "minimax-h3-first-last",
+    "minimax-h3",
+    "comfyui-minimax-h3"
+  ],
+  "name": "MiniMax H3 首尾帧路由",
+  "provider": "comfyui",
+  "mediaType": "video",
+  "templates": {
+    "fast": "fast_api.json",
+    "quality": "quality_api.json"
+  },
+  "defaults": {
+    "mode": "fast",
+    "resolution": "720P",
+    "aspectRatio": "16:9",
+    "duration": 5,
+    "sound": false
+  },
+  "capabilities": {
+    "inputImages": { "min": 0, "max": 2 },
+    "inputVideos": { "min": 0, "max": 0 },
+    "inputAudio": { "min": 0, "max": 0 },
+    "aspectRatios": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"],
+    "resolutions": ["360P", "480P", "720P", "1080P"],
+    "rawMegapixels": { "min": 0.1, "max": 16.0 },
+    "modes": ["fast", "quality"],
+    "durations": [3, 5, 8, 10, 15],
+    "audio": true
+  },
+  "bindings": {
+    "prompt": "131.inputs.prompt",
+    "aspectRatio": "115.inputs.aspect_ratio",
+    "megapixels": "115.inputs.megapixels",
+    "duration": "133.inputs.value",
+    "seed": "129.inputs.noise_seed",
+    "outputPrefix": "92.inputs.filename_prefix",
+    "firstImage": "136.inputs.image",
+    "createVideoAudio": "130.inputs.audio"
+  },
+  "secondImage": {
+    "loadNodeId": "137",
+    "conditioningNodeId": "131",
+    "conditioningInput": "last_frame"
+  },
+  "maps": {
+    "aspectRatio": {
+      "1:1": "1:1 (Square)",
+      "2:3": "2:3 (Portrait Photo)",
+      "3:2": "3:2 (Photo)",
+      "3:4": "3:4 (Portrait Standard)",
+      "4:3": "4:3 (Standard)",
+      "9:16": "9:16 (Portrait Widescreen)",
+      "16:9": "16:9 (Widescreen)",
+      "21:9": "21:9 (Ultrawide)"
+    },
+    "resolutionTiers": {
+      "360P": 360,
+      "480P": 480,
+      "720P": 720,
+      "1080P": 1080
+    },
+    "rawMegapixels": {
+      "min": 0.1,
+      "max": 16.0
+    }
+  },
+  "output": {
+    "node": "92",
+    "type": "video"
+  },
+  "requiredNodeTypes": [
+    "MiniMaxH3ImageToVideo",
+    "MiniMaxH3TurboLoRA",
+    "ResolutionSelector",
+    "SaveVideo",
+    "CreateVideo"
+  ],
+  "pluginRequirements": [
+    { "pluginId": "comfyui-core-h3", "modes": ["fast", "quality"] },
+    { "pluginId": "minimax-h3-turbo", "modes": ["fast"] }
+  ]
+}

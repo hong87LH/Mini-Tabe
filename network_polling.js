@@ -1,5 +1,6 @@
-import { LingwuClient } from './lingwu_client.js';
 import { isRetryableNetworkError, isRetryableHttpStatus } from './network_utils.js';
+import { createMediaProviderClient } from './provider_registry.js';
+import { ensureComfyUIAvailable } from './comfyui_launcher.js';
 
 const activePolls = new Set();
 
@@ -41,22 +42,27 @@ export function startPolling(localJobId, taskId, jobStore) {
         return;
       }
       
-      const startTime = job.pollingStartedAt ? new Date(job.pollingStartedAt).getTime() : (job.createdAt ? new Date(job.createdAt).getTime() : Date.now());
-      const timeout = 600 * 1000 * 3; // 30 mins
-
-      if (Date.now() - startTime > timeout) {
-        await jobStore.patch(localJobId, { phase: 'failed', lastError: { stage: 'polling', message: 'Timeout' } });
-        await notifyRenderer(jobStore, localJobId);
-        activePolls.delete(localJobId);
-        return;
-      }
-
       const creds = job.credentials || {};
-      const client = new LingwuClient(creds.apiKey, creds.endpoint);
+      const client = createMediaProviderClient(job.provider, creds);
 
       const statData = await client.getTaskStatus(taskId);
       const status = statData.data || statData;
       const state = status.state || status.status;
+
+      // ComfyUI runs a local serial queue. Queue waiting is not a request timeout and
+      // can legitimately exceed 30 minutes when long H3 jobs are ahead of this task.
+      // Keep polling queued/running ComfyUI tasks; retain the legacy 30-minute guard
+      // only for remote providers that do not expose a durable local queue.
+      if (job.provider !== 'comfyui') {
+        const startTime = job.pollingStartedAt ? new Date(job.pollingStartedAt).getTime() : (job.createdAt ? new Date(job.createdAt).getTime() : Date.now());
+        const timeout = 600 * 1000 * 3;
+        if (Date.now() - startTime > timeout) {
+          await jobStore.patch(localJobId, { phase: 'failed', lastError: { stage: 'polling', message: 'Timeout' } });
+          await notifyRenderer(jobStore, localJobId);
+          activePolls.delete(localJobId);
+          return;
+        }
+      }
       
       if (state === 'failed' || state === 'error' || state === 'cancelled') {
          const errMsg = status.error || status.message || status.msg || "Generation failed";
@@ -88,6 +94,16 @@ export function startPolling(localJobId, taskId, jobStore) {
       setTimeout(poll, 3000);
     } catch (e) {
       console.error('Polling error', e);
+      const failedJob = await jobStore.getJob(localJobId).catch(() => null);
+      if (failedJob?.provider === 'comfyui' && failedJob.credentials?.comfyuiBatPath) {
+        try {
+          await ensureComfyUIAvailable({ endpoint: failedJob.credentials.endpoint, batPath: failedJob.credentials.comfyuiBatPath });
+          setTimeout(poll, 1000);
+          return;
+        } catch (restartError) {
+          console.error('ComfyUI automatic restart failed', restartError);
+        }
+      }
       let isTemp = false;
       if (e && e.httpStatus) {
          isTemp = isRetryableHttpStatus(e.httpStatus);
@@ -136,4 +152,3 @@ export async function resumePendingJobs(jobStore) {
     }
   }
 }
-
