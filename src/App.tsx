@@ -731,6 +731,14 @@ export default function App() {
 
   useEffect(() => {
      const handleKeyDown = (e: KeyboardEvent) => {
+         const isNativeEditableTarget = (target: EventTarget | null) => {
+             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+             if (target instanceof HTMLElement) {
+                 if (target.isContentEditable) return true;
+                 if (target.closest('[contenteditable="true"]')) return true;
+             }
+             return false;
+         };
          // Ctrl+S / Cmd+S
          if ((e.ctrlKey || e.metaKey) && e.key === 's') {
              e.preventDefault();
@@ -738,7 +746,7 @@ export default function App() {
          }
          // Undo / Redo
          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+             if (isNativeEditableTarget(e.target)) return;
              e.preventDefault();
              if (e.shiftKey) {
                  redo();
@@ -746,7 +754,7 @@ export default function App() {
                  undo();
              }
          } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+             if (isNativeEditableTarget(e.target)) return;
              e.preventDefault();
              redo();
          }

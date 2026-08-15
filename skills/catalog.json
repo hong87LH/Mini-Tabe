@@ -1,0 +1,10 @@
+[
+  {
+    "id": "minimax-h3-prompt-writing",
+    "displayName": "MiniMax H3 Prompt Writing",
+    "description": "Write H3 base and full-reference video prompts",
+    "sourceType": "github",
+    "sourceLabel": "MiniMax-AI / MiniMax-H3",
+    "sourceUrl": "https://github.com/MiniMax-AI/MiniMax-H3/tree/main/skills/h3-prompt-writing"
+  }
+]

@@ -27,6 +27,7 @@ export interface Field {
   aiTextConfig?: {
     modelTemplate?: string;
     sourceImageTemplate?: string;
+    skillTemplate?: string; // Skill display name or a {Field} reference; empty keeps legacy Smart Text behavior
   };
   aiImageConfig?: {
     count?: number;

@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronUp, Database, Server, Image as ImageIcon, Video, Download, Upload, ServerCrash, Cpu, Eye, EyeOff } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Plus, Trash2, ChevronDown, ChevronUp, Database, Server, Image as ImageIcon, Video, Download, Upload, ServerCrash, Cpu, Eye, EyeOff, BookOpen, RefreshCw, Github } from 'lucide-react';
 
 function buildStandardOssDomain(endpoint: string, bucket: string): string {
   const cleanBucket = String(bucket || '').trim();
@@ -64,10 +64,101 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const [comfyuiBatPath, setComfyuiBatPath] = useState(localStorage.getItem('bitable_comfyui_bat_path') || '');
   const [storageData, setStorageData] = useState<any>(null);
   const [storageLoading, setStorageLoading] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'api' | 'skills'>('api');
+  const [skillState, setSkillState] = useState<any>({ skills: [], catalog: [], rootPath: '' });
+  const [skillLoading, setSkillLoading] = useState(false);
+  const [skillInstallUrl, setSkillInstallUrl] = useState('');
+  const [skillInstallBusy, setSkillInstallBusy] = useState(false);
+  const [skillRemovingPath, setSkillRemovingPath] = useState('');
+  const [installedSkillsExpanded, setInstalledSkillsExpanded] = useState(true);
+  const [skillLibraryExpanded, setSkillLibraryExpanded] = useState(true);
+  const [skillError, setSkillError] = useState('');
 
   const toggleExpand = (id: string) => {
     setExpandedSections(prev => ({ ...prev, [id]: !prev[id] }));
   };
+
+  const loadSkills = async () => {
+    const api = (window as any).electronAPI;
+    if (!api?.listSkills) {
+      setSkillState({ skills: [], catalog: [], rootPath: '' });
+      setSkillError(lang === 'en' ? 'Skill System requires the Electron desktop client.' : 'Skill System 需要 Electron 桌面端。');
+      return;
+    }
+    setSkillLoading(true);
+    setSkillError('');
+    try {
+      const state = await api.listSkills();
+      setSkillState(state || { skills: [], catalog: [], rootPath: '' });
+    } catch (error: any) {
+      setSkillError(error?.message || String(error));
+    } finally {
+      setSkillLoading(false);
+    }
+  };
+
+  const installSkillFromGithub = async (sourceUrl: string) => {
+    const url = String(sourceUrl || '').trim();
+    if (!url) return;
+    const api = (window as any).electronAPI;
+    if (!api?.installSkillFromGithub) {
+      setSkillError(lang === 'en' ? 'Skill installation requires Electron.' : 'Skill 安装需要 Electron 桌面端。');
+      return;
+    }
+    setSkillInstallBusy(true);
+    setSkillError('');
+    try {
+      const state = await api.installSkillFromGithub(url);
+      setSkillState(state || { skills: [], catalog: [], rootPath: '' });
+      setSkillInstallUrl('');
+    } catch (error: any) {
+      setSkillError(error?.message || String(error));
+    } finally {
+      setSkillInstallBusy(false);
+    }
+  };
+
+  const toggleSkillEnabled = async (skill: any) => {
+    const api = (window as any).electronAPI;
+    if (!api?.setSkillEnabled) return;
+    setSkillError('');
+    try {
+      const state = await api.setSkillEnabled(skill.relativePath, !skill.enabled);
+      setSkillState(state || skillState);
+    } catch (error: any) {
+      setSkillError(error?.message || String(error));
+    }
+  };
+
+  const uninstallSkill = async (skill: any) => {
+    const api = (window as any).electronAPI;
+    if (!api?.uninstallSkill) {
+      setSkillError(lang === 'en' ? 'Skill uninstall requires the Electron desktop client.' : 'Skill 卸载需要 Electron 桌面端。');
+      return;
+    }
+    const confirmed = window.confirm(
+      lang === 'en'
+        ? `Uninstall “${skill.displayName}”? The Skill folder and all files inside it will be permanently deleted.`
+        : `确定卸载“${skill.displayName}”吗？该 Skill 文件夹及其中全部文件将被永久删除。`
+    );
+    if (!confirmed) return;
+
+    setSkillRemovingPath(skill.relativePath);
+    setSkillError('');
+    try {
+      const state = await api.uninstallSkill(skill.relativePath);
+      setSkillState(state || { skills: [], catalog: [], rootPath: '' });
+    } catch (error: any) {
+      setSkillError(error?.message || String(error));
+    } finally {
+      setSkillRemovingPath('');
+    }
+  };
+
+  useEffect(() => {
+    if (settingsTab === 'skills') loadSkills();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsTab]);
   
   const checkOssStorage = async () => {
     if (!ossConfig.accessKeyId) {
@@ -403,8 +494,217 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
     e.target.value = '';
   };
 
+  const renderSettingsTabs = () => (
+    <div className="flex items-center gap-1 border-b border-gray-200">
+      <button
+        type="button"
+        onClick={() => setSettingsTab('api')}
+        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${settingsTab === 'api' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+      >
+        {lang === 'en' ? 'API & Models' : 'API 与模型'}
+      </button>
+      <button
+        type="button"
+        onClick={() => setSettingsTab('skills')}
+        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${settingsTab === 'skills' ? 'border-purple-600 text-purple-700' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+      >
+        <BookOpen className="w-4 h-4" />
+        Skills
+      </button>
+    </div>
+  );
+
+  if (settingsTab === 'skills') {
+    const installedSkills = Array.isArray(skillState?.skills) ? skillState.skills : [];
+    const catalogSkills = Array.isArray(skillState?.catalog) ? skillState.catalog : [];
+    return (
+      <div className="space-y-5">
+        {renderSettingsTabs()}
+
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-gray-800">Skill Manager</h2>
+            <p className="mt-1 text-xs text-gray-500">
+              {lang === 'en'
+                ? 'Scan the project skills directory, register copied Skills, and manage enabled state.'
+                : '扫描项目 skills 目录，自动注册复制进来的 Skill，并管理启用状态。'}
+            </p>
+            {skillState?.rootPath && (
+              <p className="mt-1 max-w-[720px] truncate font-mono text-[10px] text-gray-400" title={skillState.rootPath}>{skillState.rootPath}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            disabled={skillLoading}
+            onClick={loadSkills}
+            className="flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${skillLoading ? 'animate-spin' : ''}`} />
+            {lang === 'en' ? 'Scan directory' : '扫描目录'}
+          </button>
+        </div>
+
+        {skillError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{skillError}</div>
+        )}
+
+        <div className="space-y-4">
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <button
+            type="button"
+            onClick={() => setInstalledSkillsExpanded(value => !value)}
+            className={`flex w-full items-center justify-between text-left ${installedSkillsExpanded ? 'mb-3' : ''}`}
+            aria-expanded={installedSkillsExpanded}
+          >
+            <div>
+              <h3 className="text-sm font-semibold text-gray-800">{lang === 'en' ? 'Installed Skills' : '已注册 Skills'}</h3>
+              {installedSkillsExpanded && <p className="mt-0.5 text-[10px] text-gray-400">
+                {lang === 'en' ? 'Display names are the user-facing identifiers used by Smart Text fields.' : '显示名是智能文本字段中用于选择和引用的用户侧标识。'}
+              </p>}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-gray-100 px-2 py-1 text-[10px] text-gray-500">{installedSkills.length}</span>
+              {installedSkillsExpanded ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
+            </div>
+          </button>
+
+          {installedSkillsExpanded && <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
+            {installedSkills.map((skill: any) => (
+              <div key={skill.relativePath} className={`rounded-lg border p-3 ${skill.enabled ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-65'}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <div className="truncate text-sm font-medium text-gray-800" title={skill.displayName}>{skill.displayName}</div>
+                      <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] ${skill.source?.type === 'github' ? 'bg-slate-100 text-slate-600' : 'bg-purple-50 text-purple-600'}`}>
+                        {skill.source?.type === 'github' ? 'GitHub' : 'Custom'}
+                      </span>
+                      {skill.isNew && <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] text-emerald-600">NEW</span>}
+                      {skill.hasScripts && <span className="shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-[9px] text-amber-700">scripts · not executed</span>}
+                    </div>
+                    {skill.description && <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-gray-500">{skill.description}</div>}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[9px] text-gray-400">
+                      <span>{skill.relativePath}</span>
+                      <span>{skill.referenceCount || 0} refs</span>
+                      {skill.source?.repository && <span>{skill.source.repository}</span>}
+                      {skill.source?.url && (
+                        <a href={skill.source.url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">{lang === 'en' ? 'Source' : '查看来源'}</a>
+                      )}
+                    </div>
+                    {skill.duplicateDisplayName && (
+                      <div className="mt-2 rounded bg-red-50 px-2 py-1 text-[10px] text-red-600">
+                        {lang === 'en' ? 'Duplicate display name. Smart Text will refuse to run until the conflict is resolved.' : '显示名重复。解决冲突前，智能文本会拒绝调用该 Skill。'}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={skillRemovingPath === skill.relativePath}
+                      onClick={() => toggleSkillEnabled(skill)}
+                      title={skill.enabled ? (lang === 'en' ? 'Disable Skill' : '停用 Skill') : (lang === 'en' ? 'Enable Skill' : '启用 Skill')}
+                      className={`flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 ${skill.enabled ? 'text-purple-600 hover:bg-purple-50' : 'text-gray-400 hover:bg-gray-100'}`}
+                    >
+                      {skill.enabled ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={Boolean(skillRemovingPath)}
+                      onClick={() => uninstallSkill(skill)}
+                      title={lang === 'en' ? 'Uninstall Skill' : '卸载 Skill'}
+                      className="flex h-8 w-8 items-center justify-center rounded-md text-red-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                    >
+                      <Trash2 className={`h-4 w-4 ${skillRemovingPath === skill.relativePath ? 'animate-pulse' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!skillLoading && installedSkills.length === 0 && (
+              <div className="rounded-lg border border-dashed border-gray-300 py-8 text-center text-xs text-gray-400">
+                {lang === 'en' ? 'No registered Skills. Copy a Skill folder into /skills or install one below.' : '暂无已注册 Skill。可将 Skill 文件夹复制到 /skills，或从下方安装。'}
+              </div>
+            )}
+          </div>}
+        </div>
+
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <button
+            type="button"
+            onClick={() => setSkillLibraryExpanded(value => !value)}
+            className={`flex w-full items-center justify-between text-left ${skillLibraryExpanded ? 'mb-3' : ''}`}
+            aria-expanded={skillLibraryExpanded}
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <Github className="h-4 w-4 shrink-0 text-gray-700" />
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-gray-800">Skill Library</h3>
+                {skillLibraryExpanded && <p className="mt-0.5 text-[10px] text-gray-400">{lang === 'en' ? 'Public Skill sources are downloaded into the project /skills directory and then registered.' : '公开 Skill 会下载到项目 /skills 目录，再通过同一套扫描机制注册。'}</p>}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="rounded-full bg-gray-100 px-2 py-1 text-[10px] text-gray-500">{catalogSkills.length}</span>
+              {skillLibraryExpanded ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
+            </div>
+          </button>
+
+          {skillLibraryExpanded && <>
+          <div className="mb-4 rounded-lg border border-purple-100 bg-purple-50/50 p-3">
+            <label className="mb-1.5 block text-[10px] font-medium text-purple-700">{lang === 'en' ? 'Install from a public GitHub Skill directory' : '从公开 GitHub Skill 目录安装'}</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={skillInstallUrl}
+                onChange={event => setSkillInstallUrl(event.target.value)}
+                placeholder="https://github.com/owner/repo/tree/main/skills/example"
+                className="min-w-0 flex-1 rounded-md border border-purple-200 bg-white px-2.5 py-2 font-mono text-xs text-gray-600 outline-none focus:border-purple-400"
+              />
+              <button
+                type="button"
+                disabled={!skillInstallUrl.trim() || skillInstallBusy}
+                onClick={() => installSkillFromGithub(skillInstallUrl)}
+                className="shrink-0 rounded-md bg-purple-600 px-3 py-2 text-xs font-medium text-white hover:bg-purple-700 disabled:bg-gray-300"
+              >
+                {skillInstallBusy ? (lang === 'en' ? 'Installing…' : '安装中…') : (lang === 'en' ? 'Install' : '安装并注册')}
+              </button>
+            </div>
+          </div>
+
+          <div className="max-h-[240px] space-y-2 overflow-y-auto pr-1">
+            {catalogSkills.map((item: any) => (
+              <div key={item.id || item.sourceUrl} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-gray-800" title={item.displayName}>{item.displayName}</div>
+                  <div className="mt-0.5 truncate text-[10px] text-gray-500">{item.description}</div>
+                  <div className="mt-1 font-mono text-[9px] text-gray-400">{item.sourceLabel || item.sourceUrl}</div>
+                </div>
+                <button
+                  type="button"
+                  disabled={item.installed || skillInstallBusy}
+                  onClick={() => installSkillFromGithub(item.sourceUrl)}
+                  className="shrink-0 rounded-md border border-purple-200 bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-700 hover:bg-purple-100 disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-400"
+                >
+                  {item.installed ? (lang === 'en' ? 'Installed' : '已安装') : (skillInstallBusy ? (lang === 'en' ? 'Installing…' : '安装中…') : (lang === 'en' ? 'Install' : '安装'))}
+                </button>
+              </div>
+            ))}
+          </div>
+          </>}
+
+        </div>
+        </div>
+
+        <div className="rounded-lg bg-slate-50 px-3 py-2 text-[10px] leading-5 text-slate-500">
+          {lang === 'en'
+            ? 'Skill Runtime v1.0 reads SKILL.md and text resources under references/, builds one structured context, and sends one request through the existing Smart Text provider. scripts/ are never executed.'
+            : 'Skill Runtime v1.0 读取 SKILL.md 与 references/ 下的文本资料，编译成一次结构化上下文，并继续走原智能文本 Provider；scripts/ 只识别、不执行。'}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
+      {renderSettingsTabs()}
       {/* Configuration Action Bar */}
       <div className="flex items-center justify-between pb-4 border-b border-gray-100">
         <div>

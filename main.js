@@ -13,6 +13,9 @@ import { Readable } from 'node:stream';
 import { NetworkStageError } from "./network_utils.js";
 import { startPolling, resumePendingJobs } from './network_polling.js';
 import { NetworkJobStore } from './network_job_store.js';
+import { createSkillManager } from './skill_manager.js';
+
+const skillManager = createSkillManager();
 
 let networkJobStore = null;
 function getNetworkJobStore() {
@@ -228,6 +231,27 @@ app.whenReady().then(async () => {
     }
   });
 
+  // Skill System v1.0: scan/register, enable state, install/uninstall, structured context compile
+  ipcMain.handle('list-skills', async () => {
+    return skillManager.scanSkills();
+  });
+
+  ipcMain.handle('set-skill-enabled', async (_event, relativePath, enabled) => {
+    return skillManager.setSkillEnabled(relativePath, enabled);
+  });
+
+  ipcMain.handle('install-skill-from-github', async (_event, sourceUrl) => {
+    return await skillManager.installFromGithub(sourceUrl);
+  });
+
+  ipcMain.handle('uninstall-skill', async (_event, relativePath) => {
+    return skillManager.uninstallSkill(relativePath);
+  });
+
+  ipcMain.handle('compile-skill-context', async (_event, options = {}) => {
+    return skillManager.compileSkillContext(options);
+  });
+
   // ▼▼▼ 监听前端请求，抓取系统级原生缩略图 (解决内存崩溃神兵利器) ▼▼▼
   ipcMain.handle('generate-lingwu-image', async (event, options) => {
     try {
@@ -330,8 +354,8 @@ app.whenReady().then(async () => {
     try {
       if (filePath.startsWith('file://')) {
         filePath = safeFileURLToPath(filePath);
-      } else if (filePath.startsWith('local-img://')) {
-        filePath = decodeURIComponent(filePath.replace('local-img://', ''));
+      } else if (/^local-(?:img|video|audio):\/\//i.test(filePath)) {
+        filePath = decodeURIComponent(filePath.replace(/^local-(?:img|video|audio):\/\//i, ''));
       }
       if (fs.existsSync(filePath)) {
         let buffer = fs.readFileSync(filePath);
@@ -431,8 +455,8 @@ app.whenReady().then(async () => {
       } else if (url.startsWith('file://')) {
         let srcPath = safeFileURLToPath(url);
         await fs.promises.copyFile(srcPath, finalTargetPath);
-      } else if (url.startsWith('local-img://')) {
-        let srcPath = decodeURIComponent(url.replace('local-img://', ''));
+      } else if (/^local-(?:img|video|audio):\/\//i.test(url)) {
+        let srcPath = decodeURIComponent(url.replace(/^local-(?:img|video|audio):\/\//i, ''));
         await fs.promises.copyFile(srcPath, finalTargetPath);
       } else if (fs.existsSync(url)) {
         await fs.promises.copyFile(url, finalTargetPath);

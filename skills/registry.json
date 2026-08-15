@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "h3-prompt-writing": {
+      "enabled": true,
+      "displayName": "MiniMax H3 Prompt Writing",
+      "id": "h3-prompt-writing"
+    }
+  }
+}

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
-import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste } from 'lucide-react';
+import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste, Maximize2 } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -289,7 +289,8 @@ const ZoomableImage = ({
   onUpdateItem,
   username,
   lang = 'zh',
-  sourceViewMode
+  sourceViewMode,
+  itemInstanceKey
 }: { 
   item: any, 
   onPrev: (e: React.MouseEvent) => void, 
@@ -298,7 +299,8 @@ const ZoomableImage = ({
   onUpdateItem?: (newItem: any) => void,
   username?: string,
   lang?: 'en' | 'zh',
-  sourceViewMode?: 'table' | 'gallery'
+  sourceViewMode?: 'table' | 'gallery',
+  itemInstanceKey?: string | number
 }) => {
   const src = item.mappedUrl;
   const mediaPath = String(src || '').toLowerCase();
@@ -422,7 +424,7 @@ const ZoomableImage = ({
         setIsCropMode(false);
         setIsOutpaintMode(false);
     }
-  }, [item.url, item.mappedUrl]);
+  }, [item.url, item.mappedUrl, itemInstanceKey]);
 
   const applyOutpaintTopStrategy = (ratio: number) => {
     if (!imgRef.current) return;
@@ -1379,12 +1381,18 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
   const isAudio = /\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/.test(path.toLowerCase()) || path.toLowerCase().startsWith('data:audio');
   if (isAudio) {
     return (
-      <span className="relative block w-full h-full">
-        {src ? <img src={src} alt={alt} className={className} title={title} onClick={onClick} loading="lazy" decoding="async" /> : (
-          <button type="button" className={`${className} bg-gradient-to-br from-slate-800 to-indigo-900`} title={title || alt} onClick={onClick} />
+      <span
+        className={cn('relative block shrink-0 overflow-hidden', className)}
+        title={title || alt}
+        onClick={onClick}
+      >
+        {src ? (
+          <img src={src} alt={alt} className="absolute inset-0 w-full h-full object-cover" loading="lazy" decoding="async" />
+        ) : (
+          <span className="absolute inset-0 bg-gradient-to-br from-slate-800 to-indigo-900" />
         )}
-        <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-indigo-950/20 rounded">
-          <Music2 className="w-1/2 h-1/2 text-white/90 drop-shadow-md" />
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/20 rounded">
+          <Music2 className="w-1/2 h-1/2 text-white/75 drop-shadow-md" />
         </span>
       </span>
     );
@@ -1536,6 +1544,77 @@ const resolveFilenameAndFolder = (filenameTemplate: string, folderPathTpl: strin
    return { filename, folderPath, zipPath };
 };
 
+type ExportMediaType = 'all' | 'image' | 'video' | 'audio';
+type DetectedMediaType = Exclude<ExportMediaType, 'all'>;
+
+const MEDIA_EXTENSIONS: Record<DetectedMediaType, Set<string>> = {
+  image: new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'heif', 'tif', 'tiff']),
+  video: new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'mpg', 'mpeg']),
+  audio: new Set(['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma'])
+};
+
+const MIME_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+  'image/avif': 'avif',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+  'video/quicktime': 'mov',
+  'video/x-matroska': 'mkv',
+  'audio/mpeg': 'mp3',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/flac': 'flac',
+  'audio/mp4': 'm4a',
+  'audio/aac': 'aac',
+  'audio/ogg': 'ogg',
+  'audio/opus': 'opus'
+};
+
+const getPathExtension = (value: unknown): string => {
+  const clean = String(value || '').split(/[?#]/, 1)[0].replace(/\\/g, '/');
+  const match = clean.match(/\.([a-z0-9]+)$/i);
+  return match?.[1]?.toLowerCase() || '';
+};
+
+const detectExportMediaType = (item: any, url: string): DetectedMediaType => {
+  const mime = String(item?.type || item?.mimeType || '').toLowerCase();
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('image/')) return 'image';
+
+  const lowerUrl = String(url || '').toLowerCase();
+  if (lowerUrl.startsWith('data:video') || lowerUrl.startsWith('local-video:')) return 'video';
+  if (lowerUrl.startsWith('data:audio') || lowerUrl.startsWith('local-audio:')) return 'audio';
+  if (lowerUrl.startsWith('data:image') || lowerUrl.startsWith('local-img:')) return 'image';
+
+  const extension = getPathExtension(item?.name) || getPathExtension(url);
+  if (MEDIA_EXTENSIONS.video.has(extension)) return 'video';
+  if (MEDIA_EXTENSIONS.audio.has(extension)) return 'audio';
+  if (MEDIA_EXTENSIONS.image.has(extension)) return 'image';
+
+  // Preserve compatibility with legacy image attachments whose signed URL has
+  // neither a file extension nor MIME metadata.
+  return 'image';
+};
+
+const getExportExtension = (item: any, url: string, mediaType: DetectedMediaType): string => {
+  const existingExtension = getPathExtension(item?.name) || getPathExtension(url);
+  if (existingExtension) return existingExtension;
+
+  const dataUrlMime = String(url || '').match(/^data:([^;,]+)/i)?.[1] || '';
+  const mime = String(item?.type || item?.mimeType || dataUrlMime).toLowerCase().split(';', 1)[0];
+  return MIME_EXTENSIONS[mime] || (mediaType === 'video' ? 'mp4' : mediaType === 'audio' ? 'mp3' : 'png');
+};
+
+const ensureExportFilename = (baseFilename: string, extension: string): string => {
+  return getPathExtension(baseFilename) ? baseFilename : `${baseFilename}.${extension}`;
+};
+
 const BatchDownloadPopup = ({ 
   selectedCells, 
   data, 
@@ -1555,18 +1634,19 @@ const BatchDownloadPopup = ({
 }) => {
   // ratings index 0 is unrated, 1-5 is stars
   const [selectedRatings, setSelectedRatings] = useState<Record<number, boolean>>({ 0: false, 1: false, 2: false, 3: false, 4: false, 5: false });
+  const [selectedMediaType, setSelectedMediaType] = useState<ExportMediaType>('all');
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
 
-  const getFilteredImages = () => {
+  const getFilteredFiles = () => {
      const selectedArr = Array.from(selectedCells).map(s => { const [r, c] = s.split(','); return { r: parseInt(r), c: parseInt(c) }; });
-     const targetImages: { url: string, filename: string, folderPath: string, zipPath?: string }[] = [];
+     const targetFiles: { url: string, filename: string, folderPath: string, zipPath?: string, mediaType: DetectedMediaType }[] = [];
      const hasAnyFilter = Object.values(selectedRatings).some(v => v);
 
      selectedArr.forEach(({r, c}) => {
         const record = data.records[r];
         const field = visibleFields[c];
-        if (!record || !field || (field.type !== 'attachment' && field.type !== 'aiImage')) return;
+        if (!record || !field || (field.type !== 'attachment' && field.type !== 'aiImage' && field.type !== 'aiVideo')) return;
 
         const val = record[field.id];
         if (!val) return;
@@ -1576,14 +1656,16 @@ const BatchDownloadPopup = ({
         else if (typeof val === 'string' && val.trim()) items = val.split(',').map(u => ({ url: u.trim() }));
         else if (typeof val === 'object' && !Array.isArray(val)) items = [val];
 
-        const cfg = field.aiImageConfig || {};
+        const cfg = field.type === 'aiVideo' ? (field.aiVideoConfig || {}) : (field.aiImageConfig || {});
         const hasConfig = Object.keys(cfg).length > 0 || cfg.filenameTemplate || cfg.folderPath;
-        const { filename: baseFilename, folderPath, zipPath } = resolveFilenameAndFolder(cfg.filenameTemplate || 'image', cfg.folderPath || '', data.fields, record);
+        const { filename: baseFilename, folderPath, zipPath } = resolveFilenameAndFolder(cfg.filenameTemplate || 'media', cfg.folderPath || '', data.fields, record);
 
         let activeIndex = 0;
         items.forEach((item) => {
            const url = typeof item === 'string' ? item : item?.url;
            if (!url) return;
+           const mediaType = detectExportMediaType(item, url);
+           if (selectedMediaType !== 'all' && mediaType !== selectedMediaType) return;
 
            const globalReview = globalAttachmentPropsMap.get(
              normalizeAttachmentKey(url)
@@ -1601,64 +1683,66 @@ const BatchDownloadPopup = ({
            }
 
            if (!hasAnyFilter || selectedRatings[rtg]) {
-              const url = typeof item === 'string' ? item : item.url;
-              if (url) {
-                 const generatedFilename = baseFilename + (items.length > 1 ? `_${activeIndex + 1}` : '') + '.png';
-                 const currentFilename = (!hasConfig && itemName) ? itemName : generatedFilename;
-                 targetImages.push({ url, filename: currentFilename, folderPath, zipPath });
-              }
+               const url = typeof item === 'string' ? item : item.url;
+               if (url) {
+                  const extension = getExportExtension(item, url, mediaType);
+                  const generatedFilename = ensureExportFilename(baseFilename + (items.length > 1 ? `_${activeIndex + 1}` : ''), extension);
+                  const currentFilename = (!hasConfig && itemName) ? itemName : generatedFilename;
+                  targetFiles.push({ url, filename: currentFilename, folderPath, zipPath, mediaType });
+               }
            }
            activeIndex++;
         });
      });
-     return targetImages;
+     return targetFiles;
   };
 
-  const images = useMemo(() => getFilteredImages(), [selectedCells, data, visibleFields, selectedRatings]);
+  const files = useMemo(() => getFilteredFiles(), [selectedCells, data, visibleFields, selectedRatings, selectedMediaType, globalAttachmentPropsMap]);
 
   const toggleRating = (r: number) => setSelectedRatings(prev => ({ ...prev, [r]: !prev[r] }));
 
   const handleZipDownload = async () => {
-    if (images.length === 0) return;
+    if (files.length === 0) return;
     setIsProcessing(true);
-    setProgress({ current: 0, total: images.length });
+    setProgress({ current: 0, total: files.length });
     
     const zip = new JSZip();
     const w = window as any;
     const isElectron = !!(w.electronAPI || w.electron);
     
-    for (let i = 0; i < images.length; i++) {
-        const img = images[i];
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
         try {
             let blob: Blob;
-            if (img.url.startsWith('data:')) {
-                const res = await fetch(img.url);
+            if (file.url.startsWith('data:')) {
+                const res = await fetch(file.url);
                 blob = await res.blob();
             } else if (isElectron && w.electronAPI?.readLocalFile) {
                 // Try reading local file via IPC for Electron
-                const base64Data = await w.electronAPI.readLocalFile(img.url);
+                const base64Data = await w.electronAPI.readLocalFile(file.url);
                 if (base64Data) {
                     const res = await fetch(`data:application/octet-stream;base64,${base64Data}`);
                     blob = await res.blob();
                 } else {
-                    const res = await fetch(img.url);
+                    const res = await fetch(file.url);
                     blob = await res.blob();
                 }
             } else {
-                const res = await fetch(img.url);
+                const res = await fetch(file.url);
                 blob = await res.blob();
             }
-            const path = img.zipPath ? `${img.zipPath}/${img.filename}` : img.filename;
+            const path = file.zipPath ? `${file.zipPath}/${file.filename}` : file.filename;
             zip.file(path, blob);
         } catch (e) {
-            console.error("Failed to fetch image for zip", img.url, e);
+            console.error("Failed to fetch attachment for zip", file.url, e);
         }
-        setProgress({ current: i + 1, total: images.length });
+        setProgress({ current: i + 1, total: files.length });
     }
 
     try {
         const content = await zip.generateAsync({ type: 'blob' });
-        saveAs(content, `images_${new Date().getTime()}.zip`);
+        const exportLabel = selectedMediaType === 'all' ? 'attachments' : `${selectedMediaType}s`;
+        saveAs(content, `${exportLabel}_${new Date().getTime()}.zip`);
     } catch (e) {
         console.error("Failed to generate zip", e);
     }
@@ -1668,7 +1752,7 @@ const BatchDownloadPopup = ({
   };
 
   const handleLocalSave = async () => {
-    if (images.length === 0) return;
+    if (files.length === 0) return;
     
     const w = window as any;
     let baseDir = '';
@@ -1678,13 +1762,13 @@ const BatchDownloadPopup = ({
     }
 
     setIsProcessing(true);
-    setProgress({ current: 0, total: images.length });
+    setProgress({ current: 0, total: files.length });
 
-    for (let i = 0; i < images.length; i++) {
-        const img = images[i];
-        const finalFolder = baseDir ? (img.zipPath ? `${baseDir}/${img.zipPath}` : baseDir) : (img.zipPath || '');
-        await triggerDownload(img.url, img.filename, finalFolder);
-        setProgress({ current: i + 1, total: images.length });
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const finalFolder = baseDir ? (file.zipPath ? `${baseDir}/${file.zipPath}` : baseDir) : (file.zipPath || '');
+        await triggerDownload(file.url, file.filename, finalFolder);
+        setProgress({ current: i + 1, total: files.length });
     }
     
     setIsProcessing(false);
@@ -1696,11 +1780,31 @@ const BatchDownloadPopup = ({
   return createPortal(
     <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-black/50">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
-        <h2 className="text-xl font-semibold mb-4">{lang === 'en' ? 'Batch Download Images' : '批量下载图片'}</h2>
+        <h2 className="text-xl font-semibold mb-4">{lang === 'en' ? 'Batch Export Attachments' : '批量导出附件'}</h2>
         <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X className="w-5 h-5"/></button>
+
+        <div className="mb-5">
+          <label className="text-sm font-medium text-gray-700 block mb-2">{lang === 'en' ? 'Attachment Type' : '附件类型'}</label>
+          <div className="grid grid-cols-4 gap-2">
+            {([
+              ['all', lang === 'en' ? 'All' : '全部'],
+              ['image', lang === 'en' ? 'Images' : '图片'],
+              ['video', lang === 'en' ? 'Videos' : '视频'],
+              ['audio', lang === 'en' ? 'Audio' : '音频']
+            ] as [ExportMediaType, string][]).map(([type, label]) => (
+              <button
+                key={type}
+                onClick={() => setSelectedMediaType(type)}
+                className={`rounded-md border px-2 py-2 text-sm transition-colors ${selectedMediaType === type ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         
         <div className="mb-6">
-          <label className="text-sm font-medium text-gray-700 block mb-2">{lang === 'en' ? 'Filter by Star Rating' : '筛选标星图片'}</label>
+          <label className="text-sm font-medium text-gray-700 block mb-2">{lang === 'en' ? 'Filter by Star Rating' : '按标星筛选附件'}</label>
           <div className="flex flex-wrap gap-2">
             {[0, 1, 2, 3, 4, 5].map(r => (
               <button
@@ -1719,7 +1823,7 @@ const BatchDownloadPopup = ({
         </div>
 
         <div className="text-sm text-gray-600 mb-6">
-           {lang === 'en' ? 'Selected Images:' : '已选中图片数量:'} <strong className="text-gray-900">{images.length}</strong>
+           {lang === 'en' ? 'Attachments to export:' : '待导出附件数量：'} <strong className="text-gray-900">{files.length}</strong>
         </div>
 
         {isProcessing && (
@@ -1733,7 +1837,7 @@ const BatchDownloadPopup = ({
 
         <div className="flex justify-end gap-3">
           <button 
-            disabled={images.length === 0 || isProcessing}
+             disabled={files.length === 0 || isProcessing}
             onClick={handleZipDownload}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
           >
@@ -1741,7 +1845,7 @@ const BatchDownloadPopup = ({
           </button>
           {isElectron && (
              <button 
-               disabled={images.length === 0 || isProcessing}
+               disabled={files.length === 0 || isProcessing}
                onClick={handleLocalSave}
                className="px-4 py-2 border border-blue-600 text-blue-600 rounded-md hover:bg-blue-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
              >
@@ -2444,6 +2548,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
      return map;
   }, [allRecords, data.records, data.fields]);
   const [activeCell, setActiveCell] = useState<{ recordId: string; fieldId: string } | null>(null);
+  const [largeTextOpenRequest, setLargeTextOpenRequest] = useState<{ recordId: string; fieldId: string; temporaryReferenceFieldId?: string | null } | null>(null);
   const [forceEdit, setForceEdit] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
   const [lastSelectedRowIndex, setLastSelectedRowIndex] = useState<number | null>(null);
@@ -2856,9 +2961,18 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
   }, [data.records, tableId, onUpdateRecord]);
 
   useEffect(() => {
+    const isNativeEditableTarget = (target: EventTarget | null) => {
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+      if (target instanceof HTMLElement) {
+        if (target.isContentEditable) return true;
+        if (target.closest('[contenteditable="true"]')) return true;
+      }
+      return false;
+    };
+
     const handleCopy = (e: ClipboardEvent) => {
       // Allow natural copy inside inputs
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (isNativeEditableTarget(e.target)) return;
       if (!selectionBox && extraSelectedCells.length === 0) return;
       
       const allSelectedCells = new Set<string>();
@@ -2921,7 +3035,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
     };
 
     const handlePaste = (e: ClipboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (isNativeEditableTarget(e.target)) return;
       if (!selectionStart) return;
       
       e.preventDefault();
@@ -3064,7 +3178,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
     };
 
     const handleDeleteKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (isNativeEditableTarget(e.target)) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
          if (!selectionBox && extraSelectedCells.length === 0) return;
          if (selectionBox && selectionBox.minR === 0 && selectionBox.maxR === data.records.length - 1 && extraSelectedCells.length === 0) {
@@ -3105,7 +3219,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
     };
 
     const handleCut = (e: ClipboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (isNativeEditableTarget(e.target)) return;
       if (!selectionBox) return;
 
       const rows: string[] = [];
@@ -3227,9 +3341,28 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
            promptOriginalUrls = originalUrls || [];
            promptSourceUrls = sourceUrls || [];
         } else {
-           // For text, just interpolate textually
-           promptString = resolveTemplateString(promptString, data.fields, record);
-           promptString = `You are an AI assistant helping to evaluate a table row. Here is the data context for this row:\n\n${JSON.stringify(contextData, null, 2)}\n\nBased ONLY on the context provided, perform the following instruction and respond with the concise result. Do not include markdown formatting or conversational filler.\n\nInstruction: ${promptString}`;
+           // Smart Text keeps the legacy path unless a Skill is explicitly selected/resolved.
+           const textCfg = field.aiTextConfig || {};
+           const resolvedInstruction = resolveTemplateString(promptString, data.fields, record);
+           const resolvedSkillDisplayName = resolveTemplateString(textCfg.skillTemplate || '', data.fields, record).trim();
+
+           if (resolvedSkillDisplayName) {
+             const w = window as any;
+             if (!w.electronAPI?.compileSkillContext) {
+               throw new Error(lang === 'en'
+                 ? 'Skill System requires the Electron desktop client.'
+                 : 'Skill System 需要在 Electron 桌面端中运行。');
+             }
+             const compiledSkill = await w.electronAPI.compileSkillContext({
+               displayName: resolvedSkillDisplayName,
+               runtimeContext: contextData,
+               userTask: resolvedInstruction
+             });
+             promptString = compiledSkill?.fullPrompt || resolvedInstruction;
+           } else {
+             // Legacy Smart Text prompt stays unchanged for full backward compatibility.
+             promptString = `You are an AI assistant helping to evaluate a table row. Here is the data context for this row:\n\n${JSON.stringify(contextData, null, 2)}\n\nBased ONLY on the context provided, perform the following instruction and respond with the concise result. Do not include markdown formatting or conversational filler.\n\nInstruction: ${resolvedInstruction}`;
+           }
         }
         
         let resultParams: any = '';
@@ -4348,6 +4481,25 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                           setForceEdit(true);
                        }
                     }}
+                    recordPosition={Math.max(1, visibleRowsInfo.indices.indexOf(index) + 1)}
+                    recordCount={visibleRowsInfo.indices.length}
+                    largeTextOpenRequest={largeTextOpenRequest?.recordId === record.id && largeTextOpenRequest?.fieldId === field.id ? largeTextOpenRequest : undefined}
+                    onConsumeLargeTextOpenRequest={() => setLargeTextOpenRequest(null)}
+                    onNavigateLargeTextRow={(direction, currentValue, temporaryReferenceFieldId) => {
+                       const currentVisiblePosition = visibleRowsInfo.indices.indexOf(index);
+                       if (currentVisiblePosition < 0) return;
+                       const nextVisiblePosition = currentVisiblePosition + direction;
+                       if (nextVisiblePosition < 0 || nextVisiblePosition >= visibleRowsInfo.indices.length) return;
+                       const nextDataIndex = visibleRowsInfo.indices[nextVisiblePosition];
+                       const nextRecord = data.records[nextDataIndex];
+                       if (!nextRecord) return;
+
+                       onUpdateRecord(record.id, field.id, currentValue);
+                       setActiveCell({ recordId: nextRecord.id, fieldId: field.id });
+                       setForceEdit(false);
+                       setLargeTextOpenRequest({ recordId: nextRecord.id, fieldId: field.id, temporaryReferenceFieldId });
+                       rowVirtualizer.scrollToIndex(nextVisiblePosition, { align: 'auto' });
+                    }}
                   />
                 );
               })}
@@ -4385,6 +4537,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
              username={username}
              lang={lang}
              sourceViewMode={previewImageState.sourceViewMode}
+             itemInstanceKey={previewImageState.currentIndex}
              onUpdateItem={(newItem) => {
                 const newItems = [...previewImageState.items];
                 newItems[previewImageState.currentIndex] = newItem;
@@ -4876,7 +5029,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
              >
                 <div className="flex items-center">
                    <Download className="w-4 h-4 mr-2" />
-                   {lang === 'en' ? 'Batch Download Images' : '批量打包/下载图片'}
+                   {lang === 'en' ? 'Batch Export Attachments' : '批量打包/导出附件'}
                 </div>
              </button>
              <button 
@@ -5139,6 +5292,7 @@ function HeaderCell({
   const [draftAiImageConfig, setDraftAiImageConfig] = useState(field.aiImageConfig || { count: 1, size: '1024x1024' });
   const [draftAiVideoConfig, setDraftAiVideoConfig] = useState(field.aiVideoConfig || { duration: '10', resolution: '1080P', ratio: '16:9', sound: 'false', mode: 'fast' });
   const [draftAiTextConfig, setDraftAiTextConfig] = useState(field.aiTextConfig || {});
+  const [availableSkills, setAvailableSkills] = useState<any[]>([]);
   const [showPromptRefs, setShowPromptRefs] = useState(false);
 
   useEffect(() => {
@@ -5146,9 +5300,28 @@ function HeaderCell({
       setDraftPrompt(field.prompt || '');
       setDraftRefs(field.refFields || []);
       setDraftAiImageConfig(field.aiImageConfig || { count: 1, size: '1024x1024' });
+      setDraftAiTextConfig(field.aiTextConfig || {});
       setIsTypeExpanded(true);
     }
-  }, [showMenu, field.prompt, field.refFields, field.aiImageConfig]);
+  }, [showMenu, field.prompt, field.refFields, field.aiImageConfig, field.aiTextConfig]);
+
+  useEffect(() => {
+    if (!showMenu || field.type !== 'aiText') return;
+    let cancelled = false;
+    const api = (window as any).electronAPI;
+    if (!api?.listSkills) {
+      setAvailableSkills([]);
+      return;
+    }
+    api.listSkills()
+      .then((state: any) => {
+        if (!cancelled) setAvailableSkills(Array.isArray(state?.skills) ? state.skills : []);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableSkills([]);
+      });
+    return () => { cancelled = true; };
+  }, [showMenu, field.type]);
 
   const [localWidth, setLocalWidth] = useState<number | null>(null);
 
@@ -6025,6 +6198,47 @@ function HeaderCell({
                    )}
                    {field.type === 'aiText' && (
                      <div className="mt-2 space-y-2">
+                       <div className="relative">
+                         <label className="block text-[10px] text-gray-500 mb-1">Skill (显示名，可引用字段)</label>
+                         <input
+                           type="text"
+                           list={`txt-skill-suggestions-${field.id}`}
+                           className="w-full text-xs border border-gray-300 rounded p-1 pr-16 outline-none placeholder:text-gray-300"
+                           placeholder="例如: MiniMax H3 Prompt Writing 或 {Skill}"
+                           title={draftAiTextConfig.skillTemplate || ''}
+                           value={draftAiTextConfig.skillTemplate || ''}
+                           onChange={e => setDraftAiTextConfig(prev => ({ ...prev, skillTemplate: e.target.value }))}
+                           onMouseDown={e => e.stopPropagation()}
+                         />
+                         <datalist id={`txt-skill-suggestions-${field.id}`}>
+                           {availableSkills
+                             .filter((skill: any) => skill.enabled && !skill.duplicateDisplayName)
+                             .map((skill: any) => (
+                               <option key={skill.relativePath || skill.displayName} value={skill.displayName}>
+                                 {skill.description || skill.source?.label || ''}
+                               </option>
+                             ))}
+                         </datalist>
+                         <select
+                           className="absolute bottom-[18px] right-1 text-[10px] border border-gray-200 bg-gray-50 rounded w-[60px]"
+                           value=""
+                           onChange={e => {
+                             if (!e.target.value) return;
+                             const curTpl = draftAiTextConfig.skillTemplate || '';
+                             setDraftAiTextConfig(prev => ({ ...prev, skillTemplate: curTpl + `{${e.target.value}}` }));
+                           }}
+                         >
+                           <option value="">+ 引用</option>
+                           {allFields.filter(f => f.id !== field.id).map(f => (
+                             <option key={f.id} value={f.name}>{f.name}</option>
+                           ))}
+                         </select>
+                         <div className="mt-1 text-[9px] text-gray-400 truncate" title={draftAiTextConfig.skillTemplate || ''}>
+                           {draftAiTextConfig.skillTemplate
+                             ? (lang === 'en' ? 'Match by Skill display name; an empty referenced field means no Skill.' : '按 Skill 显示名匹配；引用字段为空时保持原智能文本逻辑。')
+                             : (lang === 'en' ? 'Optional. Leave empty to keep legacy Smart Text behavior.' : '可选。留空时完全沿用原智能文本逻辑。')}
+                         </div>
+                       </div>
                        <div>
                          <label className="block text-[10px] text-gray-500 mb-1">参考图片 (引用字段)</label>
                          <div className="relative">
@@ -6130,6 +6344,761 @@ function HeaderCell({
   );
 }
 
+
+type LargeTextMediaItem = {
+  item: any;
+  url: string;
+  sourceFieldName: string;
+  mediaType: DetectedMediaType;
+  token: string;
+  label: string;
+  sequence: number;
+  index: number;
+};
+
+const getSmartFieldMediaTemplates = (field: Field): string[] => {
+  if (field.type === 'aiText') {
+    return [String(field.aiTextConfig?.sourceImageTemplate || '')].filter(Boolean);
+  }
+  if (field.type === 'aiImage') {
+    return [String(field.aiImageConfig?.sourceImageTemplate || '')].filter(Boolean);
+  }
+  if (field.type === 'aiVideo') {
+    // 当前视频生成主链路主要使用 sourceImageTemplate，并保留对未来
+    // sourceVideoTemplate / sourceAudioTemplate 的兼容读取。
+    return [
+      String(field.aiVideoConfig?.sourceImageTemplate || ''),
+      String(field.aiVideoConfig?.sourceVideoTemplate || ''),
+      String(field.aiVideoConfig?.sourceAudioTemplate || ''),
+    ].filter(Boolean);
+  }
+  return [];
+};
+
+const getSmartFieldMediaSourceFields = (sourceField: Field, allFields: Field[]): Field[] => {
+  const templates = getSmartFieldMediaTemplates(sourceField);
+  if (templates.length === 0) return [];
+
+  const firstPosition = new Map<string, number>();
+  let offset = 0;
+  templates.forEach(template => {
+    allFields.forEach(candidate => {
+      // 只解析真实可承载媒体的字段，避免普通文本被误当成文件路径。
+      if (!['attachment', 'aiImage', 'aiVideo', 'url'].includes(candidate.type)) return;
+      const index = template.indexOf(`{${candidate.name}}`);
+      if (index < 0) return;
+      const position = offset + index;
+      const previous = firstPosition.get(candidate.id);
+      if (previous === undefined || position < previous) firstPosition.set(candidate.id, position);
+    });
+    offset += template.length + 1;
+  });
+
+  return allFields
+    .filter(candidate => firstPosition.has(candidate.id))
+    .sort((a, b) => (firstPosition.get(a.id) || 0) - (firstPosition.get(b.id) || 0));
+};
+
+const getLargeTextMediaItems = (
+  field: Field,
+  allFields: Field[],
+  record: BaseRecord,
+  temporaryReferenceFieldId?: string | null
+): LargeTextMediaItem[] => {
+  let sourceField: Field | undefined;
+
+  if (field.type === 'aiText') {
+    // 智能文本有自己明确配置的媒体引用时，始终优先使用自身媒体上下文。
+    // 只有当它完全没有配置任何可用媒体字段时，才允许像普通文本一样
+    // 在当前大屏编辑会话中临时继承另一个智能节点的媒体上下文。
+    const ownMediaFields = getSmartFieldMediaSourceFields(field, allFields);
+    if (ownMediaFields.length > 0) {
+      sourceField = field;
+    } else if (temporaryReferenceFieldId) {
+      const candidate = allFields.find(f => f.id === temporaryReferenceFieldId);
+      if (candidate && ['aiText', 'aiImage', 'aiVideo'].includes(candidate.type)) {
+        sourceField = candidate;
+      }
+    }
+  } else if (field.type === 'text' && temporaryReferenceFieldId) {
+    // 普通文本仅在大屏编辑会话里临时“参考一个智能节点”。
+    // 不写回 Field Config，不建立永久依赖。
+    const candidate = allFields.find(f => f.id === temporaryReferenceFieldId);
+    if (candidate && ['aiText', 'aiImage', 'aiVideo'].includes(candidate.type)) {
+      sourceField = candidate;
+    }
+  }
+
+  if (!sourceField) return [];
+  const orderedFields = getSmartFieldMediaSourceFields(sourceField, allFields);
+  if (orderedFields.length === 0) return [];
+
+  const counters: Record<DetectedMediaType, number> = { image: 0, video: 0, audio: 0 };
+  const result: LargeTextMediaItem[] = [];
+
+  orderedFields.forEach(refField => {
+    const rawValue = record[refField.id];
+    let items: any[] = [];
+    if (refField.type === 'url') {
+      if (rawValue) items = [{ url: String(rawValue) }];
+    } else {
+      items = normalizeAttachmentItems(rawValue);
+    }
+
+    items.forEach(item => {
+      const url = String(item?.url || '').trim();
+      if (!url) return;
+      const mediaType = detectExportMediaType(item, url);
+      counters[mediaType] += 1;
+      const seq = counters[mediaType];
+      const token = mediaType === 'audio' ? `<Audio ${seq}>` : mediaType === 'video' ? `<Video ${seq}>` : `<Picture ${seq}>`;
+      const label = mediaType === 'audio' ? `Audio ${seq}` : mediaType === 'video' ? `Video ${seq}` : `Picture ${seq}`;
+      result.push({ item, url, sourceFieldName: refField.name, mediaType, token, label, sequence: seq, index: result.length });
+    });
+  });
+
+  return result;
+};
+
+const escapeHtmlForLargeEditor = (input: string) => input
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;');
+
+
+const getLargeMediaTheme = (type: DetectedMediaType) => {
+  // 与字段表头色板同一认知，但整体下压一档明度，减少大屏编辑时的视觉干扰。
+  if (type === 'audio') {
+    return {
+      border: '#e9d5ff',
+      background: '#faf5ff',
+      text: '#7e22ce',
+      soft: '#f3e8ff',
+      badge: '#7e22ce',
+      groupLabel: '音频',
+      groupLabelEn: 'Audio',
+    };
+  }
+  if (type === 'video') {
+    return {
+      border: '#fbcfe8',
+      background: '#fdf2f8',
+      text: '#be185d',
+      soft: '#fce7f3',
+      badge: '#be185d',
+      groupLabel: '视频',
+      groupLabelEn: 'Video',
+    };
+  }
+  return {
+    border: '#bfdbfe',
+    background: '#eff6ff',
+    text: '#1d4ed8',
+    soft: '#dbeafe',
+    badge: '#1d4ed8',
+    groupLabel: '图片',
+    groupLabelEn: 'Image',
+  };
+};
+
+const getLargeMediaFallbackIconHtml = (type: DetectedMediaType) => {
+  if (type === 'audio') {
+    return '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+  }
+  if (type === 'video') {
+    return '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="display:block"><path d="M8 5v14l11-7z"/></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>';
+};
+
+const highlightLargeVisualSyntax = (escapedText: string) => {
+  return escapedText
+    .replace(/(&lt;[^<>\n]+?&gt;)/g, '<strong style="font-weight:700;color:#344054;">$1</strong>')
+    .replace(/(\[[^\]\n]+\])/g, '<strong style="font-weight:700;color:#344054;">$1</strong>')
+    .replace(/(【[^】\n]+】)/g, '<strong style="font-weight:700;color:#344054;">$1</strong>');
+};
+
+const serializeLargeVisualEditor = (root: HTMLElement | null): string => {
+  if (!root) return '';
+  const walk = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const el = node as HTMLElement;
+    const token = el.dataset?.mediaToken;
+    if (token) return token;
+    if (el.tagName === 'BR') return '\n';
+    let out = '';
+    el.childNodes.forEach(child => { out += walk(child); });
+    if (el.tagName === 'DIV' || el.tagName === 'P') out += '\n';
+    return out;
+  };
+  return walk(root).replace(/\n{3,}/g, '\n\n').replace(/\n$/, '');
+};
+
+interface LargeTextEditorModalProps {
+  open: boolean;
+  field: Field;
+  record: BaseRecord;
+  allFields: Field[];
+  value: string;
+  lang: 'en' | 'zh';
+  onSave: (value: string) => void;
+  onClose: () => void;
+  onGenerate?: () => void;
+  onPreviewImage: CellProps['onPreviewImage'];
+  recordPosition: number;
+  recordCount: number;
+  initialTemporaryReferenceFieldId?: string | null;
+  onNavigateRow?: (direction: -1 | 1, currentValue: string, temporaryReferenceFieldId: string | null) => void;
+}
+
+const LargeTextEditorModal = ({
+  open,
+  field,
+  record,
+  allFields,
+  value,
+  lang,
+  onSave,
+  onClose,
+  onGenerate,
+  onPreviewImage,
+  recordPosition,
+  recordCount,
+  initialTemporaryReferenceFieldId = null,
+  onNavigateRow,
+}: LargeTextEditorModalProps) => {
+  const isAiText = field.type === 'aiText';
+  const isPlainText = field.type === 'text';
+  const temporaryReferenceFieldOptions = useMemo(
+    () => allFields.filter(f => f.id !== field.id && ['aiText', 'aiImage', 'aiVideo'].includes(f.type)),
+    [allFields, field.id]
+  );
+  const aiTextHasOwnMediaReferences = useMemo(
+    () => isAiText && getSmartFieldMediaSourceFields(field, allFields).length > 0,
+    [isAiText, field, allFields]
+  );
+  // 普通文本始终可选临时参考；智能文本仅在自身没有配置媒体引用字段时开放。
+  const canSelectTemporaryReference = isPlainText || (isAiText && !aiTextHasOwnMediaReferences);
+  const [temporaryReferenceFieldId, setTemporaryReferenceFieldId] = useState<string | null>(
+    canSelectTemporaryReference ? initialTemporaryReferenceFieldId : null
+  );
+  const canUseVisualReferences = isAiText || (isPlainText && !!temporaryReferenceFieldId);
+  const mediaItems = useMemo(
+    () => getLargeTextMediaItems(field, allFields, record, temporaryReferenceFieldId),
+    [field, allFields, record, temporaryReferenceFieldId]
+  );
+  const [draft, setDraft] = useState(String(value ?? ''));
+  const [visualMode, setVisualMode] = useState(isAiText || !!initialTemporaryReferenceFieldId);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionPosition, setMentionPosition] = useState<{ left: number; top: number } | null>(null);
+  const [thumbMap, setThumbMap] = useState<Record<string, string>>({});
+  const visualRef = useRef<HTMLDivElement>(null);
+  const savedRangeRef = useRef<Range | null>(null);
+  const visualSourceRef = useRef(String(value ?? ''));
+
+  useEffect(() => {
+    if (!open) return;
+    const nextValue = String(value ?? '');
+    visualSourceRef.current = nextValue;
+    setDraft(nextValue);
+    const nextTemporaryReferenceFieldId = canSelectTemporaryReference ? initialTemporaryReferenceFieldId : null;
+    setTemporaryReferenceFieldId(nextTemporaryReferenceFieldId);
+    setVisualMode(isAiText || !!nextTemporaryReferenceFieldId);
+    setMentionQuery(null);
+    setMentionPosition(null);
+  }, [open, value, isAiText, field.id, record.id, initialTemporaryReferenceFieldId, canSelectTemporaryReference]);
+
+  useEffect(() => {
+    if (!open || mediaItems.length === 0) return;
+    let cancelled = false;
+    Promise.all(mediaItems.map(async media => {
+      try {
+        const thumb = thumbnailCache.get(media.url) || await getOrGenerateThumbnail(media.url);
+        return [media.url, thumb || ''] as const;
+      } catch {
+        return [media.url, ''] as const;
+      }
+    })).then(entries => {
+      if (!cancelled) setThumbMap(Object.fromEntries(entries));
+    });
+    return () => { cancelled = true; };
+  }, [open, mediaItems]);
+
+  const findMediaByToken = (kind: string, n: number) => {
+    const normalizedKind = kind.toLowerCase();
+    const targetType: DetectedMediaType = normalizedKind === 'audio' ? 'audio' : normalizedKind === 'video' ? 'video' : 'image';
+    const typed = mediaItems.filter(m => m.mediaType === targetType);
+    return typed[n - 1];
+  };
+
+  const visualHtml = (text: string) => {
+    const mediaHtml: string[] = [];
+    let escaped = escapeHtmlForLargeEditor(text);
+
+    escaped = escaped.replace(/&lt;(Picture|Image|Video|Audio)\s+(\d+)&gt;/gi, (_match, kind, num) => {
+      const n = Number(num);
+      const media = findMediaByToken(String(kind), n);
+      const token = `<${kind} ${n}>`;
+      const mediaType: DetectedMediaType = String(kind).toLowerCase() === 'audio'
+        ? 'audio'
+        : String(kind).toLowerCase() === 'video'
+          ? 'video'
+          : 'image';
+      const theme = getLargeMediaTheme(mediaType);
+      const thumb = media ? thumbMap[media.url] : '';
+      const fallbackIcon = getLargeMediaFallbackIconHtml(mediaType);
+      const url = media?.url || '';
+      const label = media?.label || `${kind} ${n}`;
+      const placeholder = `__LARGE_MEDIA_${mediaHtml.length}__`;
+
+      mediaHtml.push(
+        `<span contenteditable="false" data-media-token="${escapeHtmlForLargeEditor(token)}" data-media-url="${escapeHtmlForLargeEditor(url)}" data-media-type="${mediaType}" style="display:inline-flex;align-items:center;gap:5px;height:28px;margin:1px 2px;padding:2px 8px 2px 3px;border:1px solid ${theme.border};background:${theme.background};color:${theme.text};border-radius:7px;font-weight:600;vertical-align:middle;white-space:nowrap;">` +
+        `<span data-media-thumb="1" style="width:24px;height:22px;display:grid;place-items:center;overflow:hidden;border-radius:4px;background:${theme.soft};flex:0 0 24px;">${thumb ? `<img src="${thumb}" style="width:100%;height:100%;object-fit:cover;display:block;"/>` : `<span style="line-height:0;display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:${theme.text};">${fallbackIcon}</span>`}</span>` +
+        `<span>${escapeHtmlForLargeEditor(label)}</span>` +
+        `</span>`
+      );
+      return placeholder;
+    });
+
+    escaped = highlightLargeVisualSyntax(escaped);
+    mediaHtml.forEach((html, index) => {
+      escaped = escaped.replace(`__LARGE_MEDIA_${index}__`, html);
+    });
+    return escaped;
+  };
+
+  useEffect(() => {
+    if (!open || !visualMode || !visualRef.current) return;
+    // 首次进入引用渲染时直接带入已生成的缩略图；不再要求 Raw/Visual 来回切换刷新。
+    visualRef.current.innerHTML = visualHtml(visualSourceRef.current);
+  }, [open, visualMode, field.id, record.id, mediaItems, thumbMap]);
+
+  useEffect(() => {
+    if (!open || !visualMode || !visualRef.current) return;
+    visualRef.current.querySelectorAll<HTMLElement>('[data-media-url]').forEach(chip => {
+      const url = chip.dataset.mediaUrl || '';
+      const mediaType = (chip.dataset.mediaType || 'image') as DetectedMediaType;
+      const thumb = url ? thumbMap[url] : '';
+      if (!thumb) return;
+      const slot = chip.querySelector<HTMLElement>('[data-media-thumb]');
+      if (!slot || slot.querySelector('img')) return;
+      slot.innerHTML = `<img src="${thumb}" style="width:100%;height:100%;object-fit:cover;display:block;"/>`;
+      const theme = getLargeMediaTheme(mediaType);
+      slot.style.background = theme.soft;
+    });
+  }, [thumbMap, open, visualMode]);
+
+  const rememberRange = () => {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && visualRef.current?.contains(sel.anchorNode)) {
+      savedRangeRef.current = sel.getRangeAt(0).cloneRange();
+    }
+  };
+
+  const detectMention = () => {
+    if (!visualMode || !visualRef.current) return;
+    rememberRange();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !visualRef.current.contains(sel.anchorNode)) {
+      setMentionQuery(null);
+      setMentionPosition(null);
+      return;
+    }
+    const range = sel.getRangeAt(0).cloneRange();
+    range.selectNodeContents(visualRef.current);
+    range.setEnd(sel.anchorNode!, sel.anchorOffset);
+    const before = range.toString();
+    const match = before.match(/@([^@\s]*)$/);
+    if (!match) {
+      setMentionQuery(null);
+      setMentionPosition(null);
+      return;
+    }
+
+    // @ 菜单跟随当前光标，而不是固定在编辑器左上角。
+    // Chromium 的折叠 Range 在行首/行尾偶尔会返回 0 尺寸，因此再用光标前一个字符兜底定位。
+    const host = visualRef.current.parentElement;
+    if (host) {
+      const hostRect = host.getBoundingClientRect();
+      const caretRange = sel.getRangeAt(0).cloneRange();
+      caretRange.collapse(true);
+      const caretRect = caretRange.getBoundingClientRect();
+      let caretLeft = caretRect.left;
+      let caretTop = caretRect.top;
+      let caretBottom = caretRect.bottom;
+
+      if ((!caretRect.width && !caretRect.height) && sel.anchorNode?.nodeType === Node.TEXT_NODE && sel.anchorOffset > 0) {
+        const probeRange = document.createRange();
+        probeRange.setStart(sel.anchorNode, sel.anchorOffset - 1);
+        probeRange.setEnd(sel.anchorNode, sel.anchorOffset);
+        const probeRect = probeRange.getBoundingClientRect();
+        if (probeRect.width || probeRect.height) {
+          caretLeft = probeRect.right;
+          caretTop = probeRect.top;
+          caretBottom = probeRect.bottom;
+        }
+      }
+
+      const menuWidth = 320;
+      const left = Math.max(8, Math.min(caretLeft - hostRect.left, Math.max(8, hostRect.width - menuWidth - 8)));
+      const menuMaxHeight = 360;
+      const gap = 6;
+      const roomBelow = hostRect.bottom - caretBottom;
+      const top = roomBelow >= menuMaxHeight + gap
+        ? caretBottom - hostRect.top + gap
+        : Math.max(8, caretTop - hostRect.top - menuMaxHeight - gap);
+      setMentionPosition({ left, top });
+    }
+    setMentionQuery(match[1]);
+  };
+
+  const insertMediaAtCaret = (media: LargeTextMediaItem) => {
+    const editor = visualRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    if (!sel) return;
+    let range = savedRangeRef.current?.cloneRange();
+    if (!range || !editor.contains(range.commonAncestorContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    if (range.startContainer.nodeType === Node.TEXT_NODE) {
+      const node = range.startContainer as Text;
+      const before = node.data.slice(0, range.startOffset);
+      const match = before.match(/@([^@\s]*)$/);
+      if (match) {
+        const start = range.startOffset - match[0].length;
+        node.deleteData(start, match[0].length);
+        range.setStart(node, start);
+        range.collapse(true);
+      }
+    }
+
+    const chip = document.createElement('span');
+    chip.contentEditable = 'false';
+    chip.dataset.mediaToken = media.token;
+    chip.dataset.mediaUrl = media.url;
+    chip.dataset.mediaType = media.mediaType;
+    const theme = getLargeMediaTheme(media.mediaType);
+    chip.style.cssText = `display:inline-flex;align-items:center;gap:5px;height:28px;margin:1px 2px;padding:2px 8px 2px 3px;border:1px solid ${theme.border};background:${theme.background};color:${theme.text};border-radius:7px;font-weight:600;vertical-align:middle;white-space:nowrap;`;
+    const thumb = thumbMap[media.url];
+    const fallbackIcon = getLargeMediaFallbackIconHtml(media.mediaType);
+    chip.innerHTML = `<span data-media-thumb="1" style="width:24px;height:22px;display:grid;place-items:center;overflow:hidden;border-radius:4px;background:${theme.soft};flex:0 0 24px;">${thumb ? `<img src="${thumb}" style="width:100%;height:100%;object-fit:cover;display:block;"/>` : `<span style="line-height:0;display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:${theme.text};">${fallbackIcon}</span>`}</span><span>${escapeHtmlForLargeEditor(media.label)}</span>`;
+    range.insertNode(chip);
+    const space = document.createTextNode(' ');
+    chip.after(space);
+    const nextRange = document.createRange();
+    nextRange.setStartAfter(space);
+    nextRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(nextRange);
+    savedRangeRef.current = nextRange.cloneRange();
+    const nextDraft = serializeLargeVisualEditor(editor);
+    visualSourceRef.current = nextDraft;
+    setDraft(nextDraft);
+    setMentionQuery(null);
+    setMentionPosition(null);
+  };
+
+  const closeAndSave = () => {
+    const finalText = visualMode ? serializeLargeVisualEditor(visualRef.current) : draft;
+    onSave(finalText);
+    onClose();
+  };
+
+  const switchMode = (nextVisual: boolean) => {
+    if (nextVisual === visualMode) return;
+    const currentText = visualMode ? serializeLargeVisualEditor(visualRef.current) : draft;
+    visualSourceRef.current = currentText;
+    setDraft(currentText);
+    setVisualMode(nextVisual);
+    setMentionQuery(null);
+    setMentionPosition(null);
+  };
+
+  const handleTemporaryReferenceChange = (fieldId: string) => {
+    const nextId = fieldId || null;
+    setTemporaryReferenceFieldId(nextId);
+    setMentionQuery(null);
+    setMentionPosition(null);
+    if (!isAiText) setVisualMode(!!nextId);
+  };
+
+  const navigateRow = (direction: -1 | 1) => {
+    if (!onNavigateRow) return;
+    if (direction < 0 && recordPosition <= 1) return;
+    if (direction > 0 && recordPosition >= recordCount) return;
+    const finalText = visualMode ? serializeLargeVisualEditor(visualRef.current) : draft;
+    onNavigateRow(direction, finalText, temporaryReferenceFieldId);
+    onClose();
+  };
+
+  const previewItems = mediaItems.map(m => m.item);
+  const filteredMentionItems = mentionQuery === null ? [] : mediaItems.filter(m => {
+    const q = mentionQuery.toLowerCase();
+    return !q || m.label.toLowerCase().includes(q) || m.sourceFieldName.toLowerCase().includes(q) || String(m.item?.name || m.url).toLowerCase().includes(q);
+  });
+
+  const mentionGroups = (['image', 'audio', 'video'] as DetectedMediaType[])
+    .map(type => ({ type, items: filteredMentionItems.filter(item => item.mediaType === type) }))
+    .filter(group => group.items.length > 0);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[2147483000] bg-black/40 backdrop-blur-[1px] flex items-center justify-center p-5" onMouseDown={(e) => { if (e.target === e.currentTarget) closeAndSave(); }}>
+      <div
+        className="w-[92vw] max-w-[1500px] h-[88vh] min-h-[620px] bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col"
+        onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          const target = e.target as HTMLElement;
+          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable || !!target.closest('[contenteditable="true"]')) {
+            // 文本编辑器的 Enter / Delete / Backspace / Ctrl+A/C/X/V/Z/Y 等全部交还浏览器原生编辑行为。
+            e.stopPropagation();
+          }
+        }}
+      >
+        <div className="h-12 shrink-0 border-b border-gray-200 px-4 flex items-center gap-3 bg-gray-50/80">
+          <Maximize2 className="w-4 h-4 text-gray-500" />
+          <div className="font-semibold text-gray-800 truncate">{field.name}</div>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-500">{isAiText ? (lang === 'en' ? 'Smart Text' : '智能文本') : (lang === 'en' ? 'Text' : '文本')}</span>
+          <div className="ml-auto flex items-center gap-2">
+            {canSelectTemporaryReference && temporaryReferenceFieldOptions.length > 0 && (
+              <div className="h-8 flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2">
+                <Link className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                <span className="text-[10px] text-gray-400 shrink-0">{lang === 'en' ? 'Temp reference' : '临时参考'}</span>
+                <select
+                  value={temporaryReferenceFieldId || ''}
+                  onChange={(e) => handleTemporaryReferenceChange(e.target.value)}
+                  className="max-w-[220px] min-w-[130px] bg-transparent outline-none text-xs text-gray-700 cursor-pointer"
+                  title={lang === 'en' ? 'Temporarily inherit the selected smart field media context' : '临时继承所选智能字段当前行的媒体上下文'}
+                >
+                  <option value="">{lang === 'en' ? 'None' : '不使用'}</option>
+                  {temporaryReferenceFieldOptions.map(refField => (
+                    <option key={refField.id} value={refField.id}>
+                      {refField.name} · {refField.type === 'aiText' ? (lang === 'en' ? 'Smart Text' : '智能文本') : refField.type === 'aiImage' ? (lang === 'en' ? 'AI Image' : '智能图片') : (lang === 'en' ? 'AI Video' : '智能视频')}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {onNavigateRow && (
+              <div className="h-8 flex items-center rounded-md border border-gray-200 bg-white overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => navigateRow(-1)}
+                  disabled={recordPosition <= 1}
+                  className="h-full px-2 flex items-center gap-1 text-[11px] text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-default"
+                  title={lang === 'en' ? 'Previous row' : '上一行'}
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" /> {lang === 'en' ? 'Prev' : '上一行'}
+                </button>
+                <span className="px-2 text-[10px] text-gray-400 border-x border-gray-100">{recordPosition} / {recordCount}</span>
+                <button
+                  type="button"
+                  onClick={() => navigateRow(1)}
+                  disabled={recordPosition >= recordCount}
+                  className="h-full px-2 flex items-center gap-1 text-[11px] text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-default"
+                  title={lang === 'en' ? 'Next row' : '下一行'}
+                >
+                  {lang === 'en' ? 'Next' : '下一行'} <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+            {isAiText && onGenerate && (
+              <button
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const finalText = visualMode ? serializeLargeVisualEditor(visualRef.current) : draft;
+                  onSave(finalText);
+                  onClose();
+                  onGenerate();
+                }}
+                className="h-8 px-3 rounded-md border border-gray-200 bg-white text-gray-400 hover:bg-gradient-to-r hover:from-purple-500 hover:to-indigo-500 hover:text-white flex items-center gap-1.5 text-xs font-medium transition-all"
+              >
+                <Sparkles className="w-3.5 h-3.5" /> {lang === 'en' ? 'Regenerate' : '重新生成'}
+              </button>
+            )}
+            <button onClick={closeAndSave} className="w-8 h-8 rounded-md hover:bg-gray-200 text-gray-500 flex items-center justify-center" title={lang === 'en' ? 'Close and save' : '关闭并保存'}><X className="w-4 h-4" /></button>
+          </div>
+        </div>
+
+        {canUseVisualReferences && mediaItems.length > 0 && (
+          <div className="shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 bg-white">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-medium text-gray-500">{lang === 'en' ? 'Referenced media in this row' : '当前行引用媒体'}</div>
+              <div className="flex rounded-md border border-gray-200 bg-gray-50 p-0.5">
+                <button onClick={() => switchMode(false)} className={cn('px-3 py-1 text-[10px] rounded', !visualMode ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>{lang === 'en' ? 'Raw' : '纯文本'}</button>
+                <button onClick={() => switchMode(true)} className={cn('px-3 py-1 text-[10px] rounded', visualMode ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>{lang === 'en' ? 'Visual' : '引用渲染'}</button>
+              </div>
+            </div>
+            <div className="flex items-start gap-2 overflow-x-auto pb-1">
+              {mediaItems.map((media, index) => (
+                <button
+                  key={`${media.url}-${index}`}
+                  type="button"
+                  onClick={() => onPreviewImage(media.url, previewItems, undefined, record.id, index)}
+                  className="group relative w-[72px] shrink-0 text-left"
+                  title={`${media.sourceFieldName} · ${media.label}`}
+                >
+                  <div className={cn(
+                    "relative w-[72px] h-[72px] rounded border bg-gray-100 overflow-hidden group-hover:ring-2",
+                    media.mediaType === 'image' ? "border-blue-200 group-hover:ring-blue-700/30" :
+                    media.mediaType === 'audio' ? "border-purple-200 group-hover:ring-purple-700/30" :
+                    "border-pink-200 group-hover:ring-pink-700/30"
+                  )}>
+                    <div className="relative w-full h-full">
+                      <ThumbnailImage path={media.url} alt={media.label} className="w-full h-full object-cover rounded" />
+                      {media.mediaType === 'video' && (
+                        <span className="absolute inset-0 flex items-center justify-center bg-black/20 rounded pointer-events-none">
+                          <Play className="w-5 h-5 text-white/80 fill-white/70 drop-shadow" />
+                        </span>
+                      )}
+                    </div>
+                    <span className={cn(
+                      "absolute left-1 bottom-1 min-w-[18px] h-[18px] px-1 rounded-full text-white text-[9px] font-bold flex items-center justify-center shadow-sm",
+                      media.mediaType === 'image' ? "bg-blue-700" : media.mediaType === 'audio' ? "bg-purple-700" : "bg-pink-700"
+                    )}>{media.sequence}</span>
+                    {media.item?.cropData && (
+                      <span className="absolute top-0.5 right-0.5 bg-black/40 backdrop-blur-sm text-white/90 rounded-[2px] p-[2px]">
+                        {media.item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
+                      </span>
+                    )}
+                  </div>
+                  <div className={cn(
+                    "mt-1 text-[10px] font-medium truncate",
+                    media.mediaType === 'image' ? "text-blue-700" : media.mediaType === 'audio' ? "text-purple-700" : "text-pink-700"
+                  )}>{media.label}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {canUseVisualReferences && mediaItems.length === 0 && (
+          <div className="shrink-0 px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+            <span className="text-[11px] text-gray-400">{isAiText ? (lang === 'en' ? 'No referenced media in this row.' : '当前行未引入媒体附件。') : (lang === 'en' ? 'The selected smart field has no media context in this row.' : '当前行所选智能节点没有可用媒体。')}</span>
+            <div className="flex rounded-md border border-gray-200 bg-gray-50 p-0.5">
+              <button onClick={() => switchMode(false)} className={cn('px-3 py-1 text-[10px] rounded', !visualMode ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>{lang === 'en' ? 'Raw' : '纯文本'}</button>
+              <button onClick={() => switchMode(true)} className={cn('px-3 py-1 text-[10px] rounded', visualMode ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>{lang === 'en' ? 'Visual' : '引用渲染'}</button>
+            </div>
+          </div>
+        )}
+
+        <div className="relative flex-1 min-h-0 p-5 bg-gray-50/40">
+          {!visualMode || !canUseVisualReferences ? (
+            <textarea
+              autoFocus
+              value={draft}
+              onChange={(e) => { setDraft(e.target.value); visualSourceRef.current = e.target.value; }}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                  e.preventDefault();
+                  onSave(draft);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  closeAndSave();
+                }
+              }}
+              className="w-full h-full resize-none rounded-lg border border-gray-200 bg-white px-5 py-4 outline-none focus:ring-0 focus:border-gray-200 text-[14px] leading-7 text-gray-800 font-mono shadow-sm"
+              spellCheck={false}
+            />
+          ) : (
+            <div className="relative h-full">
+              <div
+                ref={visualRef}
+                contentEditable
+                suppressContentEditableWarning
+                spellCheck={false}
+                onInput={() => {
+                  const nextValue = serializeLargeVisualEditor(visualRef.current);
+                  visualSourceRef.current = nextValue;
+                  setDraft(nextValue);
+                  detectMention();
+                }}
+                onKeyUp={(e) => { rememberRange(); detectMention(); if (e.key === 'Escape') { setMentionQuery(null); setMentionPosition(null); } }}
+                onMouseUp={rememberRange}
+                onFocus={rememberRange}
+                onScroll={() => { if (mentionQuery !== null) detectMention(); }}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                    e.preventDefault();
+                    onSave(serializeLargeVisualEditor(visualRef.current));
+                  } else if (e.key === 'Escape' && mentionQuery === null) {
+                    e.preventDefault();
+                    closeAndSave();
+                  }
+                }}
+                className="w-full h-full overflow-auto rounded-lg border border-gray-200 bg-white px-5 py-4 outline-none focus:ring-0 focus:border-gray-200 text-[14px] leading-7 text-gray-800 font-mono shadow-sm whitespace-pre-wrap break-words"
+              />
+              {mentionQuery !== null && filteredMentionItems.length > 0 && (
+                <div
+                  className="absolute w-[320px] max-h-[360px] overflow-auto rounded-lg border border-gray-200 bg-white shadow-xl z-20 p-1.5"
+                  style={{ left: mentionPosition?.left ?? 8, top: mentionPosition?.top ?? 8 }}
+                >
+                  <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-gray-400">{lang === 'en' ? 'Insert referenced media' : '插入引用媒体'}</div>
+                  {mentionGroups.map((group, groupIndex) => {
+                    const theme = getLargeMediaTheme(group.type);
+                    return (
+                      <div key={group.type}>
+                        {groupIndex > 0 && <div className="h-px bg-gray-100 my-1" />}
+                        <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: theme.text }}>
+                          {lang === 'en' ? theme.groupLabelEn : theme.groupLabel}
+                        </div>
+                        {group.items.map((media, index) => (
+                          <button
+                            key={`${media.url}-mention-${group.type}-${index}`}
+                            type="button"
+                            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                            onClick={() => insertMediaAtCaret(media)}
+                            className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-gray-50 text-left"
+                          >
+                            <div
+                              className="w-10 h-8 rounded border overflow-hidden shrink-0 flex items-center justify-center"
+                              style={{ borderColor: theme.border, background: theme.soft, color: theme.text }}
+                            >
+                              {media.mediaType === 'audio' ? (
+                                // @ 菜单尺寸很小，且已有“音频”分类与文字标签：这里只保留干净的音频色块，不叠加遮罩/音符。
+                                <span className="block w-full h-full bg-gradient-to-br from-slate-800 to-indigo-900" />
+                              ) : (
+                                // @ 菜单里的图片/视频只展示缩略图本身；视频不再额外叠加半透明遮罩和播放符号。
+                                <ThumbnailImage path={media.url} alt={media.label} className="w-full h-full object-cover" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-medium truncate" style={{ color: theme.text }}>{media.label}</div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="h-9 shrink-0 border-t border-gray-200 bg-white px-5 flex items-center text-[10px] text-gray-400">
+          <span>{draft.length.toLocaleString()} {lang === 'en' ? 'characters' : '字符'}</span>
+          {canUseVisualReferences && <span className="ml-4">{lang === 'en' ? 'Visual mode: type @ to insert media.' : '引用渲染：输入 @ 可插入当前参考媒体。'}</span>}
+          <span className="ml-auto">Ctrl / Cmd + S</span>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
 interface CellProps {
   key?: React.Key;
   record: BaseRecord;
@@ -6162,16 +7131,24 @@ interface CellProps {
   isLinked?: boolean;
   isLinkedTop?: boolean;
   isLinkedBottom?: boolean;
+  recordPosition: number;
+  recordCount: number;
+  largeTextOpenRequest?: { temporaryReferenceFieldId?: string | null };
+  onConsumeLargeTextOpenRequest?: () => void;
+  onNavigateLargeTextRow?: (direction: -1 | 1, currentValue: string, temporaryReferenceFieldId: string | null) => void;
 }
 
 const Cell = React.memo(
-function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh', globalAttachmentPropsMap, isLinked, isLinkedTop, isLinkedBottom }: CellProps) {
+function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh', globalAttachmentPropsMap, isLinked, isLinkedTop, isLinkedBottom, recordPosition, recordCount, largeTextOpenRequest, onConsumeLargeTextOpenRequest, onNavigateLargeTextRow }: CellProps) {
   const value = record[field.id];
   const isElectron = !!((window as any).electronAPI || (window as any).electron);
   
   const [isEditingMode, setIsEditingMode] = useState(false);
 
   const [localText, setLocalText] = useState('');
+  const [isLargeTextEditorOpen, setIsLargeTextEditorOpen] = useState(false);
+  const [largeTextInitialValue, setLargeTextInitialValue] = useState('');
+  const [largeTextTemporaryReferenceFieldId, setLargeTextTemporaryReferenceFieldId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isActive) setIsEditingMode(false);
@@ -6193,6 +7170,20 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
       setLocalText(String(v ?? ''));
     }
   }, [isEditingMode, value, field.type]);
+
+  // 行间切换大屏编辑时必须在浏览器绘制前接管下一行的弹窗。
+  // 若使用普通 useEffect，会先绘制一帧“旧弹窗已关闭、下一行弹窗尚未打开”的表格，
+  // Electron/Chromium 下表现为整屏闪一下；layout effect 可让交接在同一帧内完成。
+  React.useLayoutEffect(() => {
+    if (!largeTextOpenRequest || !['text', 'aiText'].includes(field.type)) return;
+    const current = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
+    setLargeTextInitialValue(current);
+    setLargeTextTemporaryReferenceFieldId(largeTextOpenRequest.temporaryReferenceFieldId || null);
+    setLocalText(current);
+    setIsEditingMode(false);
+    setIsLargeTextEditorOpen(true);
+    onConsumeLargeTextOpenRequest?.();
+  }, [largeTextOpenRequest]);
   
   const latestLocalTextRef = useRef(localText);
   latestLocalTextRef.current = localText;
@@ -6252,8 +7243,34 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
     if (onBatchAIGenerate) onBatchAIGenerate();
   };
 
+  const openLargeTextEditor = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const current = isEditingMode
+      ? localText
+      : (typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? ''));
+    if (isEditingMode) onChange(current);
+    setLargeTextInitialValue(current);
+    setLargeTextTemporaryReferenceFieldId(null);
+    setLocalText(current);
+    setIsEditingMode(false);
+    onActivate();
+    setIsLargeTextEditorOpen(true);
+  };
+
+  const saveLargeTextEditor = (nextValue: string) => {
+    setLargeTextInitialValue(nextValue);
+    setLocalText(nextValue);
+    onChange(nextValue);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!isActive) return;
+    const target = e.target as HTMLElement;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable || !!target.closest('[contenteditable="true"]')) {
+      // 原生文本编辑区域不交给单元格层处理，保证 Enter / Backspace / Delete / Ctrl+A/C/X/V/Z/Y 等正常。
+      return;
+    }
     if (e.key === 'Enter' && !isEditingMode) {
       e.preventDefault();
       setIsEditingMode(true);
@@ -6329,16 +7346,6 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
               }}
               style={{ position: 'absolute', zIndex: 30, left: -1, right: -1, top: -1, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }}
             />
-            <div className="absolute right-0 top-0 h-[32px] flex items-center pr-1 z-40">
-               <button 
-                 onMouseDown={handleAIGenerate} 
-                 className={cn("p-1 rounded shadow-sm text-white", isGeneratingCol ? "bg-gray-400" : "bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600")}
-                 title="Generate with AI"
-                 disabled={isGeneratingCol}
-               >
-                  <Sparkles className="w-3.5 h-3.5" />
-               </button>
-            </div>
           </div>
         );
       }
@@ -6835,11 +7842,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
 
         return (
           <div className="px-2 py-1 h-full flex flex-col justify-center relative group/ai w-full overflow-hidden">
-            <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full pr-4" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}><HighlightedText text={String(displayValue)} query={searchQuery} /></span>
-            {!value && !isGeneratingCol && isActive && (
+            <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full pr-6" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}><HighlightedText text={String(displayValue)} query={searchQuery} /></span>
+            {!isGeneratingCol && isActive && (
                <button onMouseDown={handleAIGenerate}
-                 className="absolute right-1 top-1.5 p-1 rounded bg-gray-100 hover:bg-gradient-to-r hover:from-purple-500 hover:to-indigo-500 hover:text-white text-gray-400 opacity-0 group-hover/ai:opacity-100 transition-all z-10"
-                 title="Quick Generate"
+                 className="absolute right-1 top-1.5 p-1 rounded bg-white shadow-sm hover:bg-gradient-to-r hover:from-purple-500 hover:to-indigo-500 hover:text-white text-gray-400 transition-all z-10 border border-gray-200"
+                 title={lang === 'en' ? 'Generate again' : '再次生成'}
                >
                  <Sparkles className="w-3.5 h-3.5" />
                </button>
@@ -6963,7 +7970,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
           displayValue = '';
         }
         return (
-          <div className="px-2 py-1 h-full flex flex-col justify-center w-full overflow-hidden select-none">
+          <div className={cn("px-2 py-1 h-full flex flex-col justify-center w-full overflow-hidden select-none", field.type === 'text' && "pr-6")}>
             <span className="whitespace-normal break-all overflow-hidden text-sm leading-tight w-full" style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: heightClass === 'h-[120px]' ? 5 : heightClass === 'h-[80px]' ? 3 : heightClass === 'h-[56px]' ? 2 : 1 }}><HighlightedText text={String(displayValue)} query={searchQuery} /></span>
           </div>
         );
@@ -7036,7 +8043,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
          if (!isEditingMode) setIsEditingMode(true);
       }}
       className={cn(
-        "border-b border-r border-gray-200 relative p-0 transition-colors cursor-cell group-hover:bg-gray-50",
+        "border-b border-r border-gray-200 relative p-0 transition-colors cursor-cell group/cell group-hover:bg-gray-50",
         heightClass,
         isSelectedBox && !isEditingMode ? "bg-[#ebf4ff] group-hover:bg-[#e1effe]" : (isSearchMatch && !isEditingMode ? "bg-blue-100" : "bg-white"),
         isSearchMatchActive && !isEditingMode && "ring-[2px] ring-blue-400 z-10",
@@ -7045,6 +8052,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
         frozenLeftOffset !== undefined ? (isActive ? "sticky z-[32]" : "sticky z-[31]") : "",
         isFrozenLast && frozenLeftOffset !== undefined ? "shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" : ""
       )}
+      data-cell-editing={isEditingMode ? 'true' : undefined}
       style={{ left: frozenLeftOffset }}
     >
       {isLinked && !isEditingMode && !isActive && !isSelectedBox && (
@@ -7058,6 +8066,37 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
           }}></div>
       )}
       {renderContent()}
+      {(field.type === 'text' || field.type === 'aiText') && !isEditingMode && (
+        <button
+          type="button"
+          onMouseDown={openLargeTextEditor}
+          className={cn(
+            "cell-large-editor-button absolute right-1 bottom-1 z-[45] w-5 h-5 rounded bg-gray-100/85 text-gray-500 hover:text-blue-600 hover:bg-gray-200 flex items-center justify-center transition-colors",
+            isActive ? "opacity-100" : "opacity-0 group-hover/cell:opacity-100"
+          )}
+          title={lang === 'en' ? 'Open large text editor' : '展开大屏编辑'}
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+        </button>
+      )}
+      {isLargeTextEditorOpen && (
+        <LargeTextEditorModal
+          open={isLargeTextEditorOpen}
+          field={field}
+          record={record}
+          allFields={allFields}
+          value={largeTextInitialValue}
+          lang={lang}
+          onSave={saveLargeTextEditor}
+          onClose={() => setIsLargeTextEditorOpen(false)}
+          onGenerate={field.type === 'aiText' && onBatchAIGenerate ? () => onBatchAIGenerate() : undefined}
+          onPreviewImage={onPreviewImage}
+          recordPosition={recordPosition}
+          recordCount={recordCount}
+          initialTemporaryReferenceFieldId={largeTextTemporaryReferenceFieldId}
+          onNavigateRow={onNavigateLargeTextRow}
+        />
+      )}
       {isLinkedTop && (
          <div className="absolute top-0 left-0 bg-purple-400 text-white rounded-br px-0.5 py-0.5 pointer-events-none z-[12] opacity-80" title={lang === 'en' ? 'Linked cell' : '联动单元格'}>
             <Link className="w-2.5 h-2.5" />
@@ -7083,6 +8122,9 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
     prev.isLinked === next.isLinked &&
     prev.isLinkedTop === next.isLinkedTop &&
     prev.isLinkedBottom === next.isLinkedBottom &&
+    prev.recordPosition === next.recordPosition &&
+    prev.recordCount === next.recordCount &&
+    prev.largeTextOpenRequest === next.largeTextOpenRequest &&
     prev.modelSettings === next.modelSettings;
     
   if (!baseEqual) return false;
