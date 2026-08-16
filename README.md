@@ -20,6 +20,40 @@ View your app in AI Studio: https://ai.studio/apps/91089e78-1698-4f15-91ca-4a320
    `npm run dev`
 
 
+
+## FFmpeg Runtime
+
+v2.6.1 的音视频 A-B 裁切、5s / 10s / 15s / 20s 快捷片段依赖 FFmpeg。
+
+官方下载：
+https://ffmpeg.org/download.html
+
+Windows 推荐：
+https://www.gyan.dev/ffmpeg/builds/
+
+建议下载：
+
+```text
+ffmpeg-release-essentials.zip
+````
+
+不要下载 `Source code` 源码包。
+
+目录：
+
+```text
+Hong's AI Table Studio/
+└─ ffmpeg/
+   └─ bin/
+      ├─ ffmpeg.exe
+      └─ ffprobe.exe
+```
+
+`ffmpeg.exe` 负责裁切 / 转码，`ffprobe.exe` 负责读取媒体时长和参数。FFmpeg 作为独立运行库，后续程序升级一般无需重复覆盖。
+
+
+
+
 ## Version Timeline
 
 ### v2.5.x → v2.6.x
