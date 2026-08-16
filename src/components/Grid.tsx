@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment } from '../types';
+import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment, MediaTrimData } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
 import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste, Maximize2 } from 'lucide-react';
@@ -275,11 +275,92 @@ function parseTSV(text: string): string[][] {
     return rows;
 }
 
+type InternalMediaClipboardPayload = {
+  plainText: string;
+  item: any;
+  copiedAt: number;
+};
+
+let internalMediaClipboardPayload: InternalMediaClipboardPayload | null = null;
+const INTERNAL_MEDIA_CLIPBOARD_TYPE = 'web application/x-hongs-media-item';
+
+const clonePersistableMediaItem = (input: any) => {
+  const source = typeof input === 'string' ? { url: input } : (input || {});
+  const normalizedUrl = normalizeLocalPathForStorage(source.url || source.path || '');
+  const clean = stripPreviewOnlyProps({ ...source, url: normalizedUrl });
+  try {
+    return JSON.parse(JSON.stringify(clean));
+  } catch {
+    return clean;
+  }
+};
+
+const copyMediaToClipboardMagic = async (input: any) => {
+  const item = clonePersistableMediaItem(input);
+  const plainText = normalizeLocalPathForStorage(item?.url || '');
+  if (!plainText) return;
+
+  const payload: InternalMediaClipboardPayload = {
+    plainText,
+    item,
+    copiedAt: Date.now()
+  };
+  internalMediaClipboardPayload = payload;
+
+  // External software receives only the path. Inside Hong's AI Table Studio we additionally
+  // keep the media-instance metadata (cropData / trimData) for a lossless attachment paste.
+  try {
+    const ClipboardItemCtor = (window as any).ClipboardItem;
+    if (navigator.clipboard?.write && ClipboardItemCtor) {
+      const customJson = JSON.stringify(payload);
+      const clipboardItem = new ClipboardItemCtor({
+        'text/plain': new Blob([plainText], { type: 'text/plain' }),
+        [INTERNAL_MEDIA_CLIPBOARD_TYPE]: new Blob([customJson], { type: INTERNAL_MEDIA_CLIPBOARD_TYPE })
+      });
+      await navigator.clipboard.write([clipboardItem]);
+      return;
+    }
+  } catch {
+    // Chromium/Electron versions that do not allow web custom clipboard formats fall back
+    // to text/plain + the renderer-local payload above.
+  }
+
+  try {
+    await navigator.clipboard.writeText(plainText);
+  } catch {}
+};
+
 const copyImageToClipboardMagic = (path: string) => {
-   navigator.clipboard.writeText(normalizeLocalPathForStorage(path));
+  void copyMediaToClipboardMagic(path);
 };
 
 const zoomLevels = [0.125, 0.25, 0.5, 0.707, 1, 1.414, 2, 2.828, 4, 5.656, 8];
+
+
+const TRIM_PRESET_DURATIONS_MS = [5000, 10000, 15000, 20000] as const;
+
+const formatMediaTime = (ms: number, compact = false) => {
+  const safeMs = Math.max(0, Number(ms) || 0);
+  const totalSeconds = safeMs / 1000;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds - minutes * 60;
+  if (compact && minutes === 0) return `${seconds.toFixed(seconds % 1 === 0 ? 0 : 1)}s`;
+  return `${String(minutes).padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}`;
+};
+
+const getTrimDurationLabel = (trimData?: MediaTrimData | null) => {
+  if (!trimData || !(trimData.endMs > trimData.startMs)) return '';
+  const durationMs = trimData.endMs - trimData.startMs;
+  const wholeSeconds = durationMs / 1000;
+  return `${wholeSeconds.toFixed(Math.abs(wholeSeconds - Math.round(wholeSeconds)) < 0.05 ? 0 : 1)}s`;
+};
+
+const isTextEntryTarget = (target: EventTarget | null) => {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tagName = el.tagName?.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || !!el.isContentEditable || !!el.closest?.('[contenteditable="true"]');
+};
 
 const ZoomableImage = ({ 
   item, 
@@ -341,11 +422,45 @@ const ZoomableImage = ({
   const [newComment, setNewComment] = useState("");
   
   const imgRef = useRef<HTMLImageElement>(null);
+  const mediaElementRef = useRef<HTMLMediaElement | null>(null);
+  const trimTimelineRef = useRef<HTMLDivElement | null>(null);
+  const trimDragRef = useRef<{
+    pointerId: number;
+    kind: 'block' | 'start' | 'end';
+    originX: number;
+    startMs: number;
+    endMs: number;
+  } | null>(null);
+  // v2.6.1 UX: the white playhead has its own drag gesture so precise seeking
+  // never competes with dragging the whole A-B selection block.
+  const playheadDragRef = useRef<{
+    pointerId: number;
+  } | null>(null);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [mediaDurationMs, setMediaDurationMs] = useState(0);
+  const [mediaCurrentMs, setMediaCurrentMs] = useState(0);
+  const [trimData, setTrimData] = useState<MediaTrimData | null>(() => item.trimData || null);
+  const trimDataRef = useRef<MediaTrimData | null>(item.trimData || null);
+  const [trimUiMode, setTrimUiMode] = useState<'manual' | 'preset'>(() => item.trimData?.mode === 'preset' ? 'preset' : 'manual');
 
   useEffect(() => {
     setImageLoaded(false);
+    setMediaDurationMs(0);
+    setMediaCurrentMs(0);
   }, [src]);
+
+  useEffect(() => {
+    // v2.6.1 rev5: always rehydrate the exact saved A/B metadata when an existing
+    // media instance is opened again. trimData can change while URL/index stay the same
+    // (copy/paste, save, reopen), so it must participate in state synchronization.
+    const savedTrim = item.trimData;
+    const nextTrim = savedTrim && Number(savedTrim.endMs) > Number(savedTrim.startMs)
+      ? { ...savedTrim }
+      : null;
+    trimDataRef.current = nextTrim;
+    setTrimData(nextTrim);
+    setTrimUiMode(nextTrim?.mode === 'preset' ? 'preset' : 'manual');
+  }, [item.url, item.mappedUrl, itemInstanceKey, item.trimData?.startMs, item.trimData?.endMs, item.trimData?.mode, item.trimData?.presetDurationMs]);
 
   const retainedViewStateRef = useRef<{scale: number, relX: number, relY: number} | null>(null);
   const currentStateRef = useRef({ scale, pos });
@@ -376,8 +491,292 @@ const ZoomableImage = ({
      onNext(e);
   }, [onNext]);
 
+
+  const persistTrimData = React.useCallback((nextTrim: MediaTrimData | null) => {
+    trimDataRef.current = nextTrim;
+    setTrimData(nextTrim);
+    if (onUpdateItem) {
+      const nextItem = { ...item };
+      if (nextTrim) nextItem.trimData = nextTrim;
+      else delete nextItem.trimData;
+      onUpdateItem(nextItem);
+    }
+  }, [item, onUpdateItem]);
+
+  const seekMediaToMs = React.useCallback((targetMs: number, keepPlaying = false) => {
+    const media = mediaElementRef.current;
+    if (!media || !Number.isFinite(targetMs)) return;
+    const wasPlaying = !media.paused;
+    try {
+      const safeTargetMs = Math.max(0, mediaDurationMs > 0 ? Math.min(mediaDurationMs, targetMs) : targetMs);
+      // Use currentTime instead of fastSeek: fastSeek may snap to a keyframe and is not
+      // suitable for choosing the exact visual frame used for A/B.
+      media.currentTime = safeTargetMs / 1000;
+      setMediaCurrentMs(safeTargetMs);
+      if (keepPlaying || wasPlaying) media.play().catch(() => {});
+    } catch {}
+  }, [mediaDurationMs]);
+
+  const toggleMediaPlayback = React.useCallback(() => {
+    const media = mediaElementRef.current;
+    if (!media) return;
+    if (!media.paused) {
+      media.pause();
+      return;
+    }
+
+    const activeTrim = trimDataRef.current;
+    if (activeTrim) {
+      const currentMs = Math.round((media.currentTime || 0) * 1000);
+      if (currentMs < activeTrim.startMs || currentMs >= activeTrim.endMs - 35) {
+        try { media.currentTime = activeTrim.startMs / 1000; } catch {}
+        setMediaCurrentMs(activeTrim.startMs);
+      }
+    }
+    media.play().catch(() => {});
+  }, []);
+
+  const buildPresetTrim = React.useCallback((durationMs: number, anchorMs?: number): MediaTrimData | null => {
+    if (!(mediaDurationMs > 0) || durationMs <= 0 || durationMs > mediaDurationMs + 1) return null;
+    const currentMediaMs = mediaElementRef.current ? mediaElementRef.current.currentTime * 1000 : mediaCurrentMs;
+    const requestedStart = Math.max(0, Number(anchorMs ?? currentMediaMs) || 0);
+    let startMs = Math.min(requestedStart, Math.max(0, mediaDurationMs - durationMs));
+    let endMs = startMs + durationMs;
+    if (endMs > mediaDurationMs) {
+      endMs = mediaDurationMs;
+      startMs = Math.max(0, endMs - durationMs);
+    }
+    return {
+      startMs: Math.round(startMs),
+      endMs: Math.round(endMs),
+      mode: 'preset',
+      presetDurationMs: durationMs
+    };
+  }, [mediaDurationMs, mediaCurrentMs]);
+
+  const selectTrimPreset = React.useCallback((durationMs: number) => {
+    const nextTrim = buildPresetTrim(durationMs);
+    if (!nextTrim) return;
+    setTrimUiMode('preset');
+    persistTrimData(nextTrim);
+    seekMediaToMs(nextTrim.startMs, true);
+  }, [buildPresetTrim, persistTrimData, seekMediaToMs]);
+
+  const setTrimPointA = React.useCallback(() => {
+    if (!(mediaDurationMs > 0)) return;
+    const media = mediaElementRef.current;
+    const currentMs = Math.max(0, Math.min(mediaDurationMs, Math.round((media?.currentTime || 0) * 1000)));
+    const wasPlaying = !!media && !media.paused;
+    const currentTrim = trimDataRef.current;
+
+    if (trimUiMode === 'preset' && currentTrim?.presetDurationMs) {
+      const nextPreset = buildPresetTrim(currentTrim.presetDurationMs, currentMs);
+      if (nextPreset) {
+        persistTrimData(nextPreset);
+        seekMediaToMs(nextPreset.startMs, wasPlaying);
+      }
+      return;
+    }
+
+    // Existing valid A/B is authoritative: changing A must never silently rewrite B.
+    // This matters when reopening an already-trimmed clip: the media element may briefly
+    // report a stale/end playhead while restoring, but the saved B still has to survive.
+    // Only a clip with no valid saved B falls back to the media end.
+    const hasSavedRange = !!currentTrim && Number(currentTrim.endMs) > Number(currentTrim.startMs);
+    const endMs = hasSavedRange
+      ? Math.max(1, Math.min(Number(currentTrim!.endMs), mediaDurationMs))
+      : mediaDurationMs;
+    const startMs = Math.max(0, Math.min(currentMs, Math.max(0, endMs - 1)));
+    const nextTrim: MediaTrimData = { startMs, endMs, mode: 'manual' };
+    setTrimUiMode('manual');
+    persistTrimData(nextTrim);
+    if (wasPlaying) seekMediaToMs(startMs, true);
+  }, [mediaDurationMs, trimUiMode, buildPresetTrim, persistTrimData, seekMediaToMs]);
+
+  const setTrimPointB = React.useCallback(() => {
+    if (!(mediaDurationMs > 0)) return;
+    const media = mediaElementRef.current;
+    const currentMs = Math.max(0, Math.min(mediaDurationMs, Math.round((media?.currentTime || 0) * 1000)));
+    const wasPlaying = !!media && !media.paused;
+    const currentTrim = trimDataRef.current;
+    let startMs = currentTrim?.startMs ?? 0;
+    let endMs = currentMs;
+
+    // Foolproof rule: B before A resets A to media start instead of creating an invalid interval.
+    if (!(endMs > startMs)) startMs = 0;
+    if (!(endMs > startMs)) endMs = Math.min(mediaDurationMs, Math.max(1, currentMs));
+    if (!(endMs > startMs)) return;
+
+    const nextTrim: MediaTrimData = { startMs, endMs, mode: 'manual' };
+    setTrimUiMode('manual');
+    persistTrimData(nextTrim);
+    if (wasPlaying) seekMediaToMs(startMs, true);
+  }, [mediaDurationMs, persistTrimData, seekMediaToMs]);
+
+  const clearTrimData = React.useCallback(() => {
+    persistTrimData(null);
+    setTrimUiMode('manual');
+  }, [persistTrimData]);
+
+  const handleMediaLoadedMetadata = React.useCallback((media: HTMLMediaElement) => {
+    mediaElementRef.current = media;
+    const durationMs = Number.isFinite(media.duration) ? Math.max(0, Math.round(media.duration * 1000)) : 0;
+    setMediaDurationMs(durationMs);
+    setImageLoaded(true);
+
+    const currentTrim = trimDataRef.current;
+    if (currentTrim && durationMs > 0) {
+      const startMs = Math.max(0, Math.min(durationMs, Number(currentTrim.startMs) || 0));
+      let endMs = Math.max(0, Math.min(durationMs, Number(currentTrim.endMs) || durationMs));
+      if (!(endMs > startMs)) endMs = durationMs;
+      const normalized: MediaTrimData = {
+        ...currentTrim,
+        startMs,
+        endMs,
+      };
+      trimDataRef.current = normalized;
+      setTrimData(normalized);
+      setTrimUiMode(normalized.mode === 'preset' ? 'preset' : 'manual');
+      // Reopening a saved clip must start from its saved A, rather than any playhead
+      // position cached by the browser/media element from a previous preview session.
+      try {
+        media.pause();
+        media.currentTime = startMs / 1000;
+      } catch {}
+      setMediaCurrentMs(startMs);
+    } else {
+      setMediaCurrentMs(Math.round((media.currentTime || 0) * 1000));
+    }
+  }, []);
+
+  const handleMediaTimeUpdate = React.useCallback((media: HTMLMediaElement) => {
+    const currentMs = Math.max(0, Math.round((media.currentTime || 0) * 1000));
+    setMediaCurrentMs(currentMs);
+    const activeTrim = trimDataRef.current;
+    if (!activeTrim || media.paused) return;
+    if (currentMs >= activeTrim.endMs - 35) {
+      try {
+        media.currentTime = activeTrim.startMs / 1000;
+        media.play().catch(() => {});
+      } catch {}
+    }
+  }, []);
+
+  const beginTrimDrag = React.useCallback((kind: 'block' | 'start' | 'end', e: React.PointerEvent) => {
+    const activeTrim = trimDataRef.current;
+    if (!activeTrim || !(mediaDurationMs > 0) || !trimTimelineRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    trimDragRef.current = {
+      pointerId: e.pointerId,
+      kind,
+      originX: e.clientX,
+      startMs: activeTrim.startMs,
+      endMs: activeTrim.endMs,
+    };
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }, [mediaDurationMs]);
+
+  const moveTrimDrag = React.useCallback((e: React.PointerEvent) => {
+    const drag = trimDragRef.current;
+    const track = trimTimelineRef.current;
+    if (!drag || !track || drag.pointerId !== e.pointerId || !(mediaDurationMs > 0)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const width = Math.max(1, track.getBoundingClientRect().width);
+    const deltaMs = ((e.clientX - drag.originX) / width) * mediaDurationMs;
+    const minimumSpanMs = 50;
+    let startMs = drag.startMs;
+    let endMs = drag.endMs;
+
+    if (drag.kind === 'block') {
+      const spanMs = Math.max(minimumSpanMs, drag.endMs - drag.startMs);
+      startMs = Math.max(0, Math.min(mediaDurationMs - spanMs, drag.startMs + deltaMs));
+      endMs = startMs + spanMs;
+    } else if (drag.kind === 'start') {
+      startMs = Math.max(0, Math.min(drag.endMs - minimumSpanMs, drag.startMs + deltaMs));
+    } else {
+      endMs = Math.min(mediaDurationMs, Math.max(drag.startMs + minimumSpanMs, drag.endMs + deltaMs));
+    }
+
+    const current = trimDataRef.current;
+    const nextTrim: MediaTrimData = {
+      ...(current || { mode: 'manual' as const }),
+      startMs: Math.round(startMs),
+      endMs: Math.round(endMs),
+      mode: current?.mode === 'preset' && drag.kind === 'block' ? 'preset' : 'manual',
+      ...(current?.mode === 'preset' && drag.kind === 'block' && current.presetDurationMs
+        ? { presetDurationMs: current.presetDurationMs }
+        : {})
+    };
+    trimDataRef.current = nextTrim;
+    setTrimData(nextTrim);
+    if (drag.kind === 'block') seekMediaToMs(nextTrim.startMs, false);
+  }, [mediaDurationMs, seekMediaToMs]);
+
+  const endTrimDrag = React.useCallback((e: React.PointerEvent) => {
+    const drag = trimDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    trimDragRef.current = null;
+    const nextTrim = trimDataRef.current;
+    if (nextTrim) {
+      if (drag.kind !== 'block') {
+        nextTrim.mode = 'manual';
+        delete nextTrim.presetDurationMs;
+        trimDataRef.current = { ...nextTrim };
+        setTrimUiMode('manual');
+        setTrimData({ ...nextTrim });
+      }
+      persistTrimData({ ...trimDataRef.current! });
+      seekMediaToMs(trimDataRef.current!.startMs, true);
+    }
+  }, [persistTrimData, seekMediaToMs]);
+
+  const seekPlayheadFromClientX = React.useCallback((clientX: number) => {
+    const track = trimTimelineRef.current;
+    const media = mediaElementRef.current;
+    if (!track || !media || !(mediaDurationMs > 0)) return;
+    const rect = track.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+    const targetMs = Math.round(ratio * mediaDurationMs);
+    try { media.currentTime = targetMs / 1000; } catch {}
+    setMediaCurrentMs(targetMs);
+  }, [mediaDurationMs]);
+
+  const beginPlayheadDrag = React.useCallback((e: React.PointerEvent) => {
+    if (!(mediaDurationMs > 0) || !mediaElementRef.current || !trimTimelineRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Scrubbing is an editing action: pause and stay paused after release so A/B can
+    // be set on the chosen frame without the playhead moving away.
+    mediaElementRef.current.pause();
+    playheadDragRef.current = { pointerId: e.pointerId };
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    seekPlayheadFromClientX(e.clientX);
+  }, [mediaDurationMs, seekPlayheadFromClientX]);
+
+  const movePlayheadDrag = React.useCallback((e: React.PointerEvent) => {
+    const drag = playheadDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    seekPlayheadFromClientX(e.clientX);
+  }, [seekPlayheadFromClientX]);
+
+  const endPlayheadDrag = React.useCallback((e: React.PointerEvent) => {
+    const drag = playheadDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    seekPlayheadFromClientX(e.clientX);
+    playheadDragRef.current = null;
+  }, [seekPlayheadFromClientX]);
+
   useEffect(() => {
      const handleKeyDown = (e: KeyboardEvent) => {
+         if (isTextEntryTarget(e.target) || isTextEntryTarget(document.activeElement)) return;
          if (e.key === 'ArrowLeft') { e.preventDefault(); wrapNavPrev(e); }
          else if (e.key === 'ArrowRight') { e.preventDefault(); wrapNavNext(e); }
          else if (e.key === 'Escape') { e.preventDefault(); onClose(); }
@@ -508,20 +907,29 @@ const ZoomableImage = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'SELECT') return;
+      if (isTextEntryTarget(e.target) || isTextEntryTarget(document.activeElement)) return;
       if (['0','1','2','3','4','5'].includes(e.key)) {
          updateRating(parseInt(e.key, 10));
-      } else if (e.key === 'ArrowRight') {
-         onNext(e as any);
-      } else if (e.key === 'ArrowLeft') {
-         onPrev(e as any);
-      } else if (e.key === 'Escape') {
-         onClose();
+         return;
+      }
+      if ((isVideo || isAudio) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (e.code === 'Space' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleMediaPlayback();
+        } else if (key === 'a') {
+          e.preventDefault();
+          setTrimPointA();
+        } else if (key === 'b') {
+          e.preventDefault();
+          setTrimPointB();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [item, onNext, onPrev, onClose, onUpdateItem]);
+  }, [item, onUpdateItem, isVideo, isAudio, setTrimPointA, setTrimPointB, toggleMediaPlayback]);
 
   const handleImageClick = (e: React.MouseEvent) => {
     if (isDragging) return;
@@ -569,6 +977,19 @@ const ZoomableImage = ({
        return a;
     });
     saveAnnotations(updated);
+  };
+
+  const trimStartPct = trimData && mediaDurationMs > 0 ? Math.max(0, Math.min(100, (trimData.startMs / mediaDurationMs) * 100)) : 0;
+  const trimEndPct = trimData && mediaDurationMs > 0 ? Math.max(trimStartPct, Math.min(100, (trimData.endMs / mediaDurationMs) * 100)) : 100;
+  const trimWidthPct = Math.max(0, trimEndPct - trimStartPct);
+  const playheadPct = mediaDurationMs > 0 ? Math.max(0, Math.min(100, (mediaCurrentMs / mediaDurationMs) * 100)) : 0;
+
+  const handleTimelineSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!(mediaDurationMs > 0) || !trimTimelineRef.current) return;
+    if ((e.target as HTMLElement).closest('[data-trim-selection="true"]')) return;
+    const rect = trimTimelineRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
+    seekMediaToMs(ratio * mediaDurationMs, false);
   };
 
   return createPortal(
@@ -865,7 +1286,7 @@ const ZoomableImage = ({
          <button onClick={(e) => { e.stopPropagation(); setIsCropMode(prev => !prev); }} title={lang === 'en' ? "Crop Mode" : "局部修图模式"} className={`p-2 rounded-full transition-colors flex items-center justify-center relative ${isCropMode ? 'bg-blue-600 text-white' : 'bg-black/50 text-white/70 hover:text-white'}`}>
              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>
          </button>
-         <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(item.url || src); }} title="Copy Image" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
+         <button onClick={(e) => { e.stopPropagation(); void copyMediaToClipboardMagic(item); }} title="Copy Image" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
             <Copy className="w-5 h-5" />
          </button>
          <button onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
@@ -972,22 +1393,31 @@ const ZoomableImage = ({
                {item.name || String(item.url || src).split('/').pop()?.split('\\').pop() || '音频附件'}
              </div>
              <audio
+               ref={(el) => { mediaElementRef.current = el; }}
                src={src}
                className="w-full"
                controls
                autoPlay
                preload="metadata"
-               onLoadedData={() => setImageLoaded(true)}
+               onLoadedMetadata={(e) => handleMediaLoadedMetadata(e.currentTarget)}
+               onTimeUpdate={(e) => handleMediaTimeUpdate(e.currentTarget)}
+               onSeeked={(e) => setMediaCurrentMs(Math.round(e.currentTarget.currentTime * 1000))}
              />
            </div>
         ) : isVideo ? (
            <video 
-             ref={imgRef as any}
+             ref={(el) => {
+               mediaElementRef.current = el;
+               (imgRef as React.MutableRefObject<any>).current = el;
+             }}
              src={src} 
-             className="max-w-[90vw] max-h-[90vh] object-contain pointer-events-auto bg-black rounded" 
+             className="max-w-[90vw] max-h-[78vh] object-contain pointer-events-auto bg-black rounded" 
              controls
              autoPlay
-             onLoadedData={() => setImageLoaded(true)}
+             preload="metadata"
+             onLoadedMetadata={(e) => handleMediaLoadedMetadata(e.currentTarget)}
+             onTimeUpdate={(e) => handleMediaTimeUpdate(e.currentTarget)}
+             onSeeked={(e) => setMediaCurrentMs(Math.round(e.currentTarget.currentTime * 1000))}
              onDoubleClick={(e) => {
                 e.stopPropagation();
                 handleImageClick(e);
@@ -1128,8 +1558,142 @@ const ZoomableImage = ({
          <ChevronRight className="w-12 h-12" />
       </button>
 
+      {(isVideo || isAudio) && mediaDurationMs > 0 && (
+        <div
+          className="absolute bottom-20 left-1/2 -translate-x-1/2 z-[60] w-[min(760px,calc(100vw-180px))] rounded-xl border border-white/10 bg-black/65 px-4 py-3 text-white shadow-2xl backdrop-blur-md"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-white/65">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-white/80">{lang === 'en' ? 'Reference clip' : '参考片段'}</span>
+              {trimData ? (
+                <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-white/80">
+                  A {formatMediaTime(trimData.startMs)} · B {formatMediaTime(trimData.endMs)} · ↻ {getTrimDurationLabel(trimData)}
+                </span>
+              ) : (
+                <span>{lang === 'en' ? 'Full media · press A/B or choose a preset' : '完整媒体 · 可按 A/B 或选择快捷时长'}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="hidden md:inline text-white/35">{lang === 'en' ? 'Space play/pause · drag white playhead to scrub' : 'Space 播放/暂停 · 拖白色播放头精确定位'}</span>
+              <span className="font-mono text-white/45">{formatMediaTime(mediaCurrentMs)} / {formatMediaTime(mediaDurationMs)}</span>
+            </div>
+          </div>
+
+          <div
+            ref={trimTimelineRef}
+            className="relative h-8 cursor-pointer select-none rounded-md bg-white/10"
+            onClick={handleTimelineSeek}
+          >
+            {trimData && (
+              <div
+                data-trim-selection="true"
+                className="absolute top-1 bottom-1 cursor-grab active:cursor-grabbing rounded border border-blue-300/70 bg-blue-400/35 shadow-[0_0_0_1px_rgba(255,255,255,0.08)_inset]"
+                style={{ left: `${trimStartPct}%`, width: `${Math.max(trimWidthPct, 0.5)}%` }}
+                onPointerDown={(e) => beginTrimDrag('block', e)}
+                onPointerMove={moveTrimDrag}
+                onPointerUp={endTrimDrag}
+                onPointerCancel={endTrimDrag}
+                title={lang === 'en' ? 'Drag the selected clip' : '拖动整个参考片段'}
+              >
+                <>
+                  <div
+                    data-trim-handle="start"
+                    className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-ew-resize rounded bg-white/80 shadow"
+                    onPointerDown={(e) => beginTrimDrag('start', e)}
+                    onPointerMove={moveTrimDrag}
+                    onPointerUp={endTrimDrag}
+                    onPointerCancel={endTrimDrag}
+                    title="A"
+                  />
+                  <div
+                    data-trim-handle="end"
+                    className="absolute inset-y-0 right-0 z-20 w-2 translate-x-1/2 cursor-ew-resize rounded bg-white/80 shadow"
+                    onPointerDown={(e) => beginTrimDrag('end', e)}
+                    onPointerMove={moveTrimDrag}
+                    onPointerUp={endTrimDrag}
+                    onPointerCancel={endTrimDrag}
+                    title="B"
+                  />
+                </>
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden whitespace-nowrap text-[10px] font-semibold text-white/90">
+                  ↻ {getTrimDurationLabel(trimData)}
+                </div>
+              </div>
+            )}
+            <div
+              data-trim-playhead="true"
+              className="absolute top-0 bottom-0 z-30 w-3 -translate-x-1/2 cursor-ew-resize touch-none select-none"
+              style={{ left: `${playheadPct}%` }}
+              onPointerDown={beginPlayheadDrag}
+              onPointerMove={movePlayheadDrag}
+              onPointerUp={endPlayheadDrag}
+              onPointerCancel={endPlayheadDrag}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+              title={lang === 'en' ? 'Drag playhead for precise frame positioning' : '拖动白色播放头精确定位当前帧'}
+            >
+              <div className="pointer-events-none absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 bg-white/90 shadow-[0_0_4px_rgba(255,255,255,0.9)]" />
+            </div>
+          </div>
+
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-1.5">
+              {TRIM_PRESET_DURATIONS_MS.map(durationMs => {
+                const disabled = durationMs > mediaDurationMs;
+                const active = trimData?.mode === 'preset' && trimData.presetDurationMs === durationMs;
+                return (
+                  <button
+                    key={durationMs}
+                    disabled={disabled}
+                    onClick={() => selectTrimPreset(durationMs)}
+                    className={`rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${active ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/75 hover:bg-white/15'} disabled:cursor-not-allowed disabled:opacity-25`}
+                    title={disabled ? (lang === 'en' ? 'Media is shorter than this preset' : '媒体长度不足') : ''}
+                  >
+                    {durationMs / 1000}s
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => {
+                  setTrimUiMode('manual');
+                  // Switching a preset clip to custom keeps the exact saved A/B; only the
+                  // editing mode changes. This also makes subsequent handle edits explicit.
+                  const currentTrim = trimDataRef.current;
+                  if (currentTrim?.mode === 'preset') {
+                    const nextTrim: MediaTrimData = {
+                      startMs: currentTrim.startMs,
+                      endMs: currentTrim.endMs,
+                      mode: 'manual'
+                    };
+                    persistTrimData(nextTrim);
+                  }
+                }}
+                className={`rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${trimUiMode === 'manual' && trimData?.mode !== 'preset' ? 'bg-white/20 text-white' : 'bg-white/10 text-white/70 hover:bg-white/15'}`}
+              >
+                {lang === 'en' ? 'A-B custom' : 'A-B 自定义'}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button onClick={setTrimPointA} className="rounded bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-white/80 hover:bg-white/15" title={lang === 'en' ? 'Set A at current playhead (shortcut A)' : '当前播放头设为 A（快捷键 A）'}>
+                A
+              </button>
+              <button onClick={setTrimPointB} className="rounded bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-white/80 hover:bg-white/15" title={lang === 'en' ? 'Set B at current playhead (shortcut B)' : '当前播放头设为 B（快捷键 B）'}>
+                B
+              </button>
+              {trimData && (
+                <button onClick={clearTrimData} className="rounded px-2 py-1 text-[11px] text-white/45 hover:bg-white/10 hover:text-white/75">
+                  {lang === 'en' ? 'Clear' : '清除'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Stars UI */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-1.5 z-50 bg-black/40 px-4 py-2 rounded-full backdrop-blur-md border border-white/10">
+      <div className={`absolute ${isVideo || isAudio ? 'bottom-5' : 'bottom-8'} left-1/2 -translate-x-1/2 flex items-center gap-1.5 z-50 bg-black/40 px-4 py-2 rounded-full backdrop-blur-md border border-white/10`}>
         {[1, 2, 3, 4, 5].map(v => (
           <button 
             key={v}
@@ -1859,6 +2423,46 @@ const BatchDownloadPopup = ({
   );
 };
 
+type MediaReferenceItem = {
+  url: string;
+  trimData?: MediaTrimData;
+  [key: string]: any;
+};
+
+const collectMediaReferenceItems = (templates: string[], fields: Field[], record: BaseRecord): MediaReferenceItem[] => {
+  const mediaFieldTypes = new Set<FieldType>(['attachment', 'aiImage', 'aiVideo', 'url']);
+  const firstPositions = new Map<string, number>();
+  let offset = 0;
+
+  templates.filter(Boolean).forEach(template => {
+    fields.forEach(field => {
+      if (!mediaFieldTypes.has(field.type)) return;
+      const marker = `{${field.name}}`;
+      const index = template.indexOf(marker);
+      if (index < 0) return;
+      const absolutePosition = offset + index;
+      const previous = firstPositions.get(field.id);
+      if (previous === undefined || absolutePosition < previous) firstPositions.set(field.id, absolutePosition);
+    });
+    offset += template.length + 1;
+  });
+
+  const orderedFields = fields
+    .filter(field => firstPositions.has(field.id))
+    .sort((a, b) => (firstPositions.get(a.id) || 0) - (firstPositions.get(b.id) || 0));
+
+  const output: MediaReferenceItem[] = [];
+  orderedFields.forEach(field => {
+    const items = normalizeAttachmentItems(record[field.id]);
+    items.forEach(item => {
+      const url = String(item?.url || '').trim();
+      if (!url || isNetworkJobCellItem(item)) return;
+      output.push({ ...item, url });
+    });
+  });
+  return output;
+};
+
 const getBase64ImageParts = async (templateStr: string, fields: Field[], record: any, aiOptions: any = null) => {
   const parts: any[] = [];
   const dataUrlsOut: string[] = [];
@@ -1898,6 +2502,17 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
              fetchUrl = fullImageBlobCache.get(u)!;
           } else if (!u.startsWith('data:') && !u.startsWith('http') && !u.startsWith('blob:') && !u.startsWith('file:')) {
              fetchUrl = `file://${u.replace(/\\/g, '/')}`;
+          }
+
+          // Video/audio references are passed as media paths to the desktop backend.
+          // Do not read the entire source into renderer Base64 just to discover the URL.
+          const referencedMediaType = detectExportMediaType(item || {}, u);
+          if (referencedMediaType === 'video' || referencedMediaType === 'audio') {
+             dataUrls.push(fetchUrl);
+             dataUrlsOut.push(fetchUrl);
+             originalUrlsOut.push(fetchUrl);
+             sourceUrlsOut.push(fetchUrl);
+             continue;
           }
 
           if (fetchUrl.startsWith('data:')) {
@@ -3003,14 +3618,24 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                   const record = data.records[r];
                   const field = visibleFields[c];
                   let val = record[field.id];
+                  // Keep the exact original cell value in the internal table clipboard.
+                  // This is the proven v2.5.10 image-copy behavior: cropData survives unchanged.
+                  // Audio/video trimData now follows the exact same rule automatically.
                   rawColVals.push(val);
-                  
+
                   if (field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') {
                      if (Array.isArray(val)) {
-                       val = val.map((a: any) => a.url || a).join(',');
-                     } else if (typeof val === 'string') val = val;
-                     else val = '';
-                  } else if (field.type === 'singleSelect' || field.type === 'multiSelect') {
+                       val = val.map((a: any) => a?.url || a).join(',');
+                     } else if (typeof val === 'string') {
+                       val = val;
+                     } else if (val && typeof val === 'object') {
+                       val = val.url || '';
+                     } else {
+                       val = '';
+                     }
+                  }
+
+                  if (field.type === 'singleSelect' || field.type === 'multiSelect') {
                      if (val) {
                        const valArray = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',').map(s=>s.trim()) : [val]);
                        val = valArray.map(v => field.options?.find((o:any) => o.id === v)?.name || v).join(', ');
@@ -3053,11 +3678,35 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
               }
           } catch (err) {}
       }
+
+      // A thumbnail-level Copy keeps text/plain as the path for other software, but the table
+      // can recover the exact media instance so image cropData and audio/video trimData survive.
+      let singleMediaPasteItem: any | null = null;
+      const plainClipboardText = e.clipboardData?.getData('text/plain') || '';
+      if (!isRaw && plainClipboardText) {
+          const customMediaStr = e.clipboardData?.getData(INTERNAL_MEDIA_CLIPBOARD_TYPE)
+            || e.clipboardData?.getData('application/x-hongs-media-item');
+          if (customMediaStr) {
+              try {
+                  const parsed = JSON.parse(customMediaStr);
+                  if (parsed?.item && normalizeLocalPathForStorage(parsed.plainText) === normalizeLocalPathForStorage(plainClipboardText.trim())) {
+                      singleMediaPasteItem = clonePersistableMediaItem(parsed.item);
+                  }
+              } catch {}
+          }
+
+          if (!singleMediaPasteItem && internalMediaClipboardPayload) {
+              const clipboardPath = normalizeLocalPathForStorage(plainClipboardText.trim());
+              const rememberedPath = normalizeLocalPathForStorage(internalMediaClipboardPayload.plainText);
+              if (clipboardPath && clipboardPath === rememberedPath) {
+                  singleMediaPasteItem = clonePersistableMediaItem(internalMediaClipboardPayload.item);
+              }
+          }
+      }
       
       if (!isRaw) {
-          const text = e.clipboardData?.getData('text/plain');
-          if (!text) return;
-          rows = parseTSV(text);
+          if (!plainClipboardText) return;
+          rows = parseTSV(plainClipboardText);
       }
       
       if (rows.length === 0) return;
@@ -3125,9 +3774,16 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                    let pathToAdd = val || '';
                    if (typeof pathToAdd === 'string' && pathToAdd) {
                       const existingArr = normalizeAttachmentItems(record[field.id]);
-                      const pastedItems = normalizeAttachmentItems(pathToAdd).map(item => 
-                        hydrateReviewProps(item, globalAttachmentPropsMap)
-                      );
+                      const normalizedPastedPath = normalizeLocalPathForStorage(pathToAdd.trim());
+                      const canUseSingleMediaPayload = !!singleMediaPasteItem
+                        && normalizeLocalPathForStorage(singleMediaPasteItem.url) === normalizedPastedPath
+                        && rows.length === 1
+                        && (rows[0]?.length || 0) === 1;
+                      const pastedItems = canUseSingleMediaPayload
+                        ? [hydrateReviewProps(clonePersistableMediaItem(singleMediaPasteItem), globalAttachmentPropsMap)]
+                        : normalizeAttachmentItems(pathToAdd).map(item => 
+                            hydrateReviewProps(item, globalAttachmentPropsMap)
+                          );
                       val = [...existingArr, ...pastedItems];
                    } else {
                       val = pathToAdd;
@@ -3702,21 +4358,22 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
            }
            if (vidSet.provider === 'lingwu' && !vidSet.key) throw new Error("Lingwu API Key is required for Video Generation");
 
-           // Categorize media into images, videos, audio based on extension or prefix
-           const images: string[] = [];
-           const videos: string[] = [];
-           const audio: string[] = [];
-           finalOriginalUrls.forEach(url => {
-              if (!url) return;
-              const lowerUrl = url.toLowerCase();
-              if (lowerUrl.includes('.mp4') || lowerUrl.includes('.webm') || lowerUrl.includes('.mov') || lowerUrl.includes('.mkv') || lowerUrl.startsWith('local-video:')) {
-                 videos.push(url);
-              } else if (lowerUrl.includes('.mp3') || lowerUrl.includes('.wav') || lowerUrl.includes('.flac') || lowerUrl.includes('.m4a') || lowerUrl.includes('.aac') || lowerUrl.includes('.ogg') || lowerUrl.includes('.opus') || lowerUrl.startsWith('data:audio') || lowerUrl.startsWith('local-audio:')) {
-                 audio.push(url);
-              } else {
-                 images.push(url);
-              }
-           });
+           // v2.6.1: preserve per-media trimData for audio/video references.
+           // Images keep the existing getBase64ImageParts path so cropData behavior remains unchanged.
+           const structuredMediaRefs = collectMediaReferenceItems([
+              field.prompt || '',
+              cfg.sourceImageTemplate || '',
+              cfg.sourceVideoTemplate || '',
+              cfg.sourceAudioTemplate || ''
+           ], data.fields, record);
+
+           const images: string[] = finalOriginalUrls.filter(url => detectExportMediaType({}, url) === 'image');
+           const structuredVideos = structuredMediaRefs.filter(item => detectExportMediaType(item, item.url) === 'video');
+           const structuredAudio = structuredMediaRefs.filter(item => detectExportMediaType(item, item.url) === 'audio');
+           const fallbackVideos = finalOriginalUrls.filter(url => detectExportMediaType({}, url) === 'video');
+           const fallbackAudio = finalOriginalUrls.filter(url => detectExportMediaType({}, url) === 'audio');
+           const videos: Array<string | MediaReferenceItem> = structuredVideos.length > 0 ? structuredVideos : fallbackVideos;
+           const audio: Array<string | MediaReferenceItem> = structuredAudio.length > 0 ? structuredAudio : fallbackAudio;
 
            const params: any = {
               resolution,
@@ -6973,6 +7630,11 @@ const LargeTextEditorModal = ({
                         {media.item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
                       </span>
                     )}
+                    {media.item?.trimData && getTrimDurationLabel(media.item.trimData) && (
+                      <span className="absolute top-0.5 right-0.5 rounded-[3px] bg-black/55 px-1 py-0.5 text-[9px] font-semibold text-white/85 backdrop-blur-sm">
+                        ↻ {getTrimDurationLabel(media.item.trimData)}
+                      </span>
+                    )}
                   </div>
                   <div className={cn(
                     "mt-1 text-[10px] font-medium truncate",
@@ -7565,6 +8227,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                             {item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
                           </div>
                         )}
+                        {item.trimData && getTrimDurationLabel(item.trimData) && (
+                          <div className="absolute bottom-0.5 right-0.5 z-10 rounded-[3px] bg-black/55 px-1 py-[1px] text-[9px] font-semibold leading-none text-white/85 backdrop-blur-sm pointer-events-none">
+                            ↻ {getTrimDurationLabel(item.trimData)}
+                          </div>
+                        )}
                         {(field.type === 'aiVideo' || item.url.match(/\.(mp4|webm|mov)$/i)) && (
                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20 rounded">
                               <Play className="w-4 h-4 text-white/90 drop-shadow-md fill-white/90" />
@@ -7595,7 +8262,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                                 <Palette className="w-3.5 h-3.5 hover:text-indigo-500 text-gray-500" />
                              </button>
                           )}
-                          <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
+                          <button onClick={(e) => { e.stopPropagation(); void copyMediaToClipboardMagic(item); }} title="Copy">
                              <Copy className="w-3.5 h-3.5 hover:text-blue-500" />
                           </button>
                           <button
@@ -7687,6 +8354,11 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                             {item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
                           </div>
                         )}
+                        {item.trimData && getTrimDurationLabel(item.trimData) && (
+                          <div className="absolute bottom-0.5 right-0.5 z-10 rounded-[3px] bg-black/55 px-1 py-[1px] text-[9px] font-semibold leading-none text-white/85 backdrop-blur-sm pointer-events-none">
+                            ↻ {getTrimDurationLabel(item.trimData)}
+                          </div>
+                        )}
                         {(field.type === 'aiVideo' || item.url.match(/\.(mp4|webm|mov)$/i)) && (
                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20 rounded">
                               <Play className="w-4 h-4 text-white/90 drop-shadow-md fill-white/90" />
@@ -7717,7 +8389,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
                                 <Palette className="w-3.5 h-3.5 hover:text-indigo-500 text-gray-500" />
                              </button>
                           )}
-                          <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
+                          <button onClick={(e) => { e.stopPropagation(); void copyMediaToClipboardMagic(item); }} title="Copy">
                              <Copy className="w-3.5 h-3.5 hover:text-blue-500" />
                           </button>
                           <button
@@ -8071,7 +8743,9 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
           type="button"
           onMouseDown={openLargeTextEditor}
           className={cn(
-            "cell-large-editor-button absolute right-1 bottom-1 z-[45] w-5 h-5 rounded bg-gray-100/85 text-gray-500 hover:text-blue-600 hover:bg-gray-200 flex items-center justify-center transition-colors",
+            // Keep the cell action below frozen-column stacking layers (frozen cells start at z-[31]).
+            // Otherwise a text cell hidden underneath a frozen media cell can leak this hover button above it.
+            "cell-large-editor-button absolute right-1 bottom-1 z-[25] w-5 h-5 rounded bg-gray-100/85 text-gray-500 hover:text-blue-600 hover:bg-gray-200 flex items-center justify-center transition-colors",
             isActive ? "opacity-100" : "opacity-0 group-hover/cell:opacity-100"
           )}
           title={lang === 'en' ? 'Open large text editor' : '展开大屏编辑'}
@@ -8489,7 +9163,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                onClick={() => onPreview(fullUrl, fileItems.map(p => {
                  const mappedUrl = fullImageBlobCache.get(p.url) || (p.url.startsWith('/') || p.url.match(/^[a-zA-Z]:[\\/]/) || p.url.startsWith('\\\\') ? `file://${p.url}` : p.url);
                  return { ...p, mappedUrl };
-               }), (newItems) => onChange(newItems))}
+               }), (newItems) => onChange(newItems), index)}
              >
                <ThumbnailImage path={path} className="w-full h-full object-cover cursor-pointer rounded" alt="attachment" />
                 {(pendingCount > 0 || resolvedCount > 0 || approvedCount > 0) && (
@@ -8510,6 +9184,11 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                    {item.cropData.isOutpaint ? <Expand className="w-2.5 h-2.5" /> : <Crop className="w-2.5 h-2.5" />}
                  </div>
                )}
+               {item.trimData && getTrimDurationLabel(item.trimData) && (
+                 <div className="absolute bottom-1 right-1 z-20 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white/85 pointer-events-none backdrop-blur-sm">
+                   ↻ {getTrimDurationLabel(item.trimData)}
+                 </div>
+               )}
                {(item.url.match(/\.(mp4|webm|mov)$/i)) && (
                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20">
                       <Play className="w-10 h-10 text-white/90 drop-shadow-md fill-white/90" />
@@ -8518,7 +9197,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                <div 
                  className="absolute top-1 right-1 bg-black/60 text-white rounded p-1 opacity-0 group-hover/attachment:opacity-100 cursor-pointer flex items-center gap-1.5 transition-opacity"
                >
-                 <button onClick={(e) => { e.stopPropagation(); copyImageToClipboardMagic(path); }} title="Copy">
+                 <button onClick={(e) => { e.stopPropagation(); void copyMediaToClipboardMagic(item); }} title="Copy">
                     <Copy className="w-3.5 h-3.5 hover:text-blue-300" />
                  </button>
                  <button onClick={(e) => { e.stopPropagation(); triggerDownload(path, path.split('/').pop()?.split('\\').pop() || 'download.png'); }} title="Download">

@@ -6,3 +6,13 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# v2.6.1 external portable media library / generated reference cache
+# FFmpeg is an independent runtime library under ffmpeg/bin/, not source code.
+ffmpeg/**/*.exe
+ffmpeg/**/*.dll
+ffmpeg/**/*.zip
+ffmpeg/**/*.7z
+ffmpeg/**/*.tar
+ffmpeg/**/*.gz
+.media-cache/

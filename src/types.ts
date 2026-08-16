@@ -6,12 +6,20 @@ export interface SelectOption {
   color: string; // Tailwind color class or hex
 }
 
+export interface MediaTrimData {
+  startMs: number;
+  endMs: number;
+  mode?: 'manual' | 'preset';
+  presetDurationMs?: number;
+}
+
 export interface Attachment {
   id: string;
   url: string;
   name: string;
   size?: number;
   type?: string;
+  trimData?: MediaTrimData;
 }
 
 export interface Field {

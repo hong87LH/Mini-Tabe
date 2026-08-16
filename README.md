@@ -22,7 +22,7 @@ View your app in AI Studio: https://ai.studio/apps/91089e78-1698-4f15-91ca-4a320
 
 ## Version Timeline
 
-### v2.5.x
+### v2.5.x → v2.6.x
 
 ```text
 v2.5.0  ComfyUI 通用协议
@@ -33,6 +33,10 @@ v2.5.4  多参真实组合验证
 v2.5.5  Fast 多参 / 长队列 / 自动启动
 v2.5.6  Skill System v1.0 / 智能文本 Skill Registry
 v2.5.7  批量附件导出增强 / Skill System 稳定性修复
+v2.5.8  文本大屏编辑 / Visual Prompt / 当前行媒体引用 / @ 插入
+v2.5.9  文本 Clipboard / Undo 修复 / 媒体独立编号 / 缩略图与引用 UI 优化
+v2.5.10 大屏连续编辑 / 临时智能节点参考 / @ 光标跟随 / 媒体预览与同源多裁切修复
+v2.6.1  音视频非破坏式 Trim / A-B 时间点 / 5s·10s·15s·20s 快捷片段 / FFmpeg Media Preprocessor
 ```
 
 ### v2.4.x → v2.5.x

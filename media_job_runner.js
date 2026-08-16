@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { NetworkStageError } from './network_utils.js';
 import { ensureComfyUIAvailable } from './comfyui_launcher.js';
+import { prepareReferenceMediaList } from './media_preprocessor.js';
 
 async function safeImportElectron() {
     return await import('electron');
@@ -35,6 +36,7 @@ export class MediaJobRunner {
             }
             else if (actualUrl.startsWith('local-img://')) actualUrl = decodeURIComponent(actualUrl.replace('local-img://', ''));
             else if (actualUrl.startsWith('local-video://')) actualUrl = decodeURIComponent(actualUrl.replace('local-video://', ''));
+            else if (actualUrl.startsWith('local-audio://')) actualUrl = decodeURIComponent(actualUrl.replace('local-audio://', ''));
 
             let tempPathToClean = null;
             let mimeType = null;
@@ -141,14 +143,21 @@ export class MediaJobRunner {
                 params.images = uploadedImages;
             } else if (type === 'video') {
                 const { images, videos, audio } = options;
+
+                // v2.6.1: Audio / Video reference trimming is non-destructive in the table.
+                // Only when a generation is submitted do we materialize trimData into a cached
+                // effective reference file via the external portable FFmpeg library.
+                const preparedVideos = await prepareReferenceMediaList(Array.isArray(videos) ? videos : [], 'video');
+                const preparedAudio = await prepareReferenceMediaList(Array.isArray(audio) ? audio : [], 'audio');
+
                 if (provider === 'comfyui') {
                     uploadedImages = Array.isArray(images) ? [...images] : [];
-                    uploadedVideos = Array.isArray(videos) ? [...videos] : [];
-                    uploadedAudio = Array.isArray(audio) ? [...audio] : [];
+                    uploadedVideos = preparedVideos;
+                    uploadedAudio = preparedAudio;
                 } else {
                     uploadedImages = await this.uploadMediaList(images, uploader);
-                    uploadedVideos = await this.uploadMediaList(videos, uploader);
-                    uploadedAudio = await this.uploadMediaList(audio, uploader);
+                    uploadedVideos = await this.uploadMediaList(preparedVideos, uploader);
+                    uploadedAudio = await this.uploadMediaList(preparedAudio, uploader);
                 }
                 
                 if (uploadedImages.length > 0) { params.images = uploadedImages; }
