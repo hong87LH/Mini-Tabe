@@ -3136,6 +3136,32 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
 const scrollCache = new Map<string, number>();
 
+// v2.6.1: 普通文本 / 无正式媒体配置的智能文本可以把临时参考“固定”在当前列。
+// 只写入 sessionStorage，不进入 GridData / Record / Field Config；关闭应用窗口后自动失效。
+const TEMP_REFERENCE_PIN_STORAGE_PREFIX = 'hongs-large-text-temp-reference-pin:';
+
+const getTemporaryReferencePinStorageKey = (tableId: string, fieldId: string) =>
+  `${TEMP_REFERENCE_PIN_STORAGE_PREFIX}${tableId}:${fieldId}`;
+
+const readTemporaryReferencePin = (storageKey?: string): string | null => {
+  if (!storageKey || typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage.getItem(storageKey) || null;
+  } catch {
+    return null;
+  }
+};
+
+const writeTemporaryReferencePin = (storageKey: string | undefined, fieldId: string | null) => {
+  if (!storageKey || typeof window === 'undefined') return;
+  try {
+    if (fieldId) window.sessionStorage.setItem(storageKey, fieldId);
+    else window.sessionStorage.removeItem(storageKey);
+  } catch {
+    // sessionStorage 不可用时仅退化为当前大屏会话，不影响文本编辑。
+  }
+};
+
 export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode = 'grid', data, allRecords, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onIndividualFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
@@ -5050,6 +5076,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 return (
                   <Cell
                     key={field.id}
+                    tableId={tableId}
                     record={record}
                     field={field}
                     searchQuery={searchQuery}
@@ -7208,6 +7235,7 @@ interface LargeTextEditorModalProps {
   recordPosition: number;
   recordCount: number;
   initialTemporaryReferenceFieldId?: string | null;
+  temporaryReferenceCacheKey?: string;
   onNavigateRow?: (direction: -1 | 1, currentValue: string, temporaryReferenceFieldId: string | null) => void;
 }
 
@@ -7225,6 +7253,7 @@ const LargeTextEditorModal = ({
   recordPosition,
   recordCount,
   initialTemporaryReferenceFieldId = null,
+  temporaryReferenceCacheKey,
   onNavigateRow,
 }: LargeTextEditorModalProps) => {
   const isAiText = field.type === 'aiText';
@@ -7242,6 +7271,11 @@ const LargeTextEditorModal = ({
   const [temporaryReferenceFieldId, setTemporaryReferenceFieldId] = useState<string | null>(
     canSelectTemporaryReference ? initialTemporaryReferenceFieldId : null
   );
+  const [isTemporaryReferencePinned, setIsTemporaryReferencePinned] = useState<boolean>(() => {
+    if (!canSelectTemporaryReference || !temporaryReferenceCacheKey) return false;
+    const cached = readTemporaryReferencePin(temporaryReferenceCacheKey);
+    return !!cached && cached === initialTemporaryReferenceFieldId;
+  });
   const canUseVisualReferences = isAiText || (isPlainText && !!temporaryReferenceFieldId);
   const mediaItems = useMemo(
     () => getLargeTextMediaItems(field, allFields, record, temporaryReferenceFieldId),
@@ -7261,12 +7295,26 @@ const LargeTextEditorModal = ({
     const nextValue = String(value ?? '');
     visualSourceRef.current = nextValue;
     setDraft(nextValue);
-    const nextTemporaryReferenceFieldId = canSelectTemporaryReference ? initialTemporaryReferenceFieldId : null;
+
+    let cachedReferenceFieldId = canSelectTemporaryReference
+      ? readTemporaryReferencePin(temporaryReferenceCacheKey)
+      : null;
+    if (cachedReferenceFieldId && !temporaryReferenceFieldOptions.some(option => option.id === cachedReferenceFieldId)) {
+      writeTemporaryReferencePin(temporaryReferenceCacheKey, null);
+      cachedReferenceFieldId = null;
+    }
+
+    const requestedReferenceFieldId = canSelectTemporaryReference && initialTemporaryReferenceFieldId && temporaryReferenceFieldOptions.some(option => option.id === initialTemporaryReferenceFieldId)
+      ? initialTemporaryReferenceFieldId
+      : null;
+    const nextTemporaryReferenceFieldId = requestedReferenceFieldId || cachedReferenceFieldId;
+
     setTemporaryReferenceFieldId(nextTemporaryReferenceFieldId);
+    setIsTemporaryReferencePinned(!!cachedReferenceFieldId && nextTemporaryReferenceFieldId === cachedReferenceFieldId);
     setVisualMode(isAiText || !!nextTemporaryReferenceFieldId);
     setMentionQuery(null);
     setMentionPosition(null);
-  }, [open, value, isAiText, field.id, record.id, initialTemporaryReferenceFieldId, canSelectTemporaryReference]);
+  }, [open, value, isAiText, field.id, record.id, initialTemporaryReferenceFieldId, canSelectTemporaryReference, temporaryReferenceCacheKey, temporaryReferenceFieldOptions]);
 
   useEffect(() => {
     if (!open || mediaItems.length === 0) return;
@@ -7486,7 +7534,26 @@ const LargeTextEditorModal = ({
     setTemporaryReferenceFieldId(nextId);
     setMentionQuery(null);
     setMentionPosition(null);
+
+    // 已固定时，切换下拉项就同步更新当前列的临时缓存；选择“不使用”则自动解除固定。
+    if (isTemporaryReferencePinned) {
+      writeTemporaryReferencePin(temporaryReferenceCacheKey, nextId);
+      if (!nextId) setIsTemporaryReferencePinned(false);
+    }
+
     if (!isAiText) setVisualMode(!!nextId);
+  };
+
+  const toggleTemporaryReferencePin = () => {
+    if (!temporaryReferenceFieldId) return;
+    if (isTemporaryReferencePinned) {
+      // 解除固定只清缓存，当前大屏仍继续使用当前临时参考，直到用户退出或自行切换。
+      writeTemporaryReferencePin(temporaryReferenceCacheKey, null);
+      setIsTemporaryReferencePinned(false);
+      return;
+    }
+    writeTemporaryReferencePin(temporaryReferenceCacheKey, temporaryReferenceFieldId);
+    setIsTemporaryReferencePinned(true);
   };
 
   const navigateRow = (direction: -1 | 1) => {
@@ -7529,9 +7596,26 @@ const LargeTextEditorModal = ({
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-500">{isAiText ? (lang === 'en' ? 'Smart Text' : '智能文本') : (lang === 'en' ? 'Text' : '文本')}</span>
           <div className="ml-auto flex items-center gap-2">
             {canSelectTemporaryReference && temporaryReferenceFieldOptions.length > 0 && (
-              <div className="h-8 flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2">
-                <Link className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                <span className="text-[10px] text-gray-400 shrink-0">{lang === 'en' ? 'Temp reference' : '临时参考'}</span>
+              <div className="h-8 flex items-center gap-1 rounded-md border border-gray-200 bg-white px-1.5">
+                <button
+                  type="button"
+                  onClick={toggleTemporaryReferencePin}
+                  disabled={!temporaryReferenceFieldId}
+                  aria-pressed={isTemporaryReferencePinned}
+                  className={cn(
+                    "w-6 h-6 rounded flex items-center justify-center shrink-0 transition-colors",
+                    isTemporaryReferencePinned
+                      ? "bg-blue-50 text-blue-600 hover:bg-blue-100"
+                      : "text-gray-400 hover:text-gray-600 hover:bg-gray-100",
+                    !temporaryReferenceFieldId && "opacity-35 cursor-default hover:bg-transparent hover:text-gray-400"
+                  )}
+                  title={isTemporaryReferencePinned
+                    ? (lang === 'en' ? 'Unpin temporary reference for this column' : '解除本列临时参考固定（仅会话缓存）')
+                    : (lang === 'en' ? 'Pin temporary reference for this column' : '固定本列临时参考（仅会话缓存，不写入表格）')}
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                </button>
+                <span className={cn("text-[10px] shrink-0", isTemporaryReferencePinned ? "text-blue-600" : "text-gray-400")}>{lang === 'en' ? 'Temp reference' : '临时参考'}</span>
                 <select
                   value={temporaryReferenceFieldId || ''}
                   onChange={(e) => handleTemporaryReferenceChange(e.target.value)}
@@ -7763,6 +7847,7 @@ const LargeTextEditorModal = ({
 
 interface CellProps {
   key?: React.Key;
+  tableId: string;
   record: BaseRecord;
   field: Field;
   isActive: boolean;
@@ -7801,7 +7886,7 @@ interface CellProps {
 }
 
 const Cell = React.memo(
-function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh', globalAttachmentPropsMap, isLinked, isLinkedTop, isLinkedBottom, recordPosition, recordCount, largeTextOpenRequest, onConsumeLargeTextOpenRequest, onNavigateLargeTextRow }: CellProps) {
+function Cell({ tableId, record, field, isActive, forceEdit, isGeneratingCol, searchQuery, isSearchMatch, isSearchMatchActive, onActivate, onChange, onBlur, onPreviewImage, allFields, modelSettings, heightClass, onUpdateField, isSelectedBox, isCutBox, onMouseDown, onMouseEnter, onActivateNextRow, onContextMenu, onBatchAIGenerate, frozenLeftOffset, isFrozenLast, lang = 'zh', globalAttachmentPropsMap, isLinked, isLinkedTop, isLinkedBottom, recordPosition, recordCount, largeTextOpenRequest, onConsumeLargeTextOpenRequest, onNavigateLargeTextRow }: CellProps) {
   const value = record[field.id];
   const isElectron = !!((window as any).electronAPI || (window as any).electron);
   
@@ -7811,6 +7896,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
   const [isLargeTextEditorOpen, setIsLargeTextEditorOpen] = useState(false);
   const [largeTextInitialValue, setLargeTextInitialValue] = useState('');
   const [largeTextTemporaryReferenceFieldId, setLargeTextTemporaryReferenceFieldId] = useState<string | null>(null);
+  const temporaryReferenceCacheKey = getTemporaryReferencePinStorageKey(tableId, field.id);
 
   useEffect(() => {
     if (!isActive) setIsEditingMode(false);
@@ -7840,7 +7926,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
     if (!largeTextOpenRequest || !['text', 'aiText'].includes(field.type)) return;
     const current = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
     setLargeTextInitialValue(current);
-    setLargeTextTemporaryReferenceFieldId(largeTextOpenRequest.temporaryReferenceFieldId || null);
+    setLargeTextTemporaryReferenceFieldId(largeTextOpenRequest.temporaryReferenceFieldId || readTemporaryReferencePin(temporaryReferenceCacheKey));
     setLocalText(current);
     setIsEditingMode(false);
     setIsLargeTextEditorOpen(true);
@@ -7913,7 +7999,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
       : (typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? ''));
     if (isEditingMode) onChange(current);
     setLargeTextInitialValue(current);
-    setLargeTextTemporaryReferenceFieldId(null);
+    setLargeTextTemporaryReferenceFieldId(readTemporaryReferencePin(temporaryReferenceCacheKey));
     setLocalText(current);
     setIsEditingMode(false);
     onActivate();
@@ -8768,6 +8854,7 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
           recordPosition={recordPosition}
           recordCount={recordCount}
           initialTemporaryReferenceFieldId={largeTextTemporaryReferenceFieldId}
+          temporaryReferenceCacheKey={temporaryReferenceCacheKey}
           onNavigateRow={onNavigateLargeTextRow}
         />
       )}
@@ -8779,7 +8866,8 @@ function Cell({ record, field, isActive, forceEdit, isGeneratingCol, searchQuery
     </td>
   );
 }, (prev, next) => {
-  const baseEqual = prev.field === next.field &&
+  const baseEqual = prev.tableId === next.tableId &&
+    prev.field === next.field &&
     prev.record[prev.field.id] === next.record[next.field.id] &&
     prev.isActive === next.isActive &&
     prev.forceEdit === next.forceEdit &&
