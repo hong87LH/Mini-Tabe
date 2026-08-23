@@ -3136,7 +3136,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
 const scrollCache = new Map<string, number>();
 
-// v2.6.1: 普通文本 / 无正式媒体配置的智能文本可以把临时参考“固定”在当前列。
+// v2.6.2: 普通文本 / 无正式媒体配置的智能文本可以把临时参考“固定”在当前列。
 // 只写入 sessionStorage，不进入 GridData / Record / Field Config；关闭应用窗口后自动失效。
 const TEMP_REFERENCE_PIN_STORAGE_PREFIX = 'hongs-large-text-temp-reference-pin:';
 
@@ -7206,19 +7206,71 @@ const highlightLargeVisualSyntax = (escapedText: string) => {
 
 const serializeLargeVisualEditor = (root: HTMLElement | null): string => {
   if (!root) return '';
-  const walk = (node: Node): string => {
+
+  // v2.6.2 bugfix: contentEditable 在 Chromium 中按 Enter 后，可能把同一段文本改写成
+  // `text + <div>next line</div>`、多个 `<div>`，或使用 `<div><br></div>` 表示空行。
+  // 旧实现只在 DIV/P 末尾补换行，会丢失“块元素之前”的行边界，并且还会主动删除末尾换行。
+  // 这里按浏览器实际的块级行结构重新序列化，同时保留连续空行和末尾 Enter。
+  const blockTags = new Set([
+    'DIV', 'P', 'LI', 'UL', 'OL', 'BLOCKQUOTE', 'PRE',
+    'H1', 'H2', 'H3', 'H4', 'H5', 'H6'
+  ]);
+
+  const hasMediaToken = (el: HTMLElement) =>
+    Boolean(el.dataset?.mediaToken || el.querySelector('[data-media-token]'));
+
+  const serializeInlineNode = (node: Node): string => {
     if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
     const el = node as HTMLElement;
     const token = el.dataset?.mediaToken;
     if (token) return token;
     if (el.tagName === 'BR') return '\n';
+
+    if (blockTags.has(el.tagName)) {
+      return serializeContainer(el);
+    }
+
     let out = '';
-    el.childNodes.forEach(child => { out += walk(child); });
-    if (el.tagName === 'DIV' || el.tagName === 'P') out += '\n';
+    el.childNodes.forEach(child => { out += serializeInlineNode(child); });
     return out;
   };
-  return walk(root).replace(/\n{3,}/g, '\n\n').replace(/\n$/, '');
+
+  const serializeContainer = (container: HTMLElement): string => {
+    const segments: string[] = [];
+    let inlineBuffer = '';
+
+    const flushInline = () => {
+      if (inlineBuffer !== '') {
+        segments.push(inlineBuffer);
+        inlineBuffer = '';
+      }
+    };
+
+    container.childNodes.forEach(child => {
+      const isBlock = child.nodeType === Node.ELEMENT_NODE && blockTags.has((child as HTMLElement).tagName);
+      if (!isBlock) {
+        inlineBuffer += serializeInlineNode(child);
+        return;
+      }
+
+      flushInline();
+      const block = child as HTMLElement;
+      // Chromium 常用空 DIV/P + BR 表示“用户刚按出的空白行”。它应该序列化成空 segment，
+      // 由 segments.join('\n') 产生且仅产生一个真实换行。
+      const isEmptyVisualLine = (block.textContent || '') === '' && !hasMediaToken(block);
+      segments.push(isEmptyVisualLine ? '' : serializeContainer(block));
+    });
+
+    if (inlineBuffer !== '' || segments.length === 0) {
+      segments.push(inlineBuffer);
+    }
+
+    return segments.join('\n');
+  };
+
+  return serializeContainer(root).replace(/\r\n?/g, '\n');
 };
 
 interface LargeTextEditorModalProps {
@@ -9055,10 +9107,23 @@ function SelectCellEditor({ field, ids, isMulti, onChange, onClose, onUpdateFiel
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
+               if ((e.nativeEvent as KeyboardEvent).isComposing) return;
                e.preventDefault();
-               if (filtered.length > 0) {
-                 toggleOption(filtered[0].id);
-               } else if (query.trim()) {
+
+               const trimmedQuery = query.trim();
+               if (!trimmedQuery) {
+                 // 保留旧习惯：没有输入搜索文字时，Enter 仍可选择当前列表第一项。
+                 if (filtered.length > 0) toggleOption(filtered[0].id);
+                 return;
+               }
+
+               // v2.6.2 bugfix: Enter 只在“名称完全相同”时关联旧标签。
+               // 模糊过滤结果只用于鼠标选择；例如已有 A，输入 AI + Enter 必须创建 AI，不能误选 A。
+               const normalizedQuery = trimmedQuery.toLocaleLowerCase();
+               const exactMatch = options.find(opt => opt.name.trim().toLocaleLowerCase() === normalizedQuery);
+               if (exactMatch) {
+                 toggleOption(exactMatch.id);
+               } else {
                  handleCreateOption();
                }
             } else if (e.key === 'Escape') {

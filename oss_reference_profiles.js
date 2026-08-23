@@ -7,7 +7,7 @@ export const OSS_REFERENCE_PROFILES = {
     format: 'webp',
     quality: 90,
     preserveDimensions: true,
-    useDHashAutoReuse: true
+    useDHashAutoReuse: false
   },
 
   'gemini-jpeg-q95-v1': {

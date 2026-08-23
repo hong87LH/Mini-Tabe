@@ -629,7 +629,7 @@ class OssImageUploader {
   }
 
   async upload(filePath, options = {}) {
-    const { force = false, threshold = DHASH_THRESHOLD, profileId, alreadyPrepared } = options;
+    const { force = false, profileId, alreadyPrepared } = options;
     const profile = getOssReferenceProfile(profileId);
     let absPath = filePath;
     if (filePath.startsWith('file://')) {
@@ -661,8 +661,9 @@ class OssImageUploader {
         else await this._removeRecordsBy('cloud_path', existing.cloud_path, profile);
       }
 
-      const dhashMatch = await this.findBestDHashMatch(originalAbsPath, threshold, profile);
-      if (dhashMatch) return dhashMatch;
+      // v2.6.2 bugfix: OSS 自动复用统一收紧为 SHA256 精确一致。
+      // dHash 继续计算并写入 CSV，以兼容历史索引/人工排查，但不再参与自动复用判断。
+      // 这样同模特、同构图、只改服装颜色/印花/局部细节时，不会因为感知哈希过近而串回旧图。
     }
 
     // ==== 根据 Profile 压缩处理 ====
