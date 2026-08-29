@@ -13,6 +13,8 @@ import { getStringColor } from './lib/utils';
 import { getHandle, setHandle } from './lib/idb';
 import { resolveFieldValueForAI } from './components/Grid';
 import { parseSelectText, selectValueToText } from './lib/selectFieldConversion.js';
+import { executeTableActionRequest, getActionMetadata } from '../agent_api/table_action_api.js';
+import { removeNetworkJobPlaceholders } from '../network_job_cleanup.js';
 
 const computeFormulaValue = (field: any, record: any, fields: any[]) => {
   if (!field.prompt) return '';
@@ -467,6 +469,25 @@ export default function App() {
      } catch (e) {}
      return [{ id: 'table_1', name: 'Master Table', data: initialGridData, viewStates: {} }];
   });
+  const workspaceRevisionRef = useRef(0);
+  const lastSavedRevisionRef = useRef(0);
+  const pendingWorkspaceRevisionRef = useRef<number | null>(null);
+  const lastObservedTablesRef = useRef(tables);
+  const tableActionIdempotencyRef = useRef<Map<string, any>>(new Map());
+  const tableActionUndoRef = useRef<Map<string, any>>(new Map());
+  const tableActionUndoOrderRef = useRef<string[]>([]);
+  const tableActionHistoryRevisionRef = useRef(0);
+
+  useEffect(() => {
+     if (lastObservedTablesRef.current === tables) return;
+     lastObservedTablesRef.current = tables;
+     if (pendingWorkspaceRevisionRef.current !== null) {
+        workspaceRevisionRef.current = pendingWorkspaceRevisionRef.current;
+        pendingWorkspaceRevisionRef.current = null;
+     } else {
+        workspaceRevisionRef.current += 1;
+     }
+  }, [tables]);
 
   useEffect(() => {
      // 在本地启动 ele 时缓冲一下，等待 index.html 中的开屏动画播放完毕再移除
@@ -563,6 +584,7 @@ export default function App() {
              a.click();
              URL.revokeObjectURL(url);
          }
+         lastSavedRevisionRef.current = workspaceRevisionRef.current;
          showToast(lang === 'en' ? 'Project saved successfully' : '保存成功');
       } catch (err: any) {
          if (err.name !== 'AbortError') alert("Failed to save project: " + err.message);
@@ -1159,9 +1181,656 @@ export default function App() {
   };
 
   const tablesRef = useRef(tables);
+  const projectNameRef = useRef(projectName);
+  const tableActionExecutionQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const agentGenerationApiRef = useRef<any | null>(null);
+  const registerAgentGenerationApi = useCallback((api: any | null) => {
+     agentGenerationApiRef.current = api;
+  }, []);
+  const tableActionCommitWaiterRef = useRef<{
+     expectedTables: any[];
+     resolve: () => void;
+     reject: (error: Error) => void;
+     timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+
   useEffect(() => {
      tablesRef.current = tables;
+     const waiter = tableActionCommitWaiterRef.current;
+     if (waiter && tables === waiter.expectedTables) {
+        clearTimeout(waiter.timer);
+        tableActionCommitWaiterRef.current = null;
+        waiter.resolve();
+     }
   }, [tables]);
+  useEffect(() => {
+     projectNameRef.current = projectName;
+  }, [projectName]);
+
+  const waitForTableActionCommit = (expectedTables: any[], timeoutMs = 12000) => {
+     return new Promise<void>((resolve, reject) => {
+        const previous = tableActionCommitWaiterRef.current;
+        if (previous) {
+           clearTimeout(previous.timer);
+           previous.reject(new Error('A newer Table Action commit replaced the previous waiter.'));
+        }
+        const timer = setTimeout(() => {
+           if (tableActionCommitWaiterRef.current?.expectedTables === expectedTables) {
+              tableActionCommitWaiterRef.current = null;
+           }
+           reject(new Error(`Table Action React commit timed out after ${timeoutMs}ms.`));
+        }, timeoutMs);
+        tableActionCommitWaiterRef.current = { expectedTables, resolve, reject, timer };
+     });
+  };
+
+  const commitTablesFromAgent = async (nextTables: any[], nextRevision: number) => {
+     tablesRef.current = nextTables;
+     pendingWorkspaceRevisionRef.current = nextRevision;
+     const commitPromise = waitForTableActionCommit(nextTables);
+     setTables(nextTables);
+     await commitPromise;
+     workspaceRevisionRef.current = nextRevision;
+  };
+
+  const saveWorkspaceForAgent = async () => {
+     const fileHandle = (window as any).activeProjectFileHandle;
+     if (!fileHandle) {
+        const error: any = new Error('No active project file is bound. Save the project once in the UI before calling workspace.save.');
+        error.code = 'WORKSPACE_SAVE_UNAVAILABLE';
+        throw error;
+     }
+     if (typeof fileHandle.queryPermission === 'function') {
+        const permission = await fileHandle.queryPermission({ mode: 'readwrite' });
+        if (permission !== 'granted') {
+           const error: any = new Error('The active project file does not currently grant write permission.');
+           error.code = 'PERMISSION_DENIED';
+           throw error;
+        }
+     }
+     const writable = await fileHandle.createWritable();
+     await writable.write(JSON.stringify(tablesRef.current, null, 2));
+     await writable.close();
+     lastSavedRevisionRef.current = workspaceRevisionRef.current;
+     return { saved: true, dirty: false, revision: workspaceRevisionRef.current, lastSavedRevision: lastSavedRevisionRef.current, filename: fileHandle.name || null };
+  };
+
+
+  const waitForAgentRuntimeTable = async (tableId: string, timeoutMs = 12000) => {
+     const started = Date.now();
+     while (Date.now() - started < timeoutMs) {
+        if (activeTableIdRef.current === tableId && agentGenerationApiRef.current?.tableId === tableId) return;
+        await new Promise(resolve => setTimeout(resolve, 25));
+     }
+     const err: any = new Error(`Table Action active-table runtime timed out after ${timeoutMs}ms.`);
+     err.code = 'TABLE_RUNTIME_TIMEOUT';
+     throw err;
+  };
+
+  const normalizeAgentJobStatus = (phase: string) => {
+     if (phase === 'completed') return 'completed';
+     if (phase === 'failed' || phase === 'submission_unknown') return 'failed';
+     if (phase === 'cancelled') return 'cancelled';
+     if (phase === 'preparing' || phase === 'uploading' || phase === 'creating') return 'queued';
+     return 'running';
+  };
+
+  const sanitizeAgentJob = (job: any) => {
+     if (!job) return null;
+     return {
+        jobId: job.localJobId,
+        localJobId: job.localJobId,
+        batchId: job.agentBatchId || null,
+        idempotencyKey: job.agentIdempotencyKey || null,
+        tableId: job.tableId || null,
+        rowId: job.recordId || null,
+        fieldId: job.fieldId || null,
+        mediaType: job.mediaType || null,
+        provider: job.provider || null,
+        model: job.model || null,
+        phase: job.phase || null,
+        status: normalizeAgentJobStatus(job.phase || ''),
+        taskId: job.taskId || null,
+        resultUrl: job.resultUrl || null,
+        localPath: job.localPath || job.finalPath || null,
+        lastError: job.lastError || null,
+        createdAt: job.createdAt || null,
+        updatedAt: job.updatedAt || null,
+        generationIndex: job.generationIndex ?? null,
+        remoteSubmitted: !!job.taskId,
+        retryable: !!job.taskId || !!job.resultUrl
+     };
+  };
+
+  const waitForAgentGenerationWriteback = async (runtimeData: any, params: any, timeoutMs = 8000) => {
+     const jobs = Array.isArray(runtimeData?.jobs) ? runtimeData.jobs : [];
+     const completedRows = Array.isArray(runtimeData?.completedRows) ? runtimeData.completedRows : [];
+     if (jobs.length === 0 && completedRows.length === 0) return;
+     const tableId = String(params?.tableId || '');
+     const fieldId = String(params?.fieldId || '');
+     const started = Date.now();
+     while (Date.now() - started < timeoutMs) {
+        const table = tablesRef.current.find((t: any) => t.id === tableId);
+        if (table) {
+           const jobsCommitted = jobs.every((item: any) => {
+              const row = table.data?.records?.find((r: any) => r.id === item.rowId);
+              const value = row?.[fieldId];
+              const arr = Array.isArray(value) ? value : value ? [value] : [];
+              return arr.some((entry: any) => entry && typeof entry === 'object' && entry.jobId === item.jobId);
+           });
+           const textCommitted = completedRows.every((item: any) => {
+              const row = table.data?.records?.find((r: any) => r.id === item.rowId);
+              return row && row[fieldId] !== undefined && row[fieldId] !== null && row[fieldId] !== '';
+           });
+           if (jobsCommitted && textCommitted) return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 25));
+     }
+     const err: any = new Error(`Generation writeback React commit timed out after ${timeoutMs}ms.`);
+     err.code = 'GENERATION_WRITEBACK_TIMEOUT';
+     throw err;
+  };
+
+  // Agent API exploration branch (Phase 3.5): table writes remain serialized and
+  // runtime generation/job actions are delegated to the existing Grid + Job Center logic.
+  useEffect(() => {
+     const electronApi = (window as any).electronAPI;
+     if (!electronApi?.onTableActionRequest || !electronApi?.sendTableActionResponse) return;
+
+     const processTableActionPayload = async (payload: any) => {
+        const bridgeId = payload?.bridgeId;
+        if (!bridgeId) return;
+
+        const idempotencyKey = String(payload?.request?.idempotencyKey || payload?.request?.params?.idempotencyKey || '').trim();
+        const idempotencyFingerprint = JSON.stringify({ action: payload?.request?.action || null, params: payload?.request?.params || {} });
+        if (idempotencyKey && tableActionIdempotencyRef.current.has(idempotencyKey)) {
+           const stored = tableActionIdempotencyRef.current.get(idempotencyKey);
+           if (stored.fingerprint !== idempotencyFingerprint) {
+              electronApi.sendTableActionResponse(bridgeId, {
+                 ok: false, version: '0.1', action: payload?.request?.action || null, requestId: payload?.request?.requestId || null,
+                 workspaceRevision: workspaceRevisionRef.current,
+                 error: { code: 'IDEMPOTENCY_CONFLICT', message: 'idempotencyKey was already used for a different action payload', retryable: false, details: { idempotencyKey } }
+              });
+              return;
+           }
+           const replay = structuredClone(stored.response);
+           replay.data = { ...(replay.data || {}), idempotentReplay: true, originalWorkspaceRevision: replay.workspaceRevision };
+           replay.workspaceRevision = workspaceRevisionRef.current;
+           electronApi.sendTableActionResponse(bridgeId, replay);
+           return;
+        }
+
+        const snapshot = {
+           tables: tablesRef.current,
+           activeTableId: activeTableIdRef.current,
+           projectName: projectNameRef.current,
+           workspaceRevision: workspaceRevisionRef.current
+        };
+
+        let response: any;
+        try {
+           const result = executeTableActionRequest(payload.request, snapshot);
+           response = result.response;
+
+           if (response?.ok && result.nextWorkspace) {
+              const nextTables = result.nextWorkspace.tables;
+              const tablesChanged = JSON.stringify(nextTables) !== JSON.stringify(tablesRef.current);
+              const nextActiveTableId = result.nextWorkspace.activeTableId || activeTableIdRef.current;
+              const activeChanged = nextActiveTableId !== activeTableIdRef.current;
+
+              // Data ACK: only acknowledge table mutations after React committed them.
+              if (tablesChanged) {
+                 const nextRevision = Number(response.workspaceRevision);
+                 await commitTablesFromAgent(nextTables, Number.isInteger(nextRevision) ? nextRevision : workspaceRevisionRef.current + 1);
+              }
+
+              // Context ACK: table.activate/table.create must not return before the target Grid runtime is mounted.
+              if (activeChanged) {
+                 setActiveTableId(nextActiveTableId);
+                 await waitForAgentRuntimeTable(nextActiveTableId);
+              }
+
+              if (tablesChanged && response.undoToken) {
+                 if (tableActionHistoryRevisionRef.current !== snapshot.workspaceRevision) {
+                    tableActionUndoRef.current.clear();
+                    tableActionUndoOrderRef.current = [];
+                 } else {
+                    for (const token of tableActionUndoOrderRef.current.filter(token => tableActionUndoRef.current.get(token)?.state === 'undone')) {
+                       tableActionUndoRef.current.delete(token);
+                    }
+                    tableActionUndoOrderRef.current = tableActionUndoOrderRef.current.filter(token => tableActionUndoRef.current.has(token));
+                 }
+                 const record = {
+                    token: response.undoToken,
+                    beforeTables: structuredClone(snapshot.tables),
+                    afterTables: structuredClone(nextTables),
+                    beforeActiveTableId: snapshot.activeTableId,
+                    afterActiveTableId: nextActiveTableId,
+                    beforeRevision: snapshot.workspaceRevision,
+                    afterRevision: workspaceRevisionRef.current,
+                    effects: structuredClone(response.effects || {}),
+                    state: 'applied'
+                 };
+                 tableActionUndoRef.current.set(response.undoToken, record);
+                 tableActionUndoOrderRef.current = [...tableActionUndoOrderRef.current.filter(token => token !== response.undoToken), response.undoToken].slice(-100);
+                 tableActionHistoryRevisionRef.current = workspaceRevisionRef.current;
+              }
+           }
+
+           const runtimeAction = response?.ok ? response?.data?.runtimeAction : null;
+           const isDryRun = payload?.request?.dryRun === true;
+           if (response?.ok && runtimeAction && !isDryRun) {
+              let runtimeData: any = null;
+              if (runtimeAction === 'context.get_current' || runtimeAction === 'row.query' || runtimeAction === 'generation.get_capabilities' || runtimeAction === 'generation.preview' || runtimeAction === 'generation.run') {
+                 const runtime = agentGenerationApiRef.current;
+                 if (!runtime) {
+                    const err: any = new Error('Interactive Agent runtime is unavailable. Open the target table in AI Table Studio and retry.');
+                    err.code = 'AGENT_RUNTIME_UNAVAILABLE';
+                    throw err;
+                 }
+                 if (runtimeAction === 'context.get_current') {
+                    runtimeData = await runtime.getContext();
+                    runtimeData = { ...response.data, ...runtimeData, runtimeRequired: undefined, runtimeAction: undefined, params: undefined };
+                 } else if (runtimeAction === 'row.query') {
+                    runtimeData = await runtime.queryRows(response.data.params);
+                 } else if (runtimeAction === 'generation.get_capabilities') {
+                    runtimeData = await runtime.getGenerationCapabilities();
+                 } else if (runtimeAction === 'generation.preview') {
+                    runtimeData = await runtime.preview(response.data.params);
+                 } else {
+                    runtimeData = await runtime.run(response.data.params);
+                    if (!runtimeData?.idempotentReplay) {
+                       await waitForAgentGenerationWriteback(runtimeData, response.data.params);
+                    }
+                 }
+               } else if (runtimeAction === 'job.list') {
+                  const params = response.data.params || {};
+                  let jobs = (await electronApi.listNetworkJobs()) || [];
+                 if (params.tableId) jobs = jobs.filter((job: any) => job.tableId === params.tableId);
+                 if (params.batchId) jobs = jobs.filter((job: any) => job.agentBatchId === params.batchId);
+                 if (Array.isArray(params.status) && params.status.length > 0) {
+                    jobs = jobs.filter((job: any) => params.status.includes(job.phase) || params.status.includes(normalizeAgentJobStatus(job.phase || '')));
+                 }
+                  jobs.sort((a: any, b: any) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+                  const limit = Math.max(1, Math.min(500, Number(params.limit) || 100));
+                  const fullJobs = jobs.slice(0, limit).map(sanitizeAgentJob);
+                  const summaryFields = ['jobId', 'batchId', 'tableId', 'rowId', 'fieldId', 'provider', 'model', 'phase', 'status', 'taskId', 'updatedAt'];
+                  const selectedFields = Array.isArray(params.fields) && params.fields.length > 0
+                     ? [...new Set(['jobId', ...params.fields.map(String)])]
+                     : params.detail === 'full' ? null : summaryFields;
+                  const projectedJobs = selectedFields
+                     ? fullJobs.map((job: any) => Object.fromEntries(selectedFields.filter(key => key in job).map(key => [key, job[key]])))
+                     : fullJobs;
+                  runtimeData = { detail: selectedFields ? 'summary' : 'full', fields: selectedFields, jobs: projectedJobs, totalMatched: jobs.length };
+               } else if (runtimeAction === 'job.get') {
+                 const job = await electronApi.queryNetworkJob(response.data.params.jobId);
+                 if (!job) {
+                    const err: any = new Error(`Job not found: ${response.data.params.jobId}`);
+                    err.code = 'JOB_NOT_FOUND';
+                    throw err;
+                 }
+                 runtimeData = { job: sanitizeAgentJob(job) };
+              } else if (runtimeAction === 'job.retry') {
+                 const jobId = response.data.params.jobId;
+                 const job = await electronApi.queryNetworkJob(jobId);
+                 if (!job) {
+                    const err: any = new Error(`Job not found: ${jobId}`);
+                    err.code = 'JOB_NOT_FOUND';
+                    throw err;
+                 }
+                 if (job.resultUrl || job.phase === 'generated' || job.phase === 'downloading') {
+                    await electronApi.retryDownloadJob(jobId);
+                    runtimeData = { jobId, action: 'resume_download', reusedTaskId: !!job.taskId, taskId: job.taskId || null };
+                 } else if (job.taskId) {
+                    await electronApi.continueNetworkJobPolling(jobId);
+                    runtimeData = { jobId, action: 'resume_polling', reusedTaskId: true, taskId: job.taskId };
+                 } else {
+                    const err: any = new Error('Job has no durable taskId/resultUrl. Phase 3 will not resubmit a paid generation automatically.');
+                    err.code = 'JOB_NOT_RETRYABLE';
+                    throw err;
+                 }
+               } else if (runtimeAction === 'job.cancel') {
+                 const result = await electronApi.cancelNetworkJob(response.data.params.jobId);
+                 if (!result?.ok) {
+                    const err: any = new Error(result?.message || `Unable to cancel job: ${response.data.params.jobId}`);
+                    err.code = result?.code || 'JOB_NOT_FOUND';
+                    throw err;
+                 }
+                  runtimeData = result;
+               } else if (runtimeAction === 'job.cleanup_stale.preview' || runtimeAction === 'job.cleanup_stale') {
+                  if (typeof electronApi.inspectNetworkJobStale !== 'function') {
+                     const err: any = new Error('The running Electron preload does not support Phase 4.7 stale Job inspection. Restart AI Table Studio and retry.');
+                     err.code = 'RUNTIME_VERSION_MISMATCH';
+                     throw err;
+                  }
+                  const params = response.data.params || {};
+                  const staleAfterMs = Number(params.staleAfterMinutes || 30) * 60 * 1000;
+                  const requestedIds = Array.isArray(params.jobIds) ? new Set(params.jobIds.map(String)) : null;
+                  let jobs = ((await electronApi.listNetworkJobs()) || []).filter((job: any) => job.tableId === params.tableId);
+                  if (requestedIds) jobs = jobs.filter((job: any) => requestedIds.has(String(job.localJobId)));
+                  jobs.sort((a: any, b: any) => new Date(a.updatedAt || a.createdAt || 0).getTime() - new Date(b.updatedAt || b.createdAt || 0).getTime());
+                  jobs = jobs.slice(0, Math.max(1, Math.min(500, Number(params.limit) || 100)));
+                  const inspections = [];
+                  for (const job of jobs) {
+                     inspections.push(await electronApi.inspectNetworkJobStale(job.localJobId, { staleAfterMs }));
+                  }
+                  const candidates = inspections.filter((item: any) => item?.eligible === true);
+                  const protectedItems = inspections.filter((item: any) => item?.eligible !== true);
+                  const protectedByReason = protectedItems.reduce((counts: any, item: any) => {
+                     const code = item?.code || 'UNKNOWN'; counts[code] = (counts[code] || 0) + 1; return counts;
+                  }, {});
+                  const notFoundJobIds = requestedIds
+                     ? [...requestedIds].filter(jobId => !jobs.some((job: any) => String(job.localJobId) === jobId))
+                     : [];
+                  const baseReport: any = {
+                     tableId: params.tableId,
+                     staleAfterMinutes: Number(params.staleAfterMinutes || 30),
+                     scanned: jobs.length,
+                     candidates,
+                     candidateCount: candidates.length,
+                     protectedCount: protectedItems.length,
+                     protectedByReason,
+                     notFoundJobIds
+                  };
+                  if (params.includeProtected === true || requestedIds) baseReport.protected = protectedItems;
+                  if (runtimeAction === 'job.cleanup_stale.preview') {
+                     runtimeData = { ...baseReport, preview: true, workspaceChanged: false, filesDeleted: 0 };
+                  } else {
+                     const cancelResults = [];
+                     for (const candidate of candidates) {
+                        const result = await electronApi.cancelNetworkJob(candidate.jobId);
+                        cancelResults.push({ jobId: candidate.jobId, ...result });
+                     }
+                     const cancelledIds = cancelResults
+                        .filter((item: any) => item?.ok && item?.localCancelled === true && item?.phase === 'cancelled')
+                        .map((item: any) => String(item.jobId));
+                     const cellCleanup = removeNetworkJobPlaceholders(tablesRef.current, cancelledIds, { tableId: params.tableId });
+                     let revision = workspaceRevisionRef.current;
+                     if (cellCleanup.affectedCells > 0) {
+                        revision += 1;
+                        await commitTablesFromAgent(cellCleanup.tables, revision);
+                        response.workspaceRevision = revision;
+                     }
+                     const historyResults = [];
+                     for (const jobId of cancelledIds) {
+                        try {
+                           await electronApi.deleteNetworkJob(jobId);
+                           historyResults.push({ jobId, deleted: true });
+                        } catch (error: any) {
+                           historyResults.push({ jobId, deleted: false, error: error?.message || String(error) });
+                        }
+                     }
+                     runtimeData = {
+                        ...baseReport,
+                        preview: false,
+                        cleanedJobIds: historyResults.filter(item => item.deleted).map(item => item.jobId),
+                        cleanedCount: historyResults.filter(item => item.deleted).length,
+                        cancelledCount: cancelledIds.length,
+                        cancelResults,
+                        historyResults,
+                        cellCleanup: {
+                           removedPlaceholders: cellCleanup.removedPlaceholders,
+                           affectedRows: cellCleanup.affectedRows,
+                           affectedCells: cellCleanup.affectedCells,
+                           changes: cellCleanup.changes
+                        },
+                        filesDeleted: 0,
+                        remoteCancelled: false,
+                        workspaceChanged: cellCleanup.affectedCells > 0,
+                        revision,
+                        effects: { rowsAffected: cellCleanup.affectedRows, cellsAffected: cellCleanup.affectedCells }
+                     };
+                  }
+               } else if (runtimeAction === 'workspace.get_dirty_state') {
+                 runtimeData = {
+                    dirty: workspaceRevisionRef.current !== lastSavedRevisionRef.current,
+                    revision: workspaceRevisionRef.current,
+                    lastSavedRevision: lastSavedRevisionRef.current,
+                    hasBoundProjectFile: !!(window as any).activeProjectFileHandle
+                 };
+              } else if (runtimeAction === 'workspace.save') {
+                 runtimeData = await saveWorkspaceForAgent();
+              } else if (runtimeAction === 'undo.get_status') {
+                 const records = tableActionUndoOrderRef.current.map(token => tableActionUndoRef.current.get(token)).filter(Boolean);
+                 const historyCurrent = tableActionHistoryRevisionRef.current === workspaceRevisionRef.current;
+                 runtimeData = {
+                    canUndo: historyCurrent && [...records].reverse().some(record => record.state === 'applied'),
+                    canRedo: historyCurrent && records.some(record => record.state === 'undone'),
+                    revision: workspaceRevisionRef.current,
+                    entries: records.slice(-20).reverse().map(record => ({
+                       undoToken: record.token, state: record.state, beforeRevision: record.beforeRevision,
+                       afterRevision: record.afterRevision, undoRevision: record.undoRevision || null
+                    }))
+                 };
+              } else if (runtimeAction === 'undo.apply' || runtimeAction === 'redo.apply') {
+                 const requestedToken = String(response.data.params?.undoToken || '').trim();
+                 const ordered = tableActionUndoOrderRef.current.map(token => tableActionUndoRef.current.get(token)).filter(Boolean);
+                 const eligible = runtimeAction === 'undo.apply'
+                    ? [...ordered].reverse().find(item => item.state === 'applied')
+                    : ordered.find(item => item.state === 'undone');
+                 const record = requestedToken ? tableActionUndoRef.current.get(requestedToken) : eligible;
+                 if (!record) {
+                    const err: any = new Error(requestedToken ? `Undo token not found: ${requestedToken}` : `No ${runtimeAction === 'undo.apply' ? 'undo' : 'redo'} entry is available at the current revision.`);
+                    err.code = 'UNDO_NOT_AVAILABLE';
+                    throw err;
+                 }
+                 if (tableActionHistoryRevisionRef.current !== workspaceRevisionRef.current || record !== eligible) {
+                    const err: any = new Error('Workspace changed after this undo entry was created. Refusing to overwrite newer UI edits.');
+                    err.code = 'STALE_WORKSPACE';
+                    throw err;
+                 }
+                 const nextTables = structuredClone(runtimeAction === 'undo.apply' ? record.beforeTables : record.afterTables);
+                 const nextActiveTableId = runtimeAction === 'undo.apply' ? record.beforeActiveTableId : record.afterActiveTableId;
+                 const nextRevision = workspaceRevisionRef.current + 1;
+                 await commitTablesFromAgent(nextTables, nextRevision);
+                 if (nextActiveTableId && nextActiveTableId !== activeTableIdRef.current) setActiveTableId(nextActiveTableId);
+                 if (runtimeAction === 'undo.apply') {
+                    record.state = 'undone';
+                    record.undoRevision = nextRevision;
+                 } else {
+                    record.state = 'applied';
+                    record.afterRevision = nextRevision;
+                    record.undoRevision = null;
+                 }
+                 tableActionHistoryRevisionRef.current = nextRevision;
+                 runtimeData = { undoToken: record.token, action: runtimeAction === 'undo.apply' ? 'undo' : 'redo', revision: nextRevision, workspaceChanged: true };
+                 runtimeData.effects = structuredClone(record.effects || {});
+                 response.workspaceRevision = nextRevision;
+              } else if (runtimeAction === 'job.get_result') {
+                 const job = await electronApi.queryNetworkJob(response.data.params.jobId);
+                 if (!job) {
+                    const err: any = new Error(`Job not found: ${response.data.params.jobId}`);
+                    err.code = 'JOB_NOT_FOUND';
+                    throw err;
+                 }
+                 runtimeData = {
+                    jobId: job.localJobId,
+                    phase: job.phase || null,
+                    result: {
+                       url: job.resultUrl || null,
+                       localPath: job.localPath || job.finalPath || null,
+                       mediaType: job.mediaType || null,
+                       ready: !!(job.localPath || job.finalPath || job.resultUrl)
+                    }
+                 };
+              } else if (runtimeAction === 'job.bind_result') {
+                 const params = response.data.params;
+                 const job = await electronApi.queryNetworkJob(params.jobId);
+                 if (!job) {
+                    const err: any = new Error(`Job not found: ${params.jobId}`);
+                    err.code = 'JOB_NOT_FOUND';
+                    throw err;
+                 }
+                 const source = job.localPath || job.finalPath || job.resultUrl;
+                 if (!source) {
+                    const err: any = new Error('Job has no result URL or local file to bind.');
+                    err.code = 'JOB_RESULT_NOT_READY';
+                    throw err;
+                 }
+                 const target = params.target;
+                 const currentTables = tablesRef.current;
+                 const tableIndex = currentTables.findIndex((table: any) => table.id === target.tableId);
+                 const targetTable = currentTables[tableIndex];
+                 const rowIndex = targetTable?.data?.records?.findIndex((row: any) => row.id === target.rowId) ?? -1;
+                 const field = targetTable?.data?.fields?.find((item: any) => item.id === target.fieldId);
+                 if (tableIndex < 0) { const err: any = new Error(`Table not found: ${target.tableId}`); err.code = 'TABLE_NOT_FOUND'; throw err; }
+                 if (rowIndex < 0) { const err: any = new Error(`Row not found: ${target.rowId}`); err.code = 'ROW_NOT_FOUND'; throw err; }
+                 if (!field) { const err: any = new Error(`Field not found: ${target.fieldId}`); err.code = 'FIELD_NOT_FOUND'; throw err; }
+                 if (!['attachment', 'aiImage', 'aiVideo', 'url'].includes(field.type)) { const err: any = new Error('Target field is not media-capable.'); err.code = 'INVALID_FIELD_TYPE'; throw err; }
+                 const beforeTables = structuredClone(currentTables);
+                 const currentValue = targetTable.data.records[rowIndex][target.fieldId];
+                 const existing = Array.isArray(currentValue) ? currentValue : currentValue ? [currentValue] : [];
+                 const item = { url: source, jobId: job.localJobId, mediaType: job.mediaType || undefined };
+                 const value = field.type === 'url' ? source : params.mode === 'replace' ? [item] : [...existing, item];
+                 const nextTables = structuredClone(currentTables);
+                 nextTables[tableIndex].data.records[rowIndex][target.fieldId] = value;
+                 const nextRevision = workspaceRevisionRef.current + 1;
+                 await commitTablesFromAgent(nextTables, nextRevision);
+                 const undoToken = `undo_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+                 tableActionUndoRef.current.set(undoToken, {
+                    token: undoToken, beforeTables, afterTables: structuredClone(nextTables),
+                    beforeActiveTableId: activeTableIdRef.current, afterActiveTableId: activeTableIdRef.current,
+                    beforeRevision: nextRevision - 1, afterRevision: nextRevision, state: 'applied',
+                    effects: { rowsAffected: 1, cellsAffected: 1, mediaAffected: 1 }
+                 });
+                 tableActionUndoOrderRef.current = [...tableActionUndoOrderRef.current, undoToken].slice(-100);
+                 tableActionHistoryRevisionRef.current = nextRevision;
+                 response.undoToken = undoToken;
+                 response.workspaceRevision = nextRevision;
+                 runtimeData = { jobId: job.localJobId, target, source, workspaceChanged: true, effects: { rowsAffected: 1, cellsAffected: 1, mediaAffected: 1 } };
+              } else if (runtimeAction === 'job.delete_history') {
+                 const jobId = response.data.params.jobId;
+                 const job = await electronApi.queryNetworkJob(jobId);
+                 if (!job) { const err: any = new Error(`Job not found: ${jobId}`); err.code = 'JOB_NOT_FOUND'; throw err; }
+                 await electronApi.deleteNetworkJob(jobId);
+                 runtimeData = { jobId, deleted: true };
+              } else if (runtimeAction.startsWith('batch.')) {
+                 const params = response.data.params || {};
+                 const allJobs = (await electronApi.listNetworkJobs()) || [];
+                 const summarize = (batchId: string, jobs: any[]) => {
+                    const counts: any = { total: jobs.length, queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 };
+                    jobs.forEach((job: any) => { const status = normalizeAgentJobStatus(job.phase || ''); counts[status] = (counts[status] || 0) + 1; });
+                    return { batchId, counts, createdAt: jobs.map((job: any) => job.createdAt).filter(Boolean).sort()[0] || null, updatedAt: jobs.map((job: any) => job.updatedAt).filter(Boolean).sort().at(-1) || null };
+                 };
+                 if (runtimeAction === 'batch.list') {
+                    const groups = new Map<string, any[]>();
+                    allJobs.filter((job: any) => job.agentBatchId).forEach((job: any) => groups.set(job.agentBatchId, [...(groups.get(job.agentBatchId) || []), job]));
+                    runtimeData = { batches: [...groups].map(([batchId, jobs]) => summarize(batchId, jobs)).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))) };
+                 } else {
+                    const batchId = String(params.batchId);
+                    const jobs = allJobs.filter((job: any) => job.agentBatchId === batchId);
+                    if (!jobs.length) { const err: any = new Error(`Batch not found: ${batchId}`); err.code = 'BATCH_NOT_FOUND'; throw err; }
+                    if (runtimeAction === 'batch.get') runtimeData = { batch: summarize(batchId, jobs), jobs: jobs.map(sanitizeAgentJob) };
+                    else if (runtimeAction === 'batch.list_results') runtimeData = { batchId, results: jobs.filter((job: any) => job.localPath || job.finalPath || job.resultUrl).map((job: any) => ({ jobId: job.localJobId, rowId: job.recordId || null, fieldId: job.fieldId || null, localPath: job.localPath || job.finalPath || null, resultUrl: job.resultUrl || null })) };
+                    else if (runtimeAction === 'batch.cancel') {
+                       const results = [];
+                       for (const job of jobs.filter((item: any) => !['completed', 'cancelled'].includes(item.phase))) results.push(await electronApi.cancelNetworkJob(job.localJobId));
+                       runtimeData = { batchId, cancelled: results.filter((item: any) => item?.ok).length, results };
+                    } else {
+                       const results = [];
+                       for (const job of jobs.filter((item: any) => ['failed', 'submission_unknown'].includes(item.phase))) {
+                          if (job.resultUrl) { await electronApi.retryDownloadJob(job.localJobId); results.push({ jobId: job.localJobId, action: 'resume_download' }); }
+                          else if (job.taskId) { await electronApi.continueNetworkJobPolling(job.localJobId); results.push({ jobId: job.localJobId, action: 'resume_polling' }); }
+                          else results.push({ jobId: job.localJobId, action: 'rejected', code: 'JOB_NOT_RETRYABLE' });
+                       }
+                       runtimeData = { batchId, results, retried: results.filter((item: any) => item.action !== 'rejected').length };
+                    }
+                 }
+              } else if (runtimeAction.startsWith('export.')) {
+                 const params = response.data.params || {};
+                 const table = tablesRef.current.find((item: any) => item.id === params.tableId);
+                 if (!table) { const err: any = new Error(`Table not found: ${params.tableId}`); err.code = 'TABLE_NOT_FOUND'; throw err; }
+                 const selectedFieldIds = Array.isArray(params.fieldIds) && params.fieldIds.length ? params.fieldIds.map(String) : table.data.fields.map((field: any) => field.id);
+                 const fields = table.data.fields.filter((field: any) => selectedFieldIds.includes(field.id));
+                 const selectedRows = Array.isArray(params.rowIds) && params.rowIds.length ? table.data.records.filter((row: any) => params.rowIds.includes(row.id)) : table.data.records;
+                 const attachments: any[] = [];
+                 selectedRows.forEach((row: any) => fields.forEach((field: any) => {
+                    if (!['attachment', 'aiImage', 'aiVideo', 'url'].includes(field.type)) return;
+                    const values = Array.isArray(row[field.id]) ? row[field.id] : row[field.id] ? [row[field.id]] : [];
+                    values.forEach((value: any, index: number) => {
+                       const source = typeof value === 'string' ? value : value?.url || value?.path;
+                       if (source) attachments.push({ rowId: row.id, fieldId: field.id, index, source, name: value?.name || String(source).split(/[\\/]/).pop() || `media-${index}` });
+                    });
+                 }));
+                 if (runtimeAction === 'export.preview') {
+                    runtimeData = { tableId: table.id, tableName: table.name, format: params.format || 'csv', rows: selectedRows.length, fields: fields.length, attachments: attachments.length, folderPath: params.folderPath || null, mayOverwrite: false };
+                 } else if (runtimeAction === 'export.attachments') {
+                    const files = [];
+                    for (const item of attachments) {
+                       const filename = `${item.rowId}_${item.fieldId}_${item.index}_${item.name}`.replace(/[<>:"/\\|?*]/g, '_');
+                       const savedPath = await electronApi.downloadFile({ url: item.source, filename, folderPath: params.folderPath });
+                       files.push({ ...item, filename, savedPath });
+                    }
+                    runtimeData = { tableId: table.id, files, exported: files.length };
+                 } else {
+                    const toPlain = (value: any) => Array.isArray(value) ? value.map(toPlain).join(' | ') : value && typeof value === 'object' ? (value.name || value.url || JSON.stringify(value)) : value ?? '';
+                    let content = '';
+                    let filename = String(params.filename || `${table.name}.${runtimeAction === 'export.csv' ? 'csv' : 'json'}`);
+                    let mime = 'application/json';
+                    if (runtimeAction === 'export.csv') {
+                       const quote = (value: any) => `"${String(value).replace(/"/g, '""')}"`;
+                       content = [fields.map((field: any) => quote(field.name)).join(','), ...selectedRows.map((row: any) => fields.map((field: any) => quote(toPlain(row[field.id]))).join(','))].join('\r\n');
+                       mime = 'text/csv';
+                    } else {
+                       content = JSON.stringify({ table: { id: table.id, name: table.name }, fields, rows: selectedRows }, null, 2);
+                    }
+                    const encoded = btoa(unescape(encodeURIComponent(content)));
+                    const savedPath = await electronApi.downloadFile({ url: `data:${mime};base64,${encoded}`, filename, folderPath: params.folderPath });
+                    runtimeData = { tableId: table.id, filename, savedPath, rows: selectedRows.length, fields: fields.length };
+                 }
+              }
+
+              response.data = runtimeData || {};
+              if (runtimeData?.effects) response.effects = { ...response.effects, ...runtimeData.effects };
+              if (Array.isArray(runtimeData?.failedRows) && runtimeData.failedRows.length > 0) {
+                 response.warnings = [...(response.warnings || []), `${runtimeData.failedRows.length} row(s) failed during generation submission.`];
+              }
+              if (runtimeData?.revision !== undefined) response.workspaceRevision = runtimeData.revision;
+           }
+
+           if (response?.ok && idempotencyKey && !isDryRun && getActionMetadata(payload?.request?.action)?.write) {
+              tableActionIdempotencyRef.current.set(idempotencyKey, { fingerprint: idempotencyFingerprint, response: structuredClone(response) });
+              if (tableActionIdempotencyRef.current.size > 500) {
+                 const oldest = tableActionIdempotencyRef.current.keys().next().value;
+                 if (oldest) tableActionIdempotencyRef.current.delete(oldest);
+              }
+           }
+        } catch (error: any) {
+           response = {
+              ok: false,
+              version: '0.1',
+              action: payload?.request?.action || null,
+              requestId: payload?.request?.requestId || null,
+              error: {
+                 code: error?.code || 'INTERNAL_ERROR',
+                 message: error?.message || String(error),
+                 retryable: error?.code === 'GENERATION_RUNTIME_UNAVAILABLE',
+                 details: {}
+              }
+           };
+        }
+        electronApi.sendTableActionResponse(bridgeId, response);
+     };
+
+     const unsubscribe = electronApi.onTableActionRequest((payload: any) => {
+        const task = tableActionExecutionQueueRef.current.then(
+           () => processTableActionPayload(payload),
+           () => processTableActionPayload(payload)
+        );
+        // Do not let one failed request stop later Agent actions from running.
+        tableActionExecutionQueueRef.current = task.catch(() => undefined);
+     });
+
+     return () => {
+        if (typeof unsubscribe === 'function') unsubscribe();
+        const waiter = tableActionCommitWaiterRef.current;
+        if (waiter) {
+           clearTimeout(waiter.timer);
+           tableActionCommitWaiterRef.current = null;
+           waiter.reject(new Error('Table Action renderer bridge was disposed.'));
+        }
+     };
+  }, []);
 
   useEffect(() => {
     if (!autoSaveSettings.enabled) return;
@@ -2823,6 +3492,7 @@ export default function App() {
                  }
                  setFilterConfig(newRules);
             }}
+            onRegisterAgentGenerationApi={registerAgentGenerationApi}
             modelSettings={modelSettings}
           />
         </div>

@@ -18,6 +18,11 @@ import {
   hydrateReviewProps,
   AttachmentReviewProps
 } from '../lib/attachmentUtils';
+import {
+  buildOptionalMediaReferenceWarnings,
+  isGenerationPreviewReady,
+  validateSelectedWorkflowInputs
+} from '../lib/generationPreviewPolicy';
 
 type NetworkJobCellItem = {
   type: 'networkJob';
@@ -2020,6 +2025,7 @@ interface GridProps {
   foldedGroups?: string[];
   onFoldedGroupsChange?: (groups: string[]) => void;
   onUpdateCellLinks?: (links: Record<string, string>) => void;
+  onRegisterAgentGenerationApi?: (api: any | null) => void;
 }
 
 export const resolveFieldValueForAI = (val: any, refField: Field, record: any, allFields: Field[]) => {
@@ -3162,7 +3168,7 @@ const writeTemporaryReferencePin = (storageKey: string | undefined, fieldId: str
   }
 };
 
-export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode = 'grid', data, allRecords, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onIndividualFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks }: GridProps) {
+export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode = 'grid', data, allRecords, searchQuery, searchMatches, activeSearchMatch, onUpdateRecord, onUpdateRecordsBatch, onPasteRecordsBatch, onDeleteRecords, onAddRecord, onInsertRecords, onAddField, onInsertField, onDuplicateField, onFreezeColumn, onIndividualFreezeColumn, onDeleteField, onRenameField, onChangeFieldType, onReorderFields, onReorderRecords, onResizeCol, onUpdateField, onSortField, onFilterField, sortConfig, filterConfig, groupConfig, rowHeight, modelSettings, lang = 'zh', username, onUpdateGlobalAttachment, gallerySettings, onGallerySettingsChange, foldedGroups, onFoldedGroupsChange, onUpdateCellLinks, onRegisterAgentGenerationApi }: GridProps) {
   const searchMatchSet = useMemo(() => new Set(searchMatches?.map(m => `${m.recordId}-${m.fieldId}`) || []), [searchMatches]);
   const visibleFields = useMemo(() => data.fields.filter(f => !f.hidden), [data.fields]);
   const globalAttachmentPropsMap = useMemo(() => {
@@ -3995,7 +4001,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
 
 
 
-  const executeAIGenerateCell = async (record: any, field: Field) => {
+  const executeAIGenerateCell = async (record: any, field: Field, agentContext?: { batchId?: string; idempotencyKey?: string }) => {
             let resultText = '';
         const contextData: any = {};
         
@@ -4214,6 +4220,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                         fieldId: field.id,
                         viewMode: viewMode,
                          generationIndex: i,
+                        agentBatchId: agentContext?.batchId || null,
+                        agentIdempotencyKey: agentContext?.idempotencyKey || null,
                          provider: imgSet.provider,
                          prompt: finalPrompt,
                         model: resolvedModel,
@@ -4424,6 +4432,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 fieldId: field.id,
                 viewMode: viewMode,
                 generationIndex: 0,
+                agentBatchId: agentContext?.batchId || null,
+                agentIdempotencyKey: agentContext?.idempotencyKey || null,
                 provider: vidSet.provider,
                 prompt: promptString,
                 model: resolvedModel,
@@ -4654,6 +4664,453 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         onUpdateRecord(record.id, field.id, finalResultParams);
         return finalResultParams;
   };
+
+
+  const getAgentInteractiveContext = async () => {
+    const cells = new Map<string, { rowId: string; fieldId: string; rowIndex: number; fieldIndex: number }>();
+    const addCell = (r: number, c: number) => {
+      const row = data.records[r];
+      const field = visibleFields[c];
+      if (!row || !field) return;
+      cells.set(`${row.id}::${field.id}`, { rowId: row.id, fieldId: field.id, rowIndex: r, fieldIndex: c });
+    };
+    if (selectionBox) {
+      for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
+        for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) addCell(r, c);
+      }
+    }
+    extraSelectedCells.forEach(cell => addCell(cell.r, cell.c));
+    if (cells.size === 0 && activeCell) {
+      const r = data.records.findIndex(record => record.id === activeCell.recordId);
+      const c = visibleFields.findIndex(field => field.id === activeCell.fieldId);
+      if (r >= 0 && c >= 0) addCell(r, c);
+    }
+    const selectedCells = [...cells.values()];
+    return {
+      tableId,
+      viewMode,
+      activeCell: activeCell ? { rowId: activeCell.recordId, fieldId: activeCell.fieldId } : null,
+      selectionAvailable: selectedCells.length > 0,
+      selection: selectedCells.length > 0 ? {
+        cells: selectedCells,
+        rowIds: Array.from(new Set(selectedCells.map(cell => cell.rowId))),
+        fieldIds: Array.from(new Set(selectedCells.map(cell => cell.fieldId))),
+        rectangular: !!selectionBox && extraSelectedCells.length === 0,
+        bounds: selectionBox ? { ...selectionBox } : null
+      } : null,
+      visibleRowIds: visibleRowsInfo.indices.filter(index => !visibleRowsInfo.cacheMap.get(index)?.isRowHidden).map(index => data.records[index]?.id).filter(Boolean),
+      visibleFieldIds: visibleFields.map(field => field.id)
+    };
+  };
+
+  const queryAgentRows = async (params: any) => {
+    const scope = params?.scope === 'current_view' ? 'current_view' : 'all';
+    const currentVisibleRows = visibleRowsInfo.indices.filter(index => !visibleRowsInfo.cacheMap.get(index)?.isRowHidden).map(index => data.records[index]).filter(Boolean);
+    let rows = scope === 'current_view' ? [...currentVisibleRows] : [...(allRecords?.length ? allRecords : data.records)];
+    const requestedRowIds = Array.isArray(params?.rowIds) ? params.rowIds.map(String) : null;
+    if (requestedRowIds) {
+      const wanted = new Set(requestedRowIds);
+      rows = rows.filter(row => wanted.has(row.id));
+    }
+    const filter = params?.filter;
+    if (filter?.conditions && Array.isArray(filter.conditions)) {
+      const logic = filter.logic === 'or' ? 'or' : 'and';
+      const matchesCondition = (record: any, condition: any) => {
+        const field = data.fields.find(item => item.id === condition.fieldId);
+        if (!field) return false;
+        const raw = record[field.id];
+        const resolved = resolveFieldValueForAI(raw, field, record, data.fields);
+        const empty = resolved === null || resolved === undefined || resolved === '' || (Array.isArray(resolved) && resolved.length === 0);
+        if (condition.operator === 'empty') return empty;
+        if (condition.operator === 'not_empty') return !empty;
+        const values = Array.isArray(resolved) ? resolved : [resolved];
+        const normalized = values.map(value => String(value ?? '').trim().toLowerCase());
+        const expected = condition.value;
+        const expectedText = String(expected ?? '').trim().toLowerCase();
+        if (condition.operator === 'equals') return normalized.includes(expectedText);
+        if (condition.operator === 'not_equals') return !normalized.includes(expectedText);
+        if (condition.operator === 'contains') return normalized.some(value => value.includes(expectedText));
+        if (condition.operator === 'not_contains') return normalized.every(value => !value.includes(expectedText));
+        if (condition.operator === 'in') {
+          const set = new Set((Array.isArray(expected) ? expected : [expected]).map(value => String(value).trim().toLowerCase()));
+          return normalized.some(value => set.has(value));
+        }
+        const left = Number(values[0]);
+        const right = Number(expected);
+        if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+        if (condition.operator === 'gt') return left > right;
+        if (condition.operator === 'gte') return left >= right;
+        if (condition.operator === 'lt') return left < right;
+        if (condition.operator === 'lte') return left <= right;
+        return false;
+      };
+      rows = rows.filter(record => {
+        const results = filter.conditions.map((condition: any) => matchesCondition(record, condition));
+        return logic === 'or' ? results.some(Boolean) : results.every(Boolean);
+      });
+    }
+    const sortRules = params?.sort ? (Array.isArray(params.sort) ? params.sort : [params.sort]) : [];
+    if (sortRules.length) {
+      rows.sort((a: any, b: any) => {
+        for (const rule of sortRules) {
+          const field = data.fields.find(item => item.id === rule.fieldId);
+          if (!field) continue;
+          const av = resolveFieldValueForAI(a[field.id], field, a, data.fields);
+          const bv = resolveFieldValueForAI(b[field.id], field, b, data.fields);
+          let cmp = 0;
+          if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv;
+          else cmp = String(av ?? '').localeCompare(String(bv ?? ''), undefined, { numeric: true, sensitivity: 'base' });
+          if (cmp !== 0) return rule.direction === 'desc' ? -cmp : cmp;
+        }
+        return 0;
+      });
+    }
+    const requestedFields = Array.isArray(params?.fields) && params.fields.length ? params.fields.map(String) : data.fields.map(field => field.id);
+    const includeComputed = params?.includeComputed === true;
+    const offset = Math.max(0, Number.parseInt(String(params?.cursor || '0'), 10) || 0);
+    const limit = Math.max(1, Math.min(500, Number(params?.limit) || 100));
+    const page = rows.slice(offset, offset + limit);
+    const formatted = page.map((record: any) => {
+      const values: any = {};
+      const displayValues: any = {};
+      const computedValues: any = {};
+      requestedFields.forEach((fieldId: string) => {
+        const field = data.fields.find(item => item.id === fieldId);
+        if (!field) return;
+        values[fieldId] = record[fieldId];
+        const resolved = resolveFieldValueForAI(record[fieldId], field, record, data.fields);
+        displayValues[fieldId] = resolved;
+        if (includeComputed && field.type === 'formula') computedValues[fieldId] = resolved;
+      });
+      return { id: record.id, values, displayValues, ...(includeComputed ? { computedValues } : {}) };
+    });
+    return {
+      rows: formatted,
+      totalMatched: rows.length,
+      scope,
+      includeComputed,
+      nextCursor: offset + page.length < rows.length ? String(offset + page.length) : null
+    };
+  };
+
+  const sanitizeAgentProvider = (provider: any) => ({
+    id: provider?.id || null,
+    name: provider?.name || null,
+    provider: provider?.provider || null,
+    enabled: isProviderEnabled(provider),
+    models: parseProviderDisplayModels(provider),
+    aliases: String(provider?.modelAliases || '').split(',').map((value: string) => value.trim()).filter(Boolean),
+    credentialReady: provider?.provider === 'comfyui' ? true : !!String(provider?.key || '').trim()
+  });
+
+  const getRegisteredComfyUIWorkflows = async () => {
+    const w = window as any;
+    if (!w.electronAPI?.listComfyUIWorkflows) return [];
+    try {
+      const workflows = await w.electronAPI.listComfyUIWorkflows();
+      return Array.isArray(workflows) ? workflows : [];
+    } catch (_) {
+      return [];
+    }
+  };
+
+  const getAgentGenerationCapabilities = async () => ({
+    text: normalizeProviderList(modelSettings?.text).map(sanitizeAgentProvider),
+    image: normalizeProviderList(modelSettings?.image).map(sanitizeAgentProvider),
+    video: normalizeProviderList(modelSettings?.video).map(sanitizeAgentProvider),
+    comfyuiWorkflows: await getRegisteredComfyUIWorkflows(),
+    safety: {
+      secretsExposed: false,
+      enabledOnlyForRun: true
+    }
+  });
+
+  const resolveAgentProviderForRow = (field: Field, record: any) => {
+    const providerGroup = field.type === 'aiText' ? modelSettings?.text : field.type === 'aiImage' ? modelSettings?.image : modelSettings?.video;
+    const enabledProviders = getEnabledProviders(providerGroup || []);
+    if (enabledProviders.length === 0) return { errorCode: 'PROVIDER_UNAVAILABLE', errorMessage: 'No enabled provider configuration.' };
+    const defaultProvider = enabledProviders[0];
+    const cfg: any = field.type === 'aiVideo' ? (field.aiVideoConfig || {}) : field.type === 'aiImage' ? (field.aiImageConfig || {}) : (field.aiTextConfig || {});
+    let resolvedModel = parseProviderModels(defaultProvider)[0] || (field.type === 'aiText' ? 'gpt-3.5-turbo' : field.type === 'aiImage' ? 'dall-e-3' : 'video-v1');
+    if (cfg.modelTemplate) {
+      const candidate = resolveTemplateString(cfg.modelTemplate, data.fields, record).trim();
+      if (candidate) resolvedModel = candidate;
+    } else if (field.type === 'aiText' && defaultProvider.provider === 'gemini' && parseProviderModels(defaultProvider).length === 0) {
+      resolvedModel = 'gemini-1.5-flash';
+    }
+    let provider = defaultProvider;
+    try {
+      provider = field.type === 'aiText' && parseProviderModels(defaultProvider).length === 0 && !cfg.modelTemplate
+        ? defaultProvider
+        : findEnabledProviderForModel(providerGroup, resolvedModel, field.type === 'aiText' ? '文本' : field.type === 'aiImage' ? '图片' : '视频', lang);
+    } catch (error: any) {
+      return { errorCode: 'MODEL_PROVIDER_UNAVAILABLE', errorMessage: error?.message || String(error), resolvedModel };
+    }
+    if (field.type === 'aiVideo' && !['lingwu', 'comfyui'].includes(provider.provider)) {
+      return { errorCode: 'PROVIDER_UNSUPPORTED', errorMessage: 'AI Video currently supports Lingwu or ComfyUI providers.', resolvedModel, provider };
+    }
+    if (field.type === 'aiImage' && provider.provider === 'gemini') {
+      return { errorCode: 'PROVIDER_UNSUPPORTED', errorMessage: 'This Gemini image provider is not supported by the current generation runtime.', resolvedModel, provider };
+    }
+    const credentialReady = provider.provider === 'comfyui' || !!String(provider.key || '').trim();
+    if (!credentialReady) return { errorCode: 'CREDENTIAL_MISSING', errorMessage: `Provider ${provider.provider || provider.name || ''} has no usable credential.`, resolvedModel, provider };
+    return { resolvedModel, provider, credentialReady };
+  };
+
+  const agentSourceRecords = allRecords?.length ? allRecords : data.records;
+
+  const agentGenerationIsEmpty = (field: Field, value: any) => {
+    if (field.type === 'aiImage' || field.type === 'aiVideo') {
+      return !value || (Array.isArray(value) && value.length === 0);
+    }
+    return value === undefined || value === null || value === '';
+  };
+
+  const previewAgentGeneration = async (params: any) => {
+    const fieldId = String(params?.fieldId || '');
+    const field = data.fields.find(f => f.id === fieldId);
+    if (!field || !['aiText', 'aiImage', 'aiVideo'].includes(field.type)) {
+      const err: any = new Error(`Generation field not found or unsupported: ${fieldId}`);
+      err.code = field ? 'INVALID_FIELD_TYPE' : 'FIELD_NOT_FOUND';
+      throw err;
+    }
+    const rowIds = Array.isArray(params?.rowIds) ? params.rowIds.map(String) : [];
+    const mode = params?.mode === 'force' ? 'force' : 'missing_only';
+    const registeredComfyUIWorkflows = await getRegisteredComfyUIWorkflows();
+    const rows = rowIds.map((rowId: string) => {
+      const record = agentSourceRecords.find(r => r.id === rowId);
+      if (!record) return { rowId, ready: false, skipped: false, reasons: ['ROW_NOT_FOUND'], blockingReasons: [{ code: 'ROW_NOT_FOUND' }] };
+      const existing = record[field.id];
+      const skipped = mode === 'missing_only' && !agentGenerationIsEmpty(field, existing);
+      const reasons: string[] = [];
+      const blockingReasons: any[] = [];
+      const addReason = (code: string, message?: string, details?: any) => {
+        if (!reasons.includes(code)) reasons.push(code);
+        blockingReasons.push({ code, ...(message ? { message } : {}), ...(details ? { details } : {}) });
+      };
+      const resolvedPrompt = resolveTemplateString(field.prompt || '', data.fields, record);
+      if (!field.prompt || !resolvedPrompt.trim()) addReason('PROMPT_EMPTY', 'Prompt resolves to an empty string.');
+
+      const providerInfo: any = resolveAgentProviderForRow(field, record);
+      if (providerInfo.errorCode) addReason(providerInfo.errorCode, providerInfo.errorMessage, { model: providerInfo.resolvedModel || null });
+
+      const cfg: any = field.type === 'aiVideo' ? (field.aiVideoConfig || {}) : field.type === 'aiImage' ? (field.aiImageConfig || {}) : (field.aiTextConfig || {});
+      const mediaTemplates = [field.prompt || '', cfg.sourceImageTemplate || '', cfg.sourceVideoTemplate || '', cfg.sourceAudioTemplate || ''];
+      const referencedMediaFields = data.fields.filter(refField => {
+        if (!['attachment', 'aiImage', 'aiVideo', 'url'].includes(refField.type)) return false;
+        const marker = `{${refField.name}}`;
+        return mediaTemplates.some(template => template.includes(marker));
+      });
+      const mediaReferenceStates = referencedMediaFields.map(refField => {
+        const items = normalizeAttachmentItems(record[refField.id]).filter(item => !isNetworkJobCellItem(item));
+        return { fieldId: refField.id, fieldName: refField.name, itemCount: items.length };
+      });
+      // Match the regular UI generation path: media references are optional.
+      // Existing instances keep their Crop/Trim metadata; empty fields are skipped and
+      // ComfyUI H3 can route the request to text-to-video when no media remains.
+      const warnings: any[] = buildOptionalMediaReferenceWarnings(mediaReferenceStates);
+
+      const mediaRefs = collectMediaReferenceItems(mediaTemplates, data.fields, record);
+      const counters: any = { image: 0, video: 0, audio: 0 };
+      const media = mediaRefs.map((item: any) => {
+        const mediaType = detectExportMediaType(item, item.url);
+        counters[mediaType] += 1;
+        const token = mediaType === 'image' ? `<Picture ${counters.image}>` : mediaType === 'video' ? `<Video ${counters.video}>` : `<Audio ${counters.audio}>`;
+        return {
+          token,
+          mediaType,
+          url: item.url,
+          ...(item.cropData ? { cropData: item.cropData } : {}),
+          ...(item.trimData ? { trimData: item.trimData } : {})
+        };
+      });
+
+      const mediaCounts = media.reduce((counts: any, item: any) => {
+        if (item.mediaType === 'image') counts.images += 1;
+        if (item.mediaType === 'video') counts.videos += 1;
+        if (item.mediaType === 'audio') counts.audio += 1;
+        return counts;
+      }, { images: 0, videos: 0, audio: 0 });
+      const workflowValidation = validateSelectedWorkflowInputs(
+        providerInfo.provider?.provider,
+        providerInfo.resolvedModel,
+        mediaCounts,
+        registeredComfyUIWorkflows
+      );
+      workflowValidation.blockingReasons.forEach(reason => addReason(reason.code, reason.message, reason.details));
+
+      let resolvedConfig: any = {
+        model: providerInfo.resolvedModel || null,
+        ...(workflowValidation.workflow ? { workflowId: workflowValidation.workflow.id } : {}),
+        provider: providerInfo.provider?.provider || null,
+        providerName: providerInfo.provider?.name || null,
+        credentialReady: providerInfo.errorCode === 'CREDENTIAL_MISSING' ? false : (providerInfo.credentialReady ?? null)
+      };
+      if (field.type === 'aiVideo') {
+        const durationRaw = resolveTemplateString(cfg.duration || '10', data.fields, record).trim();
+        const duration = parseInt(durationRaw) || 10;
+        const resolution = resolveTemplateString(cfg.resolution || '1080P', data.fields, record).trim();
+        const ratio = resolveTemplateString(cfg.ratio || '16:9', data.fields, record).replace(/：/g, ':').trim();
+        const modeValue = resolveTemplateString(cfg.mode || 'fast', data.fields, record).trim();
+        const output = resolveFilenameAndFolder(cfg.filenameTemplate || 'video', cfg.folderPath || '', data.fields, record);
+        resolvedConfig = {
+          ...resolvedConfig,
+          duration,
+          durationSource: durationRaw,
+          resolution,
+          ratio,
+          mode: modeValue,
+          sound: cfg.sound === 'true',
+          enhancePrompt: cfg.enhancePrompt === 'true',
+          output: { folderPath: output.folderPath, filename: output.filename }
+        };
+      } else if (field.type === 'aiImage') {
+        const resolution = resolveTemplateString(cfg.resolution || 'hd', data.fields, record).trim();
+        const ratio = resolveTemplateString(cfg.ratio || '1:1', data.fields, record).replace(/：/g, ':').trim();
+        const output = resolveFilenameAndFolder(cfg.filenameTemplate || 'image', cfg.folderPath || '', data.fields, record);
+        resolvedConfig = {
+          ...resolvedConfig,
+          count: Number(cfg.count) || 1,
+          resolution,
+          ratio,
+          size: cfg.size || null,
+          retouch: cfg.isRetouchMode === true,
+          output: { folderPath: output.folderPath, filename: output.filename }
+        };
+      } else {
+        resolvedConfig = {
+          ...resolvedConfig,
+          skill: cfg.skillTemplate ? resolveTemplateString(cfg.skillTemplate, data.fields, record).trim() : null
+        };
+      }
+
+      return {
+        rowId,
+        ready: isGenerationPreviewReady(skipped, blockingReasons),
+        skipped,
+        reasons,
+        blockingReasons,
+        warnings,
+        existing: !agentGenerationIsEmpty(field, existing),
+        mediaCount: media.length,
+        media,
+        resolvedPrompt,
+        resolvedConfig,
+        mayCostMoney: providerInfo.provider?.provider !== 'comfyui'
+      };
+    });
+    return {
+      tableId,
+      field: { id: field.id, name: field.name, type: field.type },
+      mode,
+      rows,
+      summary: {
+        requested: rows.length,
+        ready: rows.filter(r => r.ready).length,
+        skipped: rows.filter(r => r.skipped).length,
+        blocked: rows.filter(r => !r.ready && !r.skipped).length,
+        mayCostMoney: rows.some((row: any) => row.ready && row.mayCostMoney)
+      }
+    };
+  };
+
+  const runAgentGeneration = async (params: any) => {
+    const preview = await previewAgentGeneration(params);
+    const idempotencyKey = String(params?.idempotencyKey || '').trim();
+    const storageKey = `hongs-agent-generation:${tableId}:${preview.field.id}:${idempotencyKey}`;
+    const w = window as any;
+
+    // First prefer durable media jobs. This survives Grid remounts inside the same app session.
+    if (w.electronAPI?.listNetworkJobs) {
+      try {
+        const existingJobs = await w.electronAPI.listNetworkJobs();
+        const matched = (Array.isArray(existingJobs) ? existingJobs : []).filter((job: any) =>
+          job?.tableId === tableId && job?.fieldId === preview.field.id && job?.agentIdempotencyKey === idempotencyKey
+        );
+        if (matched.length > 0) {
+          return {
+            ...preview,
+            idempotencyKey,
+            batchId: matched[0]?.agentBatchId || null,
+            idempotentReplay: true,
+            jobs: matched.map((job: any) => ({ rowId: job.recordId, jobId: job.localJobId, phase: job.phase })),
+            completedRows: [],
+            failedRows: []
+          };
+        }
+      } catch (_) {}
+    }
+
+    try {
+      const cached = window.sessionStorage.getItem(storageKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed?.status === 'completed' && parsed?.data) return { ...parsed.data, idempotentReplay: true };
+        if (parsed?.status === 'running' && Date.now() - Number(parsed.startedAt || 0) < 30 * 60 * 1000) {
+          const err: any = new Error('The same idempotencyKey is already running in this session.');
+          err.code = 'GENERATION_ALREADY_EXISTS';
+          throw err;
+        }
+      }
+    } catch (error: any) {
+      if (error?.code) throw error;
+    }
+
+    const batchId = `batch_agent_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    try { window.sessionStorage.setItem(storageKey, JSON.stringify({ status: 'running', startedAt: Date.now(), batchId })); } catch (_) {}
+
+    const field = data.fields.find(f => f.id === preview.field.id)!;
+    const readyRows = preview.rows.filter((row: any) => row.ready);
+    const jobs: any[] = [];
+    const completedRows: any[] = [];
+    const failedRows: any[] = [];
+
+    // Phase 3 exploration deliberately serializes paid submissions. Existing UI batch generation
+    // keeps its own concurrency behavior; Agent execution favors predictable ACK/idempotency first.
+    for (const item of readyRows) {
+      const record = agentSourceRecords.find(r => r.id === item.rowId);
+      if (!record) continue;
+      try {
+        const value = await executeAIGenerateCell(record, field, { batchId, idempotencyKey });
+        const networkJobs = Array.isArray(value)
+          ? value.filter((entry: any) => entry && typeof entry === 'object' && entry.type === 'networkJob' && entry.jobId)
+          : [];
+        if (networkJobs.length > 0) {
+          networkJobs.forEach((entry: any) => jobs.push({ rowId: record.id, jobId: entry.jobId, phase: 'queued' }));
+        } else {
+          completedRows.push({ rowId: record.id, value });
+        }
+      } catch (error: any) {
+        failedRows.push({ rowId: record.id, code: error?.code || 'GENERATION_FAILED', message: error?.message || String(error) });
+      }
+    }
+
+    const result = {
+      ...preview,
+      idempotencyKey,
+      batchId,
+      idempotentReplay: false,
+      jobs,
+      completedRows,
+      failedRows,
+      effects: { jobsCreated: jobs.length, rowsAffected: readyRows.length }
+    };
+    try { window.sessionStorage.setItem(storageKey, JSON.stringify({ status: 'completed', startedAt: Date.now(), data: result })); } catch (_) {}
+    return result;
+  };
+
+  useEffect(() => {
+    if (!onRegisterAgentGenerationApi) return;
+    onRegisterAgentGenerationApi({
+      tableId,
+      getContext: getAgentInteractiveContext,
+      queryRows: queryAgentRows,
+      getGenerationCapabilities: getAgentGenerationCapabilities,
+      preview: previewAgentGeneration,
+      run: runAgentGeneration
+    });
+    return () => onRegisterAgentGenerationApi(null);
+  }, [onRegisterAgentGenerationApi, data, allRecords, modelSettings, tableId, viewMode, activeCell, selectionStart, selectionEnd, extraSelectedCells, visibleFields, visibleRowsInfo]);
 
   const handleGenerateColumn = async (field: Field, targetRecordIds?: string[]) => {
     if (!field.prompt) {
@@ -5984,10 +6441,11 @@ function HeaderCell({
       setDraftPrompt(field.prompt || '');
       setDraftRefs(field.refFields || []);
       setDraftAiImageConfig(field.aiImageConfig || { count: 1, size: '1024x1024' });
+      setDraftAiVideoConfig(field.aiVideoConfig || { duration: '10', resolution: '1080P', ratio: '16:9', sound: 'false', mode: 'fast' });
       setDraftAiTextConfig(field.aiTextConfig || {});
       setIsTypeExpanded(true);
     }
-  }, [showMenu, field.prompt, field.refFields, field.aiImageConfig, field.aiTextConfig]);
+  }, [showMenu, field.prompt, field.refFields, field.aiImageConfig, field.aiVideoConfig, field.aiTextConfig]);
 
   useEffect(() => {
     if (!showMenu || field.type !== 'aiText') return;

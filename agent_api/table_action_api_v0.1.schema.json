@@ -1,0 +1,4226 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hongs-ai-table.local/schema/table-action-api/0.1",
+  "title": "AI Table Studio 2.6.5 Table Action API v0.1 phase4.7",
+  "type": "object",
+  "required": [
+    "version",
+    "action",
+    "params"
+  ],
+  "properties": {
+    "version": {
+      "const": "0.1"
+    },
+    "requestId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "agent",
+            "system"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "dryRun": {
+      "type": "boolean",
+      "default": false
+    },
+    "confirmed": {
+      "type": "boolean",
+      "default": false
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "system.get_capabilities",
+        "system.describe_action",
+        "context.get_current",
+        "table.list",
+        "table.get_schema",
+        "table.create",
+        "table.activate",
+        "table.update",
+        "table.duplicate",
+        "table.delete",
+        "table.reorder",
+        "view.get",
+        "view.update",
+        "field.create",
+        "field.update",
+        "field.reorder",
+        "field.duplicate",
+        "field.options.get",
+        "field.options.upsert",
+        "field.options.update",
+        "field.options.remove",
+        "field.options.reorder",
+        "field.configure_ai",
+        "field.delete",
+        "field.convert.preview",
+        "field.convert.run",
+        "row.query",
+        "row.get",
+        "row.create",
+        "row.insert",
+        "row.duplicate",
+        "row.delete",
+        "row.reorder",
+        "cell.set",
+        "cell.batch_set",
+        "cell.clear",
+        "cell.copy_range",
+        "cell.fill",
+        "cell.get_meta",
+        "cell.link",
+        "cell.unlink",
+        "media.get",
+        "media.attach",
+        "media.copy_instance",
+        "media.list_by_row",
+        "media.get_effective_context",
+        "media.remove",
+        "media.move",
+        "media.reorder",
+        "media.set_crop",
+        "media.clear_crop",
+        "media.set_trim",
+        "media.clear_trim",
+        "media.set_rating",
+        "generation.get_capabilities",
+        "generation.preview",
+        "generation.run",
+        "job.list",
+        "job.get",
+        "job.retry",
+        "job.cancel",
+        "job.get_result",
+        "job.bind_result",
+        "job.delete_history",
+        "job.cleanup_stale.preview",
+        "job.cleanup_stale",
+        "workspace.get_dirty_state",
+        "workspace.save",
+        "transaction.preview",
+        "transaction.execute",
+        "undo.get_status",
+        "undo.apply",
+        "redo.apply",
+        "batch.list",
+        "batch.get",
+        "batch.cancel",
+        "batch.retry_failed",
+        "batch.list_results",
+        "export.preview",
+        "export.attachments",
+        "export.csv",
+        "export.json"
+      ]
+    },
+    "params": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "system.get_capabilities"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {
+              "detail": {
+                "type": "string",
+                "enum": [
+                  "summary",
+                  "full"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "system.describe_action"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "context.get_current"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "table.list"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "table.get_schema"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "table.create"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "icon": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "activate": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "table.activate"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "table.update"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "patch"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "patch": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "icon": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "minProperties": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "table.duplicate"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "newTableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "copyRecords": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "table.delete"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "table.reorder"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "toIndex"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "toIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "view.get"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "viewMode": {
+                "type": "string",
+                "enum": [
+                  "grid",
+                  "gallery"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "view.update"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "patch"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "viewMode": {
+                "type": "string",
+                "enum": [
+                  "grid",
+                  "gallery"
+                ]
+              },
+              "patch": {
+                "type": "object",
+                "properties": {
+                  "filter": {
+                    "type": "object",
+                    "required": [
+                      "logic",
+                      "conditions"
+                    ],
+                    "properties": {
+                      "logic": {
+                        "type": "string",
+                        "enum": [
+                          "and",
+                          "or"
+                        ]
+                      },
+                      "conditions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "fieldId",
+                            "operator"
+                          ],
+                          "properties": {
+                            "fieldId": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "operator": {
+                              "type": "string",
+                              "enum": [
+                                "equals",
+                                "not_equals",
+                                "contains",
+                                "not_contains",
+                                "empty",
+                                "not_empty",
+                                "in",
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte"
+                              ]
+                            },
+                            "value": {}
+                          },
+                          "additionalProperties": false
+                        },
+                        "minItems": 0,
+                        "maxItems": 50
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "filterEnabled": {
+                    "type": "boolean"
+                  },
+                  "sort": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "fieldId",
+                          "direction"
+                        ],
+                        "properties": {
+                          "fieldId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "direction": {
+                            "type": "string",
+                            "enum": [
+                              "asc",
+                              "desc"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "group": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "fieldId",
+                        "direction"
+                      ],
+                      "properties": {
+                        "fieldId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "direction": {
+                          "type": "string",
+                          "enum": [
+                            "asc",
+                            "desc"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "minItems": 0,
+                    "maxItems": 20
+                  },
+                  "groupEnabled": {
+                    "type": "boolean"
+                  },
+                  "foldedGroups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "rowHeight": {
+                    "type": "string",
+                    "enum": [
+                      "short",
+                      "medium",
+                      "tall",
+                      "extra"
+                    ]
+                  },
+                  "gallerySettings": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "minProperties": 1
+              },
+              "activate": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.create"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "name",
+              "type"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "config": {
+                "type": "object"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.update"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "patch"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "patch": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "width": {
+                    "type": "number",
+                    "minimum": 60,
+                    "maximum": 2000
+                  },
+                  "hidden": {
+                    "type": "boolean"
+                  },
+                  "color": {
+                    "type": "string"
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "refFields": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  },
+                  "type": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false,
+                "minProperties": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.reorder"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "beforeFieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "afterFieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "toIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "required": [
+                  "beforeFieldId"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "afterFieldId"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "toIndex"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "afterFieldId"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "beforeFieldId"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "toIndex"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "toIndex"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "beforeFieldId"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "afterFieldId"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.duplicate"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "copyValues": {
+                "type": "boolean"
+              },
+              "copyCellLinks": {
+                "type": "boolean"
+              },
+              "beforeFieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "afterFieldId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.options.get"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.options.upsert"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "options"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "color": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 200
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.options.update"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "optionId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "optionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "color": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "minProperties": 4
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.options.remove"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "optionId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "optionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "clearValues": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.options.reorder"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "optionId",
+              "toIndex"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "optionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "toIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.configure_ai"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "config"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "config": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "refFields": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "sourceImage": {
+                    "type": "string"
+                  },
+                  "sourceVideo": {
+                    "type": "string"
+                  },
+                  "sourceAudio": {
+                    "type": "string"
+                  },
+                  "skill": {
+                    "type": "string"
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20
+                  },
+                  "size": {
+                    "type": "string"
+                  },
+                  "folderPath": {
+                    "type": "string"
+                  },
+                  "resolution": {
+                    "type": "string"
+                  },
+                  "ratio": {
+                    "type": "string"
+                  },
+                  "filenameTemplate": {
+                    "type": "string"
+                  },
+                  "isRetouchMode": {
+                    "type": "boolean"
+                  },
+                  "saveToSourceFolder": {
+                    "type": "boolean"
+                  },
+                  "scaleToSource": {
+                    "type": "boolean"
+                  },
+                  "duration": {
+                    "type": "string"
+                  },
+                  "sound": {
+                    "type": [
+                      "boolean",
+                      "string"
+                    ]
+                  },
+                  "mode": {
+                    "type": "string"
+                  },
+                  "enhancePrompt": {
+                    "type": [
+                      "boolean",
+                      "string"
+                    ]
+                  },
+                  "offPeak": {
+                    "type": [
+                      "boolean",
+                      "string"
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "minProperties": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.delete"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.convert.preview"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "targetType"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "targetType": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "field.convert.run"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "targetType"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "targetType": {
+                "type": "string",
+                "minLength": 1
+              },
+              "invalidValuePolicy": {
+                "type": "string",
+                "enum": [
+                  "reject",
+                  "clear",
+                  "keep"
+                ]
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "color": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 0,
+                "maxItems": 200
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "row.query"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "filter": {
+                "type": "object",
+                "required": [
+                  "logic",
+                  "conditions"
+                ],
+                "properties": {
+                  "logic": {
+                    "type": "string",
+                    "enum": [
+                      "and",
+                      "or"
+                    ]
+                  },
+                  "conditions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "fieldId",
+                        "operator"
+                      ],
+                      "properties": {
+                        "fieldId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "equals",
+                            "not_equals",
+                            "contains",
+                            "not_contains",
+                            "empty",
+                            "not_empty",
+                            "in",
+                            "gt",
+                            "gte",
+                            "lt",
+                            "lte"
+                          ]
+                        },
+                        "value": {}
+                      },
+                      "additionalProperties": false
+                    },
+                    "minItems": 0,
+                    "maxItems": 50
+                  }
+                },
+                "additionalProperties": false
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              },
+              "cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true,
+                "maxItems": 500
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "all",
+                  "current_view"
+                ]
+              },
+              "includeComputed": {
+                "type": "boolean"
+              },
+              "sort": {
+                "type": "object",
+                "required": [
+                  "fieldId",
+                  "direction"
+                ],
+                "properties": {
+                  "fieldId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "direction": {
+                    "type": "string",
+                    "enum": [
+                      "asc",
+                      "desc"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "row.get"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "row.create"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rows"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "values"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "values": {
+                      "type": "object"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 500
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "row.insert"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rows"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "values"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "values": {
+                      "type": "object"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "beforeRowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "afterRowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "toIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "row.duplicate"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowIds"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 500,
+                "uniqueItems": true
+              },
+              "beforeRowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "afterRowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "toIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "row.delete"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowIds"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 500,
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "row.reorder"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowIds",
+              "toIndex"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 500,
+                "uniqueItems": true
+              },
+              "toIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cell.set"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId",
+              "value"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {},
+              "writeMode": {
+                "type": "string",
+                "enum": [
+                  "replace",
+                  "append",
+                  "if_empty"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cell.batch_set"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "updates"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "updates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "rowId",
+                    "fieldId",
+                    "value"
+                  ],
+                  "properties": {
+                    "rowId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "fieldId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "value": {}
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 2000
+              },
+              "writeMode": {
+                "type": "string",
+                "enum": [
+                  "replace",
+                  "append",
+                  "if_empty"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cell.clear"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "cells"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cells": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "rowId",
+                    "fieldId"
+                  ],
+                  "properties": {
+                    "rowId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "fieldId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 2000
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cell.copy_range"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "source",
+              "target"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "object",
+                "required": [
+                  "rowIds",
+                  "fieldIds"
+                ],
+                "properties": {
+                  "rowIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "maxItems": 2000,
+                    "uniqueItems": true
+                  },
+                  "fieldIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "maxItems": 2000,
+                    "uniqueItems": true
+                  }
+                },
+                "additionalProperties": false
+              },
+              "target": {
+                "type": "object",
+                "required": [
+                  "rowIds",
+                  "fieldIds"
+                ],
+                "properties": {
+                  "rowIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "maxItems": 2000,
+                    "uniqueItems": true
+                  },
+                  "fieldIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "maxItems": 2000,
+                    "uniqueItems": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cell.fill"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowIds",
+              "fieldId",
+              "value"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 2000,
+                "uniqueItems": true
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {}
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cell.get_meta"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cell.link"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "cells"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cells": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "rowId",
+                    "fieldId"
+                  ],
+                  "properties": {
+                    "rowId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "fieldId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 2,
+                "maxItems": 2000
+              },
+              "groupId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cell.unlink"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "cells"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cells": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "rowId",
+                    "fieldId"
+                  ],
+                  "properties": {
+                    "rowId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "fieldId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 2000
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.get"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.attach"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId",
+              "items"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "image",
+                        "video",
+                        "audio"
+                      ]
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "url": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "anyOf": [
+                    {
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "url"
+                      ]
+                    }
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "append",
+                  "replace"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.copy_instance"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "source",
+              "target"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "object",
+                "required": [
+                  "rowId",
+                  "fieldId"
+                ],
+                "properties": {
+                  "rowId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fieldId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              },
+              "target": {
+                "type": "object",
+                "required": [
+                  "rowId",
+                  "fieldId"
+                ],
+                "properties": {
+                  "rowId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fieldId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "append",
+                  "replace"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.list_by_row"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "includeEmpty": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.get_effective_context"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "temporaryReferenceFieldId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.remove"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.move"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "source",
+              "target"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "object",
+                "required": [
+                  "rowId",
+                  "fieldId"
+                ],
+                "properties": {
+                  "rowId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fieldId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              },
+              "target": {
+                "type": "object",
+                "required": [
+                  "rowId",
+                  "fieldId"
+                ],
+                "properties": {
+                  "rowId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fieldId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.reorder"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId",
+              "toIndex"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "toIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.set_crop"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId",
+              "crop"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "crop": {
+                "type": "object",
+                "required": [
+                  "x",
+                  "y",
+                  "width",
+                  "height",
+                  "unit"
+                ],
+                "properties": {
+                  "x": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "y": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "width": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  },
+                  "height": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  },
+                  "unit": {
+                    "const": "ratio"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.clear_crop"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.set_trim"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId",
+              "startMs",
+              "endMs"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "startMs": {
+                "type": "number",
+                "minimum": 0
+              },
+              "endMs": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "durationMs": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.clear_trim"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.set_rating"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "rowId",
+              "fieldId",
+              "rating"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rating": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "generation.get_capabilities"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "generation.preview"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "rowIds"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 500,
+                "uniqueItems": true
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "missing_only",
+                  "force"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "generation.run"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "fieldId",
+              "rowIds",
+              "idempotencyKey"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 500,
+                "uniqueItems": true
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "missing_only",
+                  "force"
+                ]
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "job.list"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "batchId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "detail": {
+                "type": "string",
+                "enum": [
+                  "summary",
+                  "full"
+                ]
+              },
+              "fields": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "jobId",
+                    "localJobId",
+                    "batchId",
+                    "idempotencyKey",
+                    "tableId",
+                    "rowId",
+                    "fieldId",
+                    "mediaType",
+                    "provider",
+                    "model",
+                    "phase",
+                    "status",
+                    "taskId",
+                    "resultUrl",
+                    "localPath",
+                    "lastError",
+                    "createdAt",
+                    "updatedAt",
+                    "generationIndex",
+                    "remoteSubmitted",
+                    "retryable"
+                  ]
+                }
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "job.get"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "jobId"
+            ],
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "job.retry"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "jobId"
+            ],
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "job.cancel"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "jobId"
+            ],
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "job.get_result"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "jobId"
+            ],
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "job.bind_result"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "jobId",
+              "target"
+            ],
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target": {
+                "type": "object",
+                "required": [
+                  "tableId",
+                  "rowId",
+                  "fieldId"
+                ],
+                "properties": {
+                  "tableId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "rowId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fieldId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "append",
+                      "replace"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "job.delete_history"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "jobId"
+            ],
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "job.cleanup_stale.preview"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "jobIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true,
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "staleAfterMinutes": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 10080
+              },
+              "includeProtected": {
+                "type": "boolean"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "job.cleanup_stale"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "jobIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true,
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "staleAfterMinutes": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 10080
+              },
+              "includeProtected": {
+                "type": "boolean"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "workspace.get_dirty_state"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "workspace.save"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "transaction.preview"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "actions"
+            ],
+            "properties": {
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "action",
+                    "params"
+                  ],
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "params": {
+                      "type": "object"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 500
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "transaction.execute"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "actions"
+            ],
+            "properties": {
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "action",
+                    "params"
+                  ],
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "params": {
+                      "type": "object"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 500
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "undo.get_status"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "undo.apply"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "undoToken"
+            ],
+            "properties": {
+              "undoToken": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "redo.apply"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "undoToken"
+            ],
+            "properties": {
+              "undoToken": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "batch.list"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "batch.get"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "batchId"
+            ],
+            "properties": {
+              "batchId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "batch.cancel"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "batchId"
+            ],
+            "properties": {
+              "batchId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "batch.retry_failed"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "batchId"
+            ],
+            "properties": {
+              "batchId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "batch.list_results"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "batchId"
+            ],
+            "properties": {
+              "batchId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "export.preview"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "attachments",
+                  "csv",
+                  "json"
+                ]
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "fieldIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "export.attachments"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "folderPath"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "folderPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "fieldIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "collisionPolicy": {
+                "type": "string",
+                "enum": [
+                  "rename",
+                  "skip",
+                  "overwrite",
+                  "error"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "export.csv"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "folderPath"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "folderPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "filename": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "fieldIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "export.json"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "folderPath"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "folderPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "filename": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "fieldIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  ],
+  "x-action-definition-version": "1.1",
+  "x-app-version": "2.6.5",
+  "x-phase": "phase4.7"
+}

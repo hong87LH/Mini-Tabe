@@ -11,11 +11,14 @@ import { LingwuClient } from './lingwu_client.js';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { NetworkStageError } from "./network_utils.js";
-import { startPolling, resumePendingJobs } from './network_polling.js';
+import { startPolling, resumePendingJobs, notifyRenderer } from './network_polling.js';
 import { NetworkJobStore } from './network_job_store.js';
 import { createSkillManager } from './skill_manager.js';
+import { createTableActionServer } from './agent_api/table_action_server.js';
+import { inspectJobForStaleCleanup } from './network_job_cleanup.js';
 
 const skillManager = createSkillManager();
+let tableActionServer = null;
 
 let networkJobStore = null;
 function getNetworkJobStore() {
@@ -221,6 +224,15 @@ app.whenReady().then(async () => {
 
   createWindow();
 
+  // Agent API exploration branch: optional localhost Action API.
+  // Disabled by default so the stable UI behavior is unchanged unless explicitly enabled.
+  try {
+    tableActionServer = createTableActionServer({ app, BrowserWindow, ipcMain });
+    await tableActionServer.startIfEnabled();
+  } catch (e) {
+    console.error('[Table Action API] failed to start:', e);
+  }
+
   // 自定义协议用于渲染本地图片
   protocol.registerFileProtocol('local-img', (request, callback) => {
     const url = request.url.replace('local-img://', '');
@@ -332,6 +344,11 @@ app.whenReady().then(async () => {
        console.error("generate-lingwu-video error:", err);
        throw err;
     }
+  });
+
+  ipcMain.handle('list-comfyui-workflows', async () => {
+    const { listComfyUIWorkflows } = await import('./comfyui/workflow_registry.js');
+    return listComfyUIWorkflows();
   });
 
   ipcMain.handle('check-comfyui', async (event, options = {}) => {
@@ -555,6 +572,12 @@ function stripSensitiveInfo(job) {
   return safeJob;
 }
 
+app.on('before-quit', () => {
+  if (tableActionServer) {
+    tableActionServer.stop().catch((e) => console.error('[Table Action API] stop failed:', e));
+  }
+});
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
@@ -581,9 +604,49 @@ ipcMain.handle('list-network-jobs', async () => {
   return jobs.map(j => stripSensitiveInfo(j));
 });
 
+ipcMain.handle('inspect-network-job-stale', async (event, localJobId, options = {}) => {
+  const jobStore = getNetworkJobStore();
+  const job = await jobStore.getJob(localJobId);
+  return inspectJobForStaleCleanup(job, {
+    staleAfterMs: Number(options?.staleAfterMs),
+    remoteProbe: async rawJob => {
+      const { createMediaProviderClient } = await import('./provider_registry.js');
+      const client = createMediaProviderClient(rawJob.provider, rawJob.credentials || {});
+      const result = await client.getTaskStatus(rawJob.taskId);
+      return result?.data || result || {};
+    }
+  });
+});
+
 ipcMain.handle('delete-network-job', async (event, localJobId) => {
   const jobStore = getNetworkJobStore();
   await jobStore.remove(localJobId);
+});
+
+ipcMain.handle('cancel-network-job', async (event, localJobId) => {
+  const jobStore = getNetworkJobStore();
+  const job = await jobStore.getJob(localJobId);
+  if (!job) return { ok: false, code: 'JOB_NOT_FOUND', message: `Job not found: ${localJobId}` };
+  if (job.phase === 'completed' || job.phase === 'cancelled') {
+    return { ok: true, jobId: localJobId, localCancelled: job.phase === 'cancelled', remoteCancelled: false, phase: job.phase };
+  }
+  await jobStore.patch(localJobId, {
+    phase: 'cancelled',
+    localCancelled: true,
+    cancelledAt: new Date().toISOString(),
+    lastError: null
+  });
+  await notifyRenderer(jobStore, localJobId);
+  return {
+    ok: true,
+    jobId: localJobId,
+    localCancelled: true,
+    remoteCancelled: false,
+    phase: 'cancelled',
+    message: job.taskId
+      ? 'Local polling/download continuation was cancelled. The remote provider task may still continue because no provider cancel API was invoked.'
+      : 'Local job was cancelled before a durable remote task ID was available.'
+  };
 });
 
 ipcMain.handle('continue-network-job-polling', async (event, localJobId) => {

@@ -483,11 +483,23 @@ export class ResumableDownloader {
                     await this._notify(localJobId);
                 }
 
+                const cancelledAfterTransfer = await this.jobStore.getJob(localJobId);
+                if (cancelledAfterTransfer?.phase === 'cancelled') {
+                    releaseReservedPath(finalPath);
+                    return;
+                }
+
                 const imageResize = getValidImageResize(job);
                 if (imageResize) {
                     await resizePartToFinal(partPath, finalPath, imageResize);
                 } else {
                     await finalizePartWithoutResize(job, partPath, finalPath);
+                }
+
+                const cancelledBeforeComplete = await this.jobStore.getJob(localJobId);
+                if (cancelledBeforeComplete?.phase === 'cancelled') {
+                    releaseReservedPath(finalPath);
+                    return;
                 }
 
                 await this.jobStore.patch(localJobId, {

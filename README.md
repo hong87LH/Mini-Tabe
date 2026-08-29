@@ -73,6 +73,8 @@ v2.5.10 大屏连续编辑 / 临时智能节点参考 / @ 光标跟随 / 媒体�
 v2.6.1  音视频非破坏式 Trim / A-B 时间点 / 5s·10s·15s·20s 快捷片段 / FFmpeg Media Preprocessor
 v2.6.2  临时参考会话固定 / 同列跨行沿用参考节点 / sessionStorage 缓存
 v2.6.3  引用渲染换行修复 / OSS SHA256 精确复用 / 标签新建误匹配修复
+v2.6.4  Table Action API v0.1 / Agent 接管 / Revision·事务·幂等 / Generation Preview / Job·SSE
+v2.6.5  Action API phase4.7 / Action Definition 1.1 / 82 Actions / Job 精简查询与失联清理 / CLI 增强
 ```
 
 ### v2.4.x → v2.5.x

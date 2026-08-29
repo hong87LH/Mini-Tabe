@@ -24,6 +24,19 @@ export async function notifyRenderer(jobStore, localJobId) {
                     win.webContents.send('network-job-updated', safeJob);
                 }
             });
+            if (typeof globalThis.__publishTableActionEvent === 'function') {
+                globalThis.__publishTableActionEvent('job.updated', { job: safeJob });
+                if (['completed', 'failed', 'cancelled', 'submission_unknown'].includes(safeJob.phase)) {
+                    globalThis.__publishTableActionEvent('generation.completed', {
+                        jobId: safeJob.localJobId,
+                        batchId: safeJob.agentBatchId || null,
+                        phase: safeJob.phase,
+                        tableId: safeJob.tableId || null,
+                        rowId: safeJob.recordId || null,
+                        fieldId: safeJob.fieldId || null
+                    });
+                }
+            }
         }
     } catch (e) {
         // electron not available or error

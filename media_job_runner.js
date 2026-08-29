@@ -94,7 +94,7 @@ export class MediaJobRunner {
     }
 
     async createJob({ type, options }) {
-        const { prompt, model, params, count, apiKey, endpoint, ossConfig, comfyuiBatPath, tableId, recordId, fieldId, generationIndex, viewMode, downloadConfig } = options;
+        const { prompt, model, params, count, apiKey, endpoint, ossConfig, comfyuiBatPath, tableId, recordId, fieldId, generationIndex, viewMode, downloadConfig, agentBatchId, agentIdempotencyKey } = options;
         const provider = normalizeProviderName(options.provider);
         const localJobId = crypto.randomUUID();
 
@@ -112,6 +112,8 @@ export class MediaJobRunner {
             fieldId,
             generationIndex,
             viewMode,
+            agentBatchId: agentBatchId || null,
+            agentIdempotencyKey: agentIdempotencyKey || null,
             createdAt: new Date().toISOString()
         });
 

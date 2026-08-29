@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkOssStorage: (ossConfig) => ipcRenderer.invoke('check-oss-storage', ossConfig),
   executeOssCleanup: (ossConfig) => ipcRenderer.invoke('execute-oss-cleanup', ossConfig),
   generateLingwuVideo: (options) => ipcRenderer.invoke('generate-lingwu-video', options),
+  listComfyUIWorkflows: () => ipcRenderer.invoke('list-comfyui-workflows'),
   checkComfyUI: (options) => ipcRenderer.invoke('check-comfyui', options),
   listSkills: () => ipcRenderer.invoke('list-skills'),
   setSkillEnabled: (relativePath, enabled) => ipcRenderer.invoke('set-skill-enabled', relativePath, enabled),
@@ -31,16 +32,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   compileSkillContext: (options) => ipcRenderer.invoke('compile-skill-context', options),
   queryNetworkJob: (localJobId) => ipcRenderer.invoke('query-network-job', localJobId),
   listNetworkJobs: () => ipcRenderer.invoke('list-network-jobs'),
+  inspectNetworkJobStale: (localJobId, options) => ipcRenderer.invoke('inspect-network-job-stale', localJobId, options),
   retryDownloadJob: (localJobId) => ipcRenderer.invoke('retry-download-job', localJobId),
   openLocalFile: (localPath) => ipcRenderer.invoke('open-local-file', localPath),
   openInPhotoshop: (filePath, psPath) => ipcRenderer.invoke('open-in-photoshop', filePath, psPath),
   deleteNetworkJob: (localJobId) => ipcRenderer.invoke('delete-network-job', localJobId),
   continueNetworkJobPolling: (localJobId) => ipcRenderer.invoke('continue-network-job-polling', localJobId),
+  cancelNetworkJob: (localJobId) => ipcRenderer.invoke('cancel-network-job', localJobId),
   onNetworkJobUpdated: (callback) => {
     const handler = (_event, job) => callback(job);
     ipcRenderer.on('network-job-updated', handler);
     return () => {
       ipcRenderer.removeListener('network-job-updated', handler);
     };
+  },
+
+  // Table Action API v0.1 exploration bridge. Only fixed channels are exposed;
+  // the renderer never receives a generic ipcRenderer handle.
+  onTableActionRequest: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('table-action-api:request', handler);
+    return () => ipcRenderer.removeListener('table-action-api:request', handler);
+  },
+  sendTableActionResponse: (bridgeId, response) => {
+    ipcRenderer.send('table-action-api:response', { bridgeId, response });
   }
 });
