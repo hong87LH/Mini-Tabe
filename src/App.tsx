@@ -15,6 +15,7 @@ import { resolveFieldValueForAI } from './components/Grid';
 import { parseSelectText, selectValueToText } from './lib/selectFieldConversion.js';
 import { executeTableActionRequest, getActionMetadata } from '../agent_api/table_action_api.js';
 import { removeNetworkJobPlaceholders } from '../network_job_cleanup.js';
+import { getFilterInsertDefaults, getGroupInsertDefaults, insertRecordsAtAnchor, matchesViewFilters } from './lib/filteredRowInsertion';
 
 const computeFormulaValue = (field: any, record: any, fields: any[]) => {
   if (!field.prompt) return '';
@@ -871,6 +872,14 @@ export default function App() {
   const foldedGroups = currentViewState.foldedGroups || [];
   const rowHeight = currentViewState.rowHeight || 'medium';
   const gallerySettings = currentViewState.gallerySettings || null;
+  const insertViewKey = JSON.stringify([activeTableId, activeViewMode, isFilterTempDisabled, filterConfig.map(({ fieldId, operator, value }) => ({ fieldId, operator, value }))]);
+  const [insertSession, setInsertSession] = useState<{ key: string; ids: string[] }>({ key: '', ids: [] });
+  const [insertNotice, setInsertNotice] = useState('');
+  const insertedIds = new Set(insertSession.key === insertViewKey ? insertSession.ids : []);
+  useEffect(() => {
+    setInsertSession({ key: insertViewKey, ids: [] });
+    setInsertNotice('');
+  }, [insertViewKey]);
 
   const updateViewState = (updates: any) => {
      setTables((prev: any[]) => prev.map(t => {
@@ -1990,12 +1999,23 @@ export default function App() {
     }));
   };
 
-  const handleInsertRecords = (index: number, count: number) => {
+  const handleInsertRecords = (anchorId: string, side: 'above' | 'below', count: number) => {
+    const anchor = data.records.find(record => record.id === anchorId);
+    if (!anchor) return;
+    const rules = isFilterTempDisabled ? [] : filterConfig;
+    const defaults = {
+      ...getFilterInsertDefaults(data.fields, rules, resolveFieldValueForAI),
+      ...getGroupInsertDefaults(data.fields, isGroupTempDisabled ? [] : groupConfig, anchor)
+    };
+    const newRecords = Array.from({ length: Math.max(1, Math.min(1000, Math.floor(count) || 1)) }, () => ({ ...structuredClone(defaults), id: `rec_${crypto.randomUUID()}` }));
+    if (rules.length > 0) {
+      setInsertSession(previous => ({ key: insertViewKey, ids: [...(previous.key === insertViewKey ? previous.ids : []), ...newRecords.map(record => record.id)] }));
+    }
+    const filledNames = data.fields.filter(field => field.id in defaults).map(field => field.name).join('、');
+    setInsertNotice(filledNames ? (lang === 'en' ? `New rows inherit group/filter values: ${filledNames}` : `新行已继承分组／筛选字段：${filledNames}`) : '');
     setData(prev => {
-      const newRecords = Array.from({ length: count }, (_, i) => ({ id: `rec_${Date.now()}_${i}` }));
-      const records = [...prev.records];
-      records.splice(index, 0, ...newRecords);
-      return { ...prev, records };
+      const records = insertRecordsAtAnchor(prev.records, anchorId, side, newRecords);
+      return records === prev.records ? prev : { ...prev, records };
     });
   };
 
@@ -2540,59 +2560,12 @@ export default function App() {
   };
 
   let displayRecords = [...data.records];
+  const pendingInsertedRecords = !isFilterTempDisabled && filterConfig.length > 0
+    ? data.records.filter(record => insertedIds.has(record.id) && !matchesViewFilters(record, data.fields, filterConfig, resolveFieldValueForAI)) : [];
   
   if (filterConfig.length > 0 && !isFilterTempDisabled) {
     displayRecords = displayRecords.filter(record => {
-      return filterConfig.every((rule: any) => {
-        const fieldId = rule.fieldId;
-        const op = rule.operator;
-        const val = rule.value;
-        const field = data.fields.find((f: any) => f.id === fieldId);
-        
-        let recordVal = record[fieldId];
-        
-        if (op === 'is_empty') {
-            return recordVal === null || recordVal === undefined || recordVal === '' || (Array.isArray(recordVal) && recordVal.length === 0);
-        }
-        if (op === 'is_not_empty') {
-            return !(recordVal === null || recordVal === undefined || recordVal === '' || (Array.isArray(recordVal) && recordVal.length === 0));
-        }
-
-        if (val === undefined || val === null || val === '') return true; // empty value means skip constraint
-        
-        let aiVal = field ? resolveFieldValueForAI(recordVal, field, record, data.fields) : recordVal;
-
-        if (op === 'has_any') {
-            let extracted: string[] = [];
-            if (Array.isArray(aiVal)) {
-                extracted = aiVal.map(v => String(v?.name || v?.url || v || '')).filter(Boolean);
-            } else if (typeof aiVal === 'object') {
-                extracted = [JSON.stringify(aiVal)];
-            } else {
-                const s = String(aiVal || '').trim();
-                if (s) extracted = [s];
-            }
-
-            const arr2 = Array.isArray(val) ? val.map(String) : [String(val || '')];
-            if (arr2.length === 0) return false;
-
-            if (extracted.length === 0) {
-                return arr2.includes('__EMPTY__');
-            }
-            return arr2.some(v => extracted.includes(v));
-        }
-
-        let strVal = Array.isArray(aiVal) ? aiVal.map(String).join(',').toLowerCase() : String(aiVal || '').toLowerCase();
-        let targetStr = String(val).toLowerCase();
-
-        switch (op) {
-            case 'equals': return strVal === targetStr;
-            case 'not_equals': return strVal !== targetStr;
-            case 'contains': return strVal.includes(targetStr);
-            case 'not_contains': return !strVal.includes(targetStr);
-            default: return strVal.includes(targetStr);
-        }
-      });
+      return insertedIds.has(record.id) || matchesViewFilters(record, data.fields, filterConfig, resolveFieldValueForAI);
     });
   }
 
@@ -3340,6 +3313,19 @@ export default function App() {
 
         {/* Grid Area */}
         <div className="flex-1 flex flex-col min-h-0 relative bg-white overflow-hidden">
+          {(pendingInsertedRecords.length > 0 || insertNotice) && (
+            <div role="status" className="shrink-0 flex items-center gap-3 border-b border-blue-100 bg-blue-50 px-4 py-2 text-xs text-blue-800">
+              <span className="flex-1">
+                {pendingInsertedRecords.length > 0
+                  ? (lang === 'en' ? `${pendingInsertedRecords.length} new row(s) temporarily visible for editing. Reapply filters to hide non-matching rows; records are not deleted.` : `${pendingInsertedRecords.length} 行新记录暂留供填写；重新应用筛选后，不匹配的行会隐藏，不会删除。`)
+                  : insertNotice}
+                {(sortConfig || (!isGroupTempDisabled && groupConfig.length > 0)) && (lang === 'en' ? ' Display position still follows sorting/grouping.' : ' 显示位置仍遵循当前排序／分组。')}
+              </span>
+              <button className="shrink-0 rounded px-2 py-1 hover:bg-blue-100 focus-visible:outline focus-visible:outline-blue-500" onClick={() => { setInsertSession({ key: insertViewKey, ids: [] }); setInsertNotice(''); }}>
+                {pendingInsertedRecords.length > 0 ? (lang === 'en' ? 'Reapply filters' : '重新应用筛选') : (lang === 'en' ? 'Got it' : '知道了')}
+              </button>
+            </div>
+          )}
           {showSearch && (
             <div className="absolute top-4 right-4 z-50 bg-white shadow-lg rounded-lg border border-gray-200 flex items-center px-2 py-1.5 space-x-2">
               <Search className="w-4 h-4 text-gray-400" />

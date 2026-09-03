@@ -1,4 +1,4 @@
-// AI Table Studio v2.6.5 Table Action API v0.1 - Phase 4.7 stale-job safety and compact discovery
+// AI Table Studio v2.6.6 Table Action API v0.1 - Phase 4.7 stale-job safety and compact discovery
 // Pure ESM module: no React/Electron dependency. It receives a workspace snapshot,
 // validates an action, and returns the next snapshot. The renderer decides when to commit.
 

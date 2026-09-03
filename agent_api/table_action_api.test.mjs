@@ -35,7 +35,7 @@ test('read capabilities and tables', () => {
   const caps = ws.execute(request('system.get_capabilities'));
   assert.equal(caps.ok, true);
   assert.equal(caps.data.phase, 'phase4.7');
-  assert.equal(caps.data.appVersion, '2.6.5');
+  assert.equal(caps.data.appVersion, '2.6.6');
   assert.equal(caps.data.actionDefinitionVersion, '1.1');
   assert.equal(caps.data.detail, 'summary');
   assert.deepEqual(Object.keys(caps.data.implementedActions[0]), ['name']);

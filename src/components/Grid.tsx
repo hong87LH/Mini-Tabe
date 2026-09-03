@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment, MediaTrimData } from '../types';
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
-import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste, Maximize2 } from 'lucide-react';
+import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste, Maximize2, RefreshCw } from 'lucide-react';
+import { reviewLocalPath, isReviewImage, intersectsReviewViewport, refreshReviewImages, loadFreshReviewThumbnail, SYSTEM_THUMBNAIL_SIZE } from '../lib/reviewMedia';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -1720,6 +1721,7 @@ const ZoomableImage = ({
 
 export const fullImageBlobCache = new Map<string, string>();
 export const thumbnailCache = new Map<string, string>();
+const thumbnailRevisions = new Map<string, number>();
 
 // Concurrency queue for generating canvas thumbnails to prevent memory spikes
 const thumbnailQueue: Array<() => Promise<void>> = [];
@@ -1740,6 +1742,10 @@ async function processThumbnailQueue() {
 
 async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<string> {
   if (thumbnailCache.has(pathStr)) return thumbnailCache.get(pathStr)!;
+  const revision = thumbnailRevisions.get(pathStr) || 0;
+  const cacheThumbnail = (value: string) => {
+    if ((thumbnailRevisions.get(pathStr) || 0) === revision) thumbnailCache.set(pathStr, value);
+  };
 
   const sourcePath = normalizeLocalPathForStorage(pathStr);
   const w = window as any;
@@ -1747,9 +1753,9 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
 
   if (isElectronPath && w.electronAPI && w.electronAPI.getThumbnail) {
     try {
-      const dataUrl = await w.electronAPI.getThumbnail(sourcePath, { width: 150, height: 150 });
+      const dataUrl = await w.electronAPI.getThumbnail(sourcePath, { ...SYSTEM_THUMBNAIL_SIZE });
       if (dataUrl) {
-        thumbnailCache.set(pathStr, dataUrl);
+        cacheThumbnail(dataUrl);
         return dataUrl;
       }
     } catch (e) {}
@@ -1768,7 +1774,7 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
       } else if (isElectronPath) {
           resultUrl = `file://${sourcePath.replace(/\\/g, '/')}`;
       }
-      thumbnailCache.set(pathStr, resultUrl);
+      cacheThumbnail(resultUrl);
       return resultUrl;
   }
 
@@ -1846,7 +1852,7 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
             
             try {
               const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-              thumbnailCache.set(pathStr, dataUrl);
+              cacheThumbnail(dataUrl);
               resolve(dataUrl);
             } catch (e) {
               resolve(urlToLoad);
@@ -1889,7 +1895,7 @@ function getGlobalThumbnailObserver() {
   return globalThumbnailObserver;
 }
 
-const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string, alt: string, className: string, title?: string, onClick?: (e: React.MouseEvent) => void }) => {
+const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }: { path: string, alt: string, className: string, title?: string, onClick?: (e: React.MouseEvent) => void, refreshKey?: number }) => {
   const [src, setSrc] = useState<string>(thumbnailCache.get(path) || '');
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -1912,7 +1918,7 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
        getOrGenerateThumbnail(path).then(fetched => {
          if (isMounted) setSrc(fetched);
        });
-       return;
+       return () => { isMounted = false; };
     }
     
     if (!isVideo) {
@@ -1920,7 +1926,7 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
        getOrGenerateThumbnail(path).then(fetched => {
          if (isMounted) setSrc(fetched);
        });
-       return;
+       return () => { isMounted = false; };
     }
 
     const observer = getGlobalThumbnailObserver();
@@ -1945,7 +1951,7 @@ const ThumbnailImage = ({ path, alt, className, title, onClick }: { path: string
          observer.unobserve(imgRef.current);
       }
     };
-  }, [path]);
+  }, [path, refreshKey]);
 
   const isAudio = /\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/.test(path.toLowerCase()) || path.toLowerCase().startsWith('data:audio');
   if (isAudio) {
@@ -1997,7 +2003,7 @@ interface GridProps {
   onPasteRecordsBatch?: (updates: { recordId: string, fieldId: string, value: any }[], newRecords: any[]) => void;
   onDeleteRecords?: (recordIds: string[]) => void;
   onAddRecord: () => void;
-  onInsertRecords?: (index: number, count: number) => void;
+  onInsertRecords?: (anchorId: string, side: 'above' | 'below', count: number) => void;
   onAddField: () => void;
   onInsertField?: (index: number, count?: number) => void;
   onDuplicateField?: (fieldId: string) => void;
@@ -2817,6 +2823,70 @@ const triggerDownload = async (url: string, filename: string, folderPath?: strin
 const gallerySettingsCache = new Map<string, any>();
 
 function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gallerySettings, onGallerySettingsChange, groupConfig, foldedGroups, onFoldedGroupsChange }: { tableId?: string, data: any, lang: string, onPreviewImage: (url: string, items: any[]) => void, gallerySettings?: any, onGallerySettingsChange?: (s: any) => void, groupConfig?: any[], foldedGroups?: string[], onFoldedGroupsChange?: (g: string[]) => void }) {
+    const reviewViewportRef = useRef<HTMLDivElement>(null);
+    const refreshingRef = useRef(false);
+    const mountedRef = useRef(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [refreshVersion, setRefreshVersion] = useState(0);
+    const [reviewNotice, setReviewNotice] = useState('');
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; };
+    }, []);
+
+    const refreshVisibleImages = async () => {
+        const viewport = reviewViewportRef.current;
+        if (!viewport || refreshingRef.current) return;
+        const bounds = viewport.getBoundingClientRect();
+        const visibleBounds = { top: Math.max(bounds.top, 0), bottom: Math.min(bounds.bottom, window.innerHeight), left: Math.max(bounds.left, 0), right: Math.min(bounds.right, window.innerWidth) };
+        const paths = Array.from(viewport.querySelectorAll('[data-review-image]'))
+            .filter((element: Element) => intersectsReviewViewport(element.getBoundingClientRect(), visibleBounds))
+            .map((element: Element) => element.getAttribute('data-review-image')!)
+            .filter(Boolean);
+        refreshingRef.current = true;
+        setRefreshing(true);
+        setReviewNotice('');
+        try {
+            const result = await refreshReviewImages(paths, async path => {
+                // Refresh through the same native thumbnail service as the initial load.
+                const thumbnail = await loadFreshReviewThumbnail(path, (window as any).electronAPI?.getThumbnail);
+                const oldBlob = fullImageBlobCache.get(path);
+                thumbnailRevisions.set(path, (thumbnailRevisions.get(path) || 0) + 1);
+                thumbnailCache.set(path, thumbnail);
+                fullImageBlobCache.delete(path);
+                if (oldBlob?.startsWith('blob:')) URL.revokeObjectURL(oldBlob);
+            });
+            if (mountedRef.current) {
+                setRefreshVersion(version => version + 1);
+                setReviewNotice(lang === 'en'
+                    ? `Refreshed ${result.succeeded} visible image(s).${result.failures.length ? ` ${result.failures.length} failed; requires local images and desktop system thumbnail support. Previous thumbnails kept.` : ''}`
+                    : `已刷新 ${result.succeeded} 张可视图片${result.failures.length ? `；${result.failures.length} 张失败，仅支持桌面版本地图片的系统缩略图，请检查文件及格式，失败项保留原缩略图` : ''}`);
+            }
+        } finally {
+            refreshingRef.current = false;
+            if (mountedRef.current) setRefreshing(false);
+        }
+    };
+
+    const openReviewImageInPhotoshop = async (path: string) => {
+        const localPath = reviewLocalPath(path);
+        const psPath = localStorage.getItem('bitable_ps_path');
+        if (!localPath || !(window as any).electronAPI?.openInPhotoshop) {
+            setReviewNotice(lang === 'en' ? 'Photoshop requires a local image in the desktop app.' : '请在桌面版中打开已保存到本地的图片。');
+            return;
+        }
+        if (!psPath) {
+            setReviewNotice(lang === 'en' ? 'Set the Photoshop path in API and model settings first.' : '请先在“API 和模型配置”中设置 Photoshop 路径。');
+            return;
+        }
+        setReviewNotice(lang === 'en' ? 'Opening Photoshop. Save changes, then refresh visible images.' : '正在打开 Photoshop；保存修改后，点击刷新可视图片。');
+        try {
+            const opened = await (window as any).electronAPI.openInPhotoshop(localPath, psPath);
+            if (!opened && mountedRef.current) setReviewNotice(lang === 'en' ? 'Could not open image. Check the file and Photoshop path.' : '图片打开失败，请检查文件及 Photoshop 路径。');
+        } catch {
+            if (mountedRef.current) setReviewNotice(lang === 'en' ? 'Photoshop could not be started.' : 'Photoshop 启动失败，请检查配置。');
+        }
+    };
     const defaultSettings = gallerySettings || gallerySettingsCache.get(tableId) || {
         statusFilter: 'all',
         ratingFilter: 'all',
@@ -2898,7 +2968,8 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
 
     const renderImageCard = (img: any, idx: number | string) => {
         const path = img.url;
-        let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:[\\/]/) || path.startsWith('\\\\') ? `file://${path}` : path);
+        const image = isReviewImage(path, img.item.type);
+        const canOpenInPs = !!reviewLocalPath(path) && !!(window as any).electronAPI?.openInPhotoshop;
         const infoTexts = displayFieldIds.map(id => {
             const f = data.fields.find((f: any) => f.id === id);
             const val = img.record[id];
@@ -2912,7 +2983,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
         }).filter(t => t.text);
         const hasInfo = showRating || infoTexts.length > 0;
         return (
-            <div key={idx} className="relative group w-[200px] h-auto flex flex-col bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex-shrink-0 cursor-pointer hover:shadow-md transition-shadow" onClick={() => {
+            <div key={path} className="relative group w-[200px] h-auto flex flex-col bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex-shrink-0 cursor-pointer hover:shadow-md transition-shadow" onClick={() => {
                 const fileItemsForPreview = displayImages.map(d => {
                     const refCells: string[][] = [];
                     refFieldIds.forEach(id => {
@@ -2939,8 +3010,18 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
                 });
                 onPreviewImage(path, fileItemsForPreview);
             }}>
-                <div className="w-full h-[180px] shrink-0 relative border-b border-gray-100">
-                    <ThumbnailImage path={path} alt={path} className="w-full h-full object-cover" />
+                <div data-review-image={image ? path : undefined} className="group/review-image w-full h-[180px] shrink-0 relative border-b border-gray-100">
+                    <ThumbnailImage path={path} alt={path} refreshKey={refreshVersion} className="w-full h-full object-cover" />
+                    {image && (
+                        <button
+                            type="button"
+                            aria-label={lang === 'en' ? 'Open in Photoshop' : '在 Photoshop 中打开'}
+                            title={canOpenInPs ? (lang === 'en' ? 'Open local original in Photoshop; save, then refresh' : '在 Photoshop 中打开本地原图；保存后点击刷新') : (lang === 'en' ? 'Requires a local image in the desktop app' : '仅支持桌面版中的本地图片')}
+                            disabled={!canOpenInPs}
+                            onClick={e => { e.stopPropagation(); void openReviewImageInPhotoshop(path); }}
+                            className="absolute bottom-0.5 right-0.5 bg-white/80 text-gray-700 rounded p-0.5 opacity-0 group-hover/review-image:opacity-100 focus-visible:opacity-100 pointer-events-none group-hover/review-image:pointer-events-auto focus-visible:pointer-events-auto flex items-center shadow-sm z-10 transition-opacity focus-visible:outline focus-visible:outline-indigo-500 disabled:cursor-not-allowed"
+                        ><Palette className="w-3.5 h-3.5 hover:text-indigo-500 text-gray-500" /></button>
+                    )}
                     {img.status !== 'unannotated' && (
                         <div className={`absolute top-1 right-1 px-1.5 py-0.5 rounded text-[10px] text-white font-bold shadow-sm ${img.status === 'pending' ? 'bg-red-500' : img.status === 'resolved' ? 'bg-yellow-500' : 'bg-green-500'}`}>
                             {img.status === 'pending' ? '待处理' : img.status === 'resolved' ? '已处理' : '通过'}
@@ -3130,10 +3211,19 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
                          )}
                      </div>
                      
-                     <span className="text-sm text-gray-500 ml-auto">{displayImages.length} {lang === 'en' ? 'images' : '张图片'}</span>
+                     <div className="ml-auto flex items-center gap-2">
+                         <button type="button" onClick={() => void refreshVisibleImages()} disabled={refreshing}
+                             aria-label={lang === 'en' ? 'Refresh visible images' : '刷新可视图片'}
+                             title={lang === 'en' ? 'Refresh images currently visible in expanded groups; save Photoshop edits first' : '刷新当前屏幕内已展开的图片；请先在 Photoshop 中保存'}
+                             className="rounded p-1.5 text-gray-500 hover:bg-gray-100 hover:text-blue-600 focus-visible:outline focus-visible:outline-blue-500 disabled:opacity-50">
+                             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin motion-reduce:animate-none' : ''}`} />
+                         </button>
+                         <span className="text-sm text-gray-500">{displayImages.length} {lang === 'en' ? 'images' : '张图片'}</span>
+                     </div>
                  </div>
+                 {reviewNotice && <div role="status" className="flex items-center gap-2 text-xs text-gray-600"><span>{reviewNotice}</span><button aria-label={lang === 'en' ? 'Dismiss message' : '关闭提示'} onClick={() => setReviewNotice('')} className="rounded p-1 hover:bg-gray-100"><X className="h-3 w-3" /></button></div>}
              </div>
-             <div className="flex-1 overflow-y-auto p-4 content-start">
+             <div ref={reviewViewportRef} className="flex-1 overflow-y-auto p-4 content-start">
                  {renderedContent}
              </div>
         </div>
@@ -5267,7 +5357,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
   return (
     <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-auto bg-white h-full" style={{ isolation: 'isolate', overflowAnchor: 'none' }}>
       {viewMode === 'gallery' ? (
-        <ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} gallerySettings={gallerySettings} onGallerySettingsChange={onGallerySettingsChange} groupConfig={groupConfig} foldedGroups={foldedGroups} onFoldedGroupsChange={onFoldedGroupsChange} />
+        <React.Fragment key={tableId}><ImageReviewView tableId={tableId} data={data} lang={lang} onPreviewImage={setPreviewImage} gallerySettings={gallerySettings} onGallerySettingsChange={onGallerySettingsChange} groupConfig={groupConfig} foldedGroups={foldedGroups} onFoldedGroupsChange={onFoldedGroupsChange} /></React.Fragment>
       ) : (
       <table className="text-left" style={{ tableLayout: 'fixed', width: '100%', minWidth: totalTableWidth + 100, borderCollapse: 'separate', borderSpacing: 0 }}>
         <thead className="sticky top-0 z-40 bg-gray-50 text-sm">
@@ -5711,8 +5801,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
                 onClick={() => {
                    if (contextMenuState.recordId && onInsertRecords) {
-                      const idx = data.records.findIndex(r => r.id === contextMenuState.recordId);
-                      if (idx >= 0) onInsertRecords(idx, insertRowCount);
+                      onInsertRecords(contextMenuState.recordId, 'above', insertRowCount);
                    }
                    setContextMenuState(null);
                 }}
@@ -5735,8 +5824,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between"
                 onClick={() => {
                    if (contextMenuState.recordId && onInsertRecords) {
-                      const idx = data.records.findIndex(r => r.id === contextMenuState.recordId);
-                      if (idx >= 0) onInsertRecords(idx + 1, insertRowCount);
+                      onInsertRecords(contextMenuState.recordId, 'below', insertRowCount);
                    }
                    setContextMenuState(null);
                 }}

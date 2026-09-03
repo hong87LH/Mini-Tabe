@@ -1,6 +1,8 @@
-# AI Table Studio v2.6.5 · Table Action API v0.1 · Phase 4.7
+# AI Table Studio v2.6.6 · Table Action API v0.1 · Phase 4.7
 
 这是从 v2.6.3 分出的 Agent API 探索分支。v2.6.5 / Phase 4.7 在既有协作、完整编辑和长任务能力之上，继续降低 Agent 的调用成本，并补齐“远端已经失联、UI 仍显示处理中”的 Job 专项清理能力。
+
+当前产品版本为 **v2.6.6**，新增筛选／分组插行与图片审阅体验优化；Action API 协议和能力阶段保持不变，启动命令、Token 及调用方式无需调整。详见 [v2.6.6 升级报告](../readme/v2.6.6_筛选插行与审阅Photoshop刷新_2026-09-03.md)。
 
 ## 已实现
 
