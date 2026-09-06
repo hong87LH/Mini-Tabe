@@ -3,7 +3,8 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import { NetworkJobCenter } from './components/NetworkJobCenter';
 import { initialGridData } from './initialData';
-import { Grid } from './components/Grid';
+import { Grid, refreshVisibleGridThumbnails } from './components/Grid';
+import { RefreshCw } from 'lucide-react';
 import { ApiSettings } from './components/ApiSettings';
 import { FieldType, Attachment, GridData } from './types';
 import { Search, Activity, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy, Image as ImageIcon, Video, User, FileText, Folder } from 'lucide-react';
@@ -226,11 +227,11 @@ function TableNavItem({
             onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') { setName(tbl.name); setIsEditing(false); } }}
           />
         ) : (
-          <span className="truncate text-sm select-none">{tbl.name}</span>
+          <span title={tbl.name} className="truncate text-sm select-none">{tbl.name}</span>
         )}
       </div>
       {!isEditing && (
-        <div className="flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 shrink-0 ml-1">
+        <div className="flex items-center space-x-0.5 w-0 overflow-hidden opacity-0 group-hover:w-auto group-hover:overflow-visible group-hover:opacity-100 group-focus-within:w-auto group-focus-within:overflow-visible group-focus-within:opacity-100 shrink-0 group-hover:ml-1 group-focus-within:ml-1">
           <button onClick={(e) => { e.stopPropagation(); setIsEditing(true); }} className="p-0.5 text-gray-400 hover:text-blue-600 rounded" title="Rename"><Edit2 className="w-3.5 h-3.5" /></button>
           <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }} className="p-0.5 text-gray-400 hover:text-green-600 rounded" title="Duplicate"><Copy className="w-3.5 h-3.5" /></button>
           <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-0.5 text-gray-400 hover:text-red-600 rounded" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -812,6 +813,7 @@ export default function App() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [showTableMenu, setShowTableMenu] = useState(false);
+  const [headerRename, setHeaderRename] = useState<{ id: string; name: string } | null>(null);
   const [showLoadMenu, setShowLoadMenu] = useState(false);
   const [showSaveMenu, setShowSaveMenu] = useState(false);
   const [showJobCenter, setShowJobCenter] = useState(false);
@@ -874,11 +876,9 @@ export default function App() {
   const gallerySettings = currentViewState.gallerySettings || null;
   const insertViewKey = JSON.stringify([activeTableId, activeViewMode, isFilterTempDisabled, filterConfig.map(({ fieldId, operator, value }) => ({ fieldId, operator, value }))]);
   const [insertSession, setInsertSession] = useState<{ key: string; ids: string[] }>({ key: '', ids: [] });
-  const [insertNotice, setInsertNotice] = useState('');
   const insertedIds = new Set(insertSession.key === insertViewKey ? insertSession.ids : []);
   useEffect(() => {
     setInsertSession({ key: insertViewKey, ids: [] });
-    setInsertNotice('');
   }, [insertViewKey]);
 
   const updateViewState = (updates: any) => {
@@ -913,6 +913,22 @@ export default function App() {
   const [showGroupMenu, setShowGroupMenu] = useState(false);
   
   const [showSearch, setShowSearch] = useState(false);
+  const thumbnailViewportRef = useRef<HTMLDivElement>(null);
+  const thumbnailRefreshBusy = useRef(false);
+  const [refreshingThumbnails, setRefreshingThumbnails] = useState(false);
+  const refreshTableThumbnails = async () => {
+    if (!thumbnailViewportRef.current || thumbnailRefreshBusy.current) return;
+    thumbnailRefreshBusy.current = true;
+    setRefreshingThumbnails(true);
+    try {
+      await refreshVisibleGridThumbnails(thumbnailViewportRef.current);
+    } catch {
+      // Keep the current thumbnails when the system thumbnail service is unavailable.
+    } finally {
+      thumbnailRefreshBusy.current = false;
+      setRefreshingThumbnails(false);
+    }
+  };
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMatches, setSearchMatches] = useState<{ recordIndex: number, fieldIndex: number, recordId: string, fieldId: string }[]>([]);
   const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
@@ -2011,8 +2027,6 @@ export default function App() {
     if (rules.length > 0) {
       setInsertSession(previous => ({ key: insertViewKey, ids: [...(previous.key === insertViewKey ? previous.ids : []), ...newRecords.map(record => record.id)] }));
     }
-    const filledNames = data.fields.filter(field => field.id in defaults).map(field => field.name).join('、');
-    setInsertNotice(filledNames ? (lang === 'en' ? `New rows inherit group/filter values: ${filledNames}` : `新行已继承分组／筛选字段：${filledNames}`) : '');
     setData(prev => {
       const records = insertRecordsAtAnchor(prev.records, anchorId, side, newRecords);
       return records === prev.records ? prev : { ...prev, records };
@@ -2560,8 +2574,6 @@ export default function App() {
   };
 
   let displayRecords = [...data.records];
-  const pendingInsertedRecords = !isFilterTempDisabled && filterConfig.length > 0
-    ? data.records.filter(record => insertedIds.has(record.id) && !matchesViewFilters(record, data.fields, filterConfig, resolveFieldValueForAI)) : [];
   
   if (filterConfig.length > 0 && !isFilterTempDisabled) {
     displayRecords = displayRecords.filter(record => {
@@ -2660,10 +2672,11 @@ export default function App() {
                  <input 
                    type="text" 
                    value={projectName} 
+                   title={projectName}
                    onChange={(e) => setProjectName(e.target.value)} 
                    className="font-bold text-gray-800 tracking-tight whitespace-nowrap bg-transparent outline-none truncate hover:bg-gray-100 focus:bg-white focus:ring-1 focus:ring-blue-500 rounded px-1 -ml-1 transition-all w-full"
                  />
-                 <Edit2 className="w-3.5 h-3.5 text-gray-400 opacity-0 group-hover/proj:opacity-100 transition-opacity ml-1 shrink-0 pointer-events-none" />
+                 <Edit2 className="w-0 h-3.5 text-gray-400 opacity-0 group-hover/proj:w-3.5 group-hover/proj:ml-1 group-hover/proj:opacity-100 shrink-0 pointer-events-none" />
              </div>
           )}
         </div>
@@ -2808,10 +2821,32 @@ export default function App() {
             <div className="relative">
               <div 
                 className="flex items-center text-lg font-bold text-gray-800 tracking-tight cursor-pointer hover:bg-gray-100 px-2 py-1 rounded transition-colors group"
-                onClick={() => setShowTableMenu(!showTableMenu)}
+                onClick={() => { if (!headerRename) setShowTableMenu(!showTableMenu); }}
+                onDoubleClick={() => {
+                  setShowTableMenu(false);
+                  if (activeTableId) setHeaderRename({ id: activeTableId, name: activeTableName });
+                }}
               >
                  {tables[activeTableIndex]?.icon && <span className="mr-2 text-[22px] leading-none flex items-center text-gray-500">{renderTableIconNode(tables[activeTableIndex].icon, "w-5 h-5")}</span>}
-                 {activeTableName}
+                 {headerRename && headerRename.id === activeTableId ? <input
+                   autoFocus
+                   aria-label="子表名称"
+                   className="min-w-0 bg-white border border-blue-400 rounded px-1 outline-none font-bold"
+                   value={headerRename.name}
+                   onFocus={e => e.currentTarget.select()}
+                   onClick={e => e.stopPropagation()}
+                   onDoubleClick={e => e.stopPropagation()}
+                   onChange={e => setHeaderRename({ ...headerRename, name: e.target.value })}
+                   onBlur={() => {
+                     if (headerRename.name.trim()) handleRenameTable(headerRename.id, headerRename.name.trim());
+                     setHeaderRename(null);
+                   }}
+                   onKeyDown={e => {
+                     e.stopPropagation();
+                     if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+                     if (e.key === 'Escape') { e.preventDefault(); setHeaderRename(null); }
+                   }}
+                 /> : activeTableName}
                  <ChevronDown className="w-4 h-4 ml-1 text-gray-400 opacity-50 group-hover:opacity-100 transition-opacity" />
               </div>
               {showTableMenu && (
@@ -2820,10 +2855,11 @@ export default function App() {
                     <button 
                       key={tbl.id}
                       onClick={() => { setActiveTableId(tbl.id); setShowTableMenu(false); }}
-                      className={`w-full flex items-center px-4 py-2 text-sm transition-colors ${tbl.id === activeTableId ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}
+                      title={tbl.name}
+                      className={`w-full min-w-0 flex items-center text-left px-4 py-2 text-sm transition-colors ${tbl.id === activeTableId ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}
                     >
-                      {tbl.icon ? <span className="mr-2.5 text-base leading-none -mt-px w-4 text-center flex justify-center">{renderTableIconNode(tbl.icon, "w-4 h-4")}</span> : <GridIcon className="w-4 h-4 mr-2.5 opacity-60" />}
-                      {tbl.name}
+                      {tbl.icon ? <span className="mr-2.5 text-base leading-none -mt-px w-4 shrink-0 text-center flex justify-center">{renderTableIconNode(tbl.icon, "w-4 h-4")}</span> : <GridIcon className="w-4 h-4 shrink-0 mr-2.5 opacity-60" />}
+                      <span className="min-w-0 flex-1 truncate">{tbl.name}</span>
                     </button>
                   ))}
                   <div className="border-t border-gray-100 my-1"></div>
@@ -3296,36 +3332,27 @@ export default function App() {
             >
               <Search className="w-4 h-4" />
             </button>
+            {activeViewMode === 'grid' && <button
+              onClick={refreshTableThumbnails}
+              disabled={refreshingThumbnails}
+              aria-label={lang === 'en' ? 'Refresh visible media thumbnails' : '刷新可视区域媒体缩略图'}
+              title={lang === 'en' ? 'Refresh visible media thumbnails' : '刷新可视区域媒体缩略图'}
+              className="text-gray-400 hover:text-gray-600 p-1.5 rounded hover:bg-gray-100 disabled:opacity-50"
+            ><RefreshCw className={`w-4 h-4 ${refreshingThumbnails ? 'animate-spin motion-reduce:animate-none' : ''}`} /></button>}
             <div className="flex items-center space-x-2">
                <button 
                  onClick={handleAddRecord}
-                 className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors group relative"
+                 className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
                  title={lang === 'en' ? "Add Row" : "添加行"}
                >
                  <Plus className="w-5 h-5" />
-                 <div className="absolute top-full mt-1 right-0 bg-gray-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
-                    {lang === 'en' ? "Add Row" : "添加行"}
-                 </div>
                </button>
             </div>
           </div>
         </div>
 
         {/* Grid Area */}
-        <div className="flex-1 flex flex-col min-h-0 relative bg-white overflow-hidden">
-          {(pendingInsertedRecords.length > 0 || insertNotice) && (
-            <div role="status" className="shrink-0 flex items-center gap-3 border-b border-blue-100 bg-blue-50 px-4 py-2 text-xs text-blue-800">
-              <span className="flex-1">
-                {pendingInsertedRecords.length > 0
-                  ? (lang === 'en' ? `${pendingInsertedRecords.length} new row(s) temporarily visible for editing. Reapply filters to hide non-matching rows; records are not deleted.` : `${pendingInsertedRecords.length} 行新记录暂留供填写；重新应用筛选后，不匹配的行会隐藏，不会删除。`)
-                  : insertNotice}
-                {(sortConfig || (!isGroupTempDisabled && groupConfig.length > 0)) && (lang === 'en' ? ' Display position still follows sorting/grouping.' : ' 显示位置仍遵循当前排序／分组。')}
-              </span>
-              <button className="shrink-0 rounded px-2 py-1 hover:bg-blue-100 focus-visible:outline focus-visible:outline-blue-500" onClick={() => { setInsertSession({ key: insertViewKey, ids: [] }); setInsertNotice(''); }}>
-                {pendingInsertedRecords.length > 0 ? (lang === 'en' ? 'Reapply filters' : '重新应用筛选') : (lang === 'en' ? 'Got it' : '知道了')}
-              </button>
-            </div>
-          )}
+        <div ref={thumbnailViewportRef} className="flex-1 flex flex-col min-h-0 relative bg-white overflow-hidden">
           {showSearch && (
             <div className="absolute top-4 right-4 z-50 bg-white shadow-lg rounded-lg border border-gray-200 flex items-center px-2 py-1.5 space-x-2">
               <Search className="w-4 h-4 text-gray-400" />

@@ -4,7 +4,7 @@ import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment, Media
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
 import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste, Maximize2, RefreshCw } from 'lucide-react';
-import { reviewLocalPath, isReviewImage, intersectsReviewViewport, refreshReviewImages, loadFreshReviewThumbnail, SYSTEM_THUMBNAIL_SIZE } from '../lib/reviewMedia';
+import { reviewLocalPath, isReviewImage, intersectsReviewViewport, isThumbnailVisible, refreshReviewImages, loadFreshReviewThumbnail, SYSTEM_THUMBNAIL_SIZE, requestSystemThumbnail } from '../lib/reviewMedia';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -1740,7 +1740,7 @@ async function processThumbnailQueue() {
   }
 }
 
-async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<string> {
+async function getOrGenerateThumbnail(pathStr: string, file?: File, wanted = () => true): Promise<string> {
   if (thumbnailCache.has(pathStr)) return thumbnailCache.get(pathStr)!;
   const revision = thumbnailRevisions.get(pathStr) || 0;
   const cacheThumbnail = (value: string) => {
@@ -1753,13 +1753,17 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
 
   if (isElectronPath && w.electronAPI && w.electronAPI.getThumbnail) {
     try {
-      const dataUrl = await w.electronAPI.getThumbnail(sourcePath, { ...SYSTEM_THUMBNAIL_SIZE });
+      const dataUrl = await requestSystemThumbnail(sourcePath, { ...SYSTEM_THUMBNAIL_SIZE }, w.electronAPI.getThumbnail, wanted);
       if (dataUrl) {
         cacheThumbnail(dataUrl);
         return dataUrl;
       }
     } catch (e) {}
+    // Avoid a NAS original-file download when native image thumbnails fail.
+    if (!/\.(mp4|webm|mov|mkv)(\?|$)/i.test(sourcePath)) return '';
   }
+
+  if (!wanted()) return '';
 
   const isVideo = sourcePath.toLowerCase().match(/\.(mp4|webm|mov|mkv)(\?|$)/) || file?.type.startsWith('video/');
   const isAudio = sourcePath.toLowerCase().match(/\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/) || file?.type.startsWith('audio/');
@@ -1879,28 +1883,50 @@ async function getOrGenerateThumbnail(pathStr: string, file?: File): Promise<str
   });
 }
 
-const thumbnailObservers = new Map<Element, () => void>();
+const thumbnailObservers = new Map<Element, (visible: boolean) => void>();
 let globalThumbnailObserver: IntersectionObserver | null = null;
 function getGlobalThumbnailObserver() {
   if (!globalThumbnailObserver) {
     globalThumbnailObserver = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
-        if (entry.isIntersecting) {
-           const callback = thumbnailObservers.get(entry.target);
-           if (callback) callback();
-        }
+        thumbnailObservers.get(entry.target)?.(entry.isIntersecting);
       });
-    }, { rootMargin: '200px', threshold: 0.01 });
+    }, { rootMargin: '120px', threshold: 0.01 });
   }
   return globalThumbnailObserver;
 }
 
+export async function refreshVisibleGridThumbnails(root: HTMLElement) {
+  const elements = Array.from(root.querySelectorAll('[data-table-thumbnail]'))
+    .filter(element => isThumbnailVisible(element, root));
+  const paths = elements.map(element => element.getAttribute('data-table-thumbnail')!).filter(path => !!reviewLocalPath(path));
+  return refreshReviewImages(paths, async path => {
+    const thumbnail = await loadFreshReviewThumbnail(path, (window as any).electronAPI?.getThumbnail);
+    thumbnailRevisions.set(path, (thumbnailRevisions.get(path) || 0) + 1);
+    thumbnailCache.set(path, thumbnail);
+    const oldBlob = fullImageBlobCache.get(path);
+    fullImageBlobCache.delete(path);
+    if (oldBlob?.startsWith('blob:')) URL.revokeObjectURL(oldBlob);
+    elements.filter(element => element.isConnected && element.getAttribute('data-table-thumbnail') === path)
+      .forEach(element => element.dispatchEvent(new CustomEvent('table-thumbnail-refreshed', { detail: thumbnail })));
+  });
+}
+
 const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }: { path: string, alt: string, className: string, title?: string, onClick?: (e: React.MouseEvent) => void, refreshKey?: number }) => {
   const [src, setSrc] = useState<string>(thumbnailCache.get(path) || '');
-  const imgRef = useRef<HTMLImageElement>(null);
+  const [failed, setFailed] = useState(false);
+  const imgRef = useRef<HTMLImageElement | HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const element = imgRef.current;
+    const refreshed = (event: Event) => { setSrc((event as CustomEvent<string>).detail); setFailed(false); };
+    element?.addEventListener('table-thumbnail-refreshed', refreshed);
+    return () => element?.removeEventListener('table-thumbnail-refreshed', refreshed);
+  }, [path]);
 
   useEffect(() => {
     let isMounted = true;
+    setFailed(false);
     
     // Check cache for this specific path first
     const cached = thumbnailCache.get(path);
@@ -1911,44 +1937,41 @@ const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }
         setSrc(''); // Reset when path changes and it's not cached yet, instead of keeping old image
     }
 
-    const lowerPath = path.toLowerCase();
-    const isAudio = /\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/.test(lowerPath) || lowerPath.startsWith('data:audio');
-    const isVideo = /\.(mp4|webm|mov|mkv)(\?|$)/.test(lowerPath);
-    if (isAudio) {
-       getOrGenerateThumbnail(path).then(fetched => {
-         if (isMounted) setSrc(fetched);
-       });
-       return () => { isMounted = false; };
-    }
-    
-    if (!isVideo) {
-       // Images resolve very quickly without blocking now, we rely on native loading="lazy" and decoding="async"
-       getOrGenerateThumbnail(path).then(fetched => {
-         if (isMounted) setSrc(fetched);
-       });
-       return () => { isMounted = false; };
-    }
-
     const observer = getGlobalThumbnailObserver();
+    const element = imgRef.current;
+    let visible = false;
+    let loading = false;
+    let finished = false;
+    const load = () => {
+      if (!isMounted || !visible || loading || finished) return;
+      loading = true;
+      let startedWhileVisible = false;
+      const wanted = () => {
+        const wantedNow = isMounted && visible;
+        if (wantedNow) startedWhileVisible = true;
+        return wantedNow;
+      };
+      getOrGenerateThumbnail(path, undefined, wanted).then(fetched => {
+        if (!isMounted) return;
+        if (thumbnailCache.get(path) || fetched) { setSrc(thumbnailCache.get(path) || fetched); setFailed(false); }
+        else if (startedWhileVisible) setFailed(true);
+        finished = !!fetched || startedWhileVisible;
+      }).catch(() => { finished = true; if (isMounted && !thumbnailCache.get(path)) setFailed(true); }).finally(() => {
+        loading = false;
+        if (!finished && isMounted && visible) load();
+      });
+    };
     
-    if (imgRef.current) {
-        thumbnailObservers.set(imgRef.current, () => {
-           getOrGenerateThumbnail(path).then(fetched => {
-             if (isMounted) setSrc(fetched);
-           });
-           if (imgRef.current) {
-              thumbnailObservers.delete(imgRef.current);
-              observer.unobserve(imgRef.current);
-           }
-        });
-        observer.observe(imgRef.current);
+    if (element) {
+        thumbnailObservers.set(element, nextVisible => { visible = nextVisible; load(); });
+        observer.observe(element);
     }
     
     return () => { 
       isMounted = false; 
-      if (imgRef.current) {
-         thumbnailObservers.delete(imgRef.current);
-         observer.unobserve(imgRef.current);
+      if (element) {
+         thumbnailObservers.delete(element);
+         observer.unobserve(element);
       }
     };
   }, [path, refreshKey]);
@@ -1957,6 +1980,8 @@ const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }
   if (isAudio) {
     return (
       <span
+        data-table-thumbnail={path}
+        ref={imgRef as React.RefObject<HTMLSpanElement>}
         className={cn('relative block shrink-0 overflow-hidden', className)}
         title={title || alt}
         onClick={onClick}
@@ -1973,7 +1998,9 @@ const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }
     );
   }
 
-  return <img ref={imgRef} src={src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='} alt={alt} className={className} title={title} onClick={onClick} loading="lazy" decoding="async" />;
+  // An undecodable inline image restores Chromium's native broken-image + alt display,
+  // without retrying the full NAS original when the system thumbnail is unavailable.
+  return <img data-table-thumbnail={path} ref={imgRef as React.RefObject<HTMLImageElement>} src={failed ? 'data:image/png;base64,AA==' : (src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=')} alt={alt} className={className} title={title || path} onClick={onClick} loading="lazy" decoding="async" />;
 };
 
 type LocateCellRequest = {
@@ -2879,12 +2906,11 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
             setReviewNotice(lang === 'en' ? 'Set the Photoshop path in API and model settings first.' : '请先在“API 和模型配置”中设置 Photoshop 路径。');
             return;
         }
-        setReviewNotice(lang === 'en' ? 'Opening Photoshop. Save changes, then refresh visible images.' : '正在打开 Photoshop；保存修改后，点击刷新可视图片。');
         try {
             const opened = await (window as any).electronAPI.openInPhotoshop(localPath, psPath);
-            if (!opened && mountedRef.current) setReviewNotice(lang === 'en' ? 'Could not open image. Check the file and Photoshop path.' : '图片打开失败，请检查文件及 Photoshop 路径。');
-        } catch {
-            if (mountedRef.current) setReviewNotice(lang === 'en' ? 'Photoshop could not be started.' : 'Photoshop 启动失败，请检查配置。');
+            if (opened === false) console.warn('[Photoshop] Open command reported failure:', localPath);
+        } catch (error) {
+            console.warn('[Photoshop] Open command failed:', error);
         }
     };
     const defaultSettings = gallerySettings || gallerySettingsCache.get(tableId) || {

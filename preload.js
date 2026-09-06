@@ -15,7 +15,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadFile: (options) => ipcRenderer.invoke('download-file', options),
 
   // 抓取极速本地系统级缩略图
-  getThumbnail: (path, size) => ipcRenderer.invoke('get-thumbnail', path, size),
+  getThumbnail: (path, size, options) => ipcRenderer.invoke('get-thumbnail', path, size, options),
+  getThumbnailLoadStats: () => ipcRenderer.invoke('thumbnail-load-stats'),
   readLocalFile: (filePath, options) => ipcRenderer.invoke('read-local-file', filePath, options),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   selectComfyUIBat: () => ipcRenderer.invoke('select-comfyui-bat'),

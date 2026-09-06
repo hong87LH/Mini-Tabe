@@ -1,4 +1,7 @@
 import crypto from "crypto";
+import { createThumbnailScheduler, thumbnailKey } from './thumbnail_scheduler.js';
+const nativeThumbnailScheduler = createThumbnailScheduler(3);
+let thumbnailRefreshSequence = 0;
 // main.js （ES Module 版本）
 process.noDeprecation = true; // 忽略 Node.js 废弃警告 (如 punycode)
 import { app, BrowserWindow, protocol, ipcMain, nativeImage, dialog, shell } from 'electron';
@@ -422,9 +425,10 @@ app.whenReady().then(async () => {
     return null;
   });
 
-  ipcMain.handle('get-thumbnail', async (event, filePath, size = { width: 150, height: 150 }) => {
+  ipcMain.handle('thumbnail-load-stats', () => nativeThumbnailScheduler.stats());
+  ipcMain.handle('get-thumbnail', async (event, filePath, size = { width: 150, height: 150 }, options = {}) => nativeThumbnailScheduler.request(options.fresh === true ? `refresh:${++thumbnailRefreshSequence}` : thumbnailKey(filePath, size), async () => {
     try {
-      if (!fs.existsSync(filePath)) return null;
+      try { await fs.promises.access(filePath); } catch { return null; }
       if (/\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(filePath)) {
         const artwork = extractEmbeddedAudioArtwork(filePath);
         return artwork ? `data:${artwork.mime};base64,${artwork.buffer.toString('base64')}` : null;
@@ -439,7 +443,7 @@ app.whenReady().then(async () => {
       console.error('[原生缩略图获取失败]', error);
       return null;
     }
-  });
+  }));
   // ▲▲▲
 
   // ▼▼▼ 监听前端下载文件请求，执行真实的物理写入 ▼▼▼

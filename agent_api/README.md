@@ -1,8 +1,22 @@
-# AI Table Studio v2.6.6 · Table Action API v0.1 · Phase 4.7
+# AI Table Studio v2.6.8 · Table Action API v0.1 · Phase 4.7
 
 这是从 v2.6.3 分出的 Agent API 探索分支。v2.6.5 / Phase 4.7 在既有协作、完整编辑和长任务能力之上，继续降低 Agent 的调用成本，并补齐“远端已经失联、UI 仍显示处理中”的 Job 专项清理能力。
 
-当前产品版本为 **v2.6.6**，新增筛选／分组插行与图片审阅体验优化；Action API 协议和能力阶段保持不变，启动命令、Token 及调用方式无需调整。详见 [v2.6.6 升级报告](../readme/v2.6.6_筛选插行与审阅Photoshop刷新_2026-09-03.md)。
+当前产品版本为 **v2.6.8**，Action Definition 为 **1.2**，协议 v0.1 / phase4.7 保持不变。85 个 Action 保持兼容。保存工程并重启 Electron 后加载新主进程和 preload。详见 [v2.6.8 升级报告](../readme/v2.6.8_缩略图按需加载与测量报告.md)。
+
+## v2.6.7 列显示与冻结
+
+三个 Action 均为 `write:data`，支持 dryRun、expectedRevision、idempotencyKey 和已有 Undo 链路，不要求 confirmed。设置的是明确状态，重复调用不会反向切换。使用真实 tableId / fieldId。
+
+| Action | params 示例 | 作用 |
+| --- | --- | --- |
+| field.set_hidden | `{"tableId":"table_x","fieldIds":["field_x"],"hidden":true}` | 批量隐藏；false 恢复显示 |
+| field.freeze_to | `{"tableId":"table_x","fieldId":"field_x"}` | 冻结至此列；fieldId=null 取消连续冻结 |
+| field.set_individual_frozen | `{"tableId":"table_x","fieldIds":["field_x"],"frozen":true}` | 单独冻结；false 取消指定列单独冻结 |
+
+连续冻结与单独冻结互不清空。布局沿用 UI 的表级存储：fields[].hidden、data.frozenColId、data.individualFrozenColIds。隐藏冻结端点的行为与 UI 一致：端点不在可见列中时连续冻结暂不生效，重新显示端点后恢复。不修改字段顺序、Cell 数据或智能引用。
+
+读回：`table.get_schema` 返回字段的 hidden 与新增 `columnLayout: { frozenColId, individualFrozenColIds }`。参数精确格式可用 `node scripts/table_action_client.mjs field.freeze_to --help` 查看，复杂参数推荐 `--params-file` 或 `--stdin`。
 
 ## 已实现
 

@@ -26,7 +26,7 @@ test('HTTP bridge enforces auth/schema and exposes health/SSE/audit', async () =
     workspaceRevision: 0,
     activeTableId: 'table_1',
     projectName: 'HTTP Test',
-    tables: [{ id: 'table_1', name: 'Master', data: { fields: [], records: [] } }]
+    tables: [{ id: 'table_1', name: 'Master', data: { fields: [{ id: 'layout_field', name: 'Layout', type: 'text' }], records: [] } }]
   };
   const fakeWindow = {
     isDestroyed: () => false,
@@ -67,6 +67,20 @@ test('HTTP bridge enforces auth/schema and exposes health/SSE/audit', async () =
     }).then(response => response.json());
     assert.equal(valid.ok, true);
     assert.equal(valid.data.phase, 'phase4.7');
+
+    for (const [action, params] of [
+      ['field.set_hidden', { tableId: 'table_1', fieldIds: ['layout_field'], hidden: true }],
+      ['field.freeze_to', { tableId: 'table_1', fieldId: 'layout_field' }],
+      ['field.set_individual_frozen', { tableId: 'table_1', fieldIds: ['layout_field'], frozen: true }]
+    ]) {
+      const result = await fetch(`${baseUrl}/v0.1/actions`, {
+        method: 'POST', headers, body: JSON.stringify({ version: '0.1', action, params })
+      }).then(response => response.json());
+      assert.equal(result.ok, true, JSON.stringify(result));
+    }
+    assert.equal(snapshot.tables[0].data.fields[0].hidden, true);
+    assert.equal(snapshot.tables[0].data.frozenColId, 'layout_field');
+    assert.deepEqual(snapshot.tables[0].data.individualFrozenColIds, ['layout_field']);
 
     const described = await fetch(`${baseUrl}/v0.1/actions`, {
       method: 'POST', headers, body: JSON.stringify({ version: '0.1', action: 'system.describe_action', params: { action: 'media.move' } })

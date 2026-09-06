@@ -30,13 +30,70 @@ const base = {
   }]
 };
 
+test('column layout actions preserve records and independent freeze modes with dryRun and replay', () => {
+  const ws = createInMemoryWorkspace(base);
+  const before = ws.getSnapshot();
+  const hide = request('field.set_hidden', { tableId: 'table_1', fieldIds: ['fld_text'], hidden: true });
+  assert.equal(ws.execute({ ...hide, dryRun: true }).ok, true);
+  assert.deepEqual(ws.getSnapshot(), before);
+  const first = ws.execute({ ...hide, idempotencyKey: 'hide-once' });
+  assert.equal(first.ok, true);
+  assert.ok(first.undoToken);
+  assert.equal(ws.execute({ ...hide, idempotencyKey: 'hide-once' }).data.idempotentReplay, true);
+  assert.equal(ws.execute(request('field.freeze_to', { tableId: 'table_1', fieldId: 'fld_status' })).ok, true);
+  const individual = request('field.set_individual_frozen', { tableId: 'table_1', fieldIds: ['fld_text'], frozen: true });
+  assert.equal(ws.execute(individual).ok, true);
+  assert.equal(ws.execute(individual).undoToken, null);
+  let schema = ws.execute(request('table.get_schema', { tableId: 'table_1' })).data;
+  assert.equal(schema.fields[0].hidden, true);
+  assert.deepEqual(schema.columnLayout, { frozenColId: 'fld_status', individualFrozenColIds: ['fld_text'] });
+  ws.execute(request('field.freeze_to', { tableId: 'table_1', fieldId: null }));
+  schema = ws.execute(request('table.get_schema', { tableId: 'table_1' })).data;
+  assert.deepEqual(schema.columnLayout, { frozenColId: null, individualFrozenColIds: ['fld_text'] });
+  ws.execute(request('field.set_individual_frozen', { tableId: 'table_1', fieldIds: ['fld_text'], frozen: false }));
+  ws.execute(request('field.set_hidden', { tableId: 'table_1', fieldIds: ['fld_text'], hidden: false }));
+  assert.deepEqual(ws.getSnapshot().tables[0].data.records, before.tables[0].data.records);
+  assert.deepEqual(ws.getSnapshot().tables[0].data.fields.map(f => f.id), before.tables[0].data.fields.map(f => f.id));
+});
+
+test('invalid column layout requests fail atomically and revisions protect concurrent edits', () => {
+  const ws = createInMemoryWorkspace(base);
+  for (const req of [
+    request('field.set_hidden', { tableId: 'table_1', fieldIds: ['fld_text', 'missing'], hidden: true }),
+    request('field.set_hidden', { tableId: 'table_1', fieldIds: [], hidden: true }),
+    request('field.set_hidden', { tableId: 'table_1', fieldIds: ['fld_text'], hidden: 'true' }),
+    request('field.set_individual_frozen', { tableId: 'table_1', fieldIds: ['fld_text', 'fld_text'], frozen: true }),
+    request('field.freeze_to', { tableId: 'table_1' }),
+    request('field.freeze_to', { tableId: 'table_1', fieldId: 'missing' })
+  ]) {
+    const before = ws.getSnapshot();
+    assert.equal(ws.execute(req).ok, false);
+    assert.deepEqual(ws.getSnapshot(), before);
+  }
+  const revision = ws.getSnapshot().workspaceRevision;
+  ws.execute(request('field.freeze_to', { tableId: 'table_1', fieldId: 'fld_text' }));
+  const before = ws.getSnapshot();
+  assert.equal(ws.execute(request('field.freeze_to', { tableId: 'table_1', fieldId: null }, { expectedRevision: revision })).error.code, 'STALE_WORKSPACE');
+  assert.deepEqual(ws.getSnapshot(), before);
+});
+
+test('column layout actions have strict generated HTTP schemas', () => {
+  const schema = JSON.parse(fs.readFileSync(new URL('./table_action_api_v0.1.schema.json', import.meta.url), 'utf8'));
+  const validate = new Ajv({ strict: false }).compile(schema);
+  assert.equal(validate(request('field.set_hidden', { tableId: 'table_1', fieldIds: ['fld_text'], hidden: true })), true);
+  assert.equal(validate(request('field.freeze_to', { tableId: 'table_1', fieldId: null })), true);
+  assert.equal(validate(request('field.set_individual_frozen', { tableId: 'table_1', fieldIds: ['fld_text'], frozen: false })), true);
+  assert.equal(validate(request('field.set_hidden', { tableId: 'table_1', fieldIds: ['fld_text'], hidden: 'true' })), false);
+  assert.equal(validate(request('field.freeze_to', { tableId: 'table_1' })), false);
+});
+
 test('read capabilities and tables', () => {
   const ws = createInMemoryWorkspace(base);
   const caps = ws.execute(request('system.get_capabilities'));
   assert.equal(caps.ok, true);
   assert.equal(caps.data.phase, 'phase4.7');
-  assert.equal(caps.data.appVersion, '2.6.6');
-  assert.equal(caps.data.actionDefinitionVersion, '1.1');
+  assert.equal(caps.data.appVersion, '2.6.8');
+  assert.equal(caps.data.actionDefinitionVersion, '1.2');
   assert.equal(caps.data.detail, 'summary');
   assert.deepEqual(Object.keys(caps.data.implementedActions[0]), ['name']);
   assert.equal(caps.data.features.actionDefinitions, true);

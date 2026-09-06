@@ -1,4 +1,4 @@
-// AI Table Studio v2.6.6 Table Action API v0.1 - Phase 4.7 stale-job safety and compact discovery
+// AI Table Studio v2.6.7 Table Action API v0.1 - Phase 4.7
 // Pure ESM module: no React/Electron dependency. It receives a workspace snapshot,
 // validates an action, and returns the next snapshot. The renderer decides when to commit.
 
@@ -1036,6 +1036,7 @@ function applyAction(request, workspace) {
       response: success(request, {
         table: { id: result.table.id, name: result.table.name, icon: result.table.icon || null },
         fields: clone(result.table.data.fields),
+        columnLayout: { frozenColId: result.table.data.frozenColId || null, individualFrozenColIds: clone(result.table.data.individualFrozenColIds || []) },
         stats: { records: result.table.data.records.length }
       })
     };
@@ -1971,6 +1972,40 @@ function applyAction(request, workspace) {
     return {
       nextWorkspace: { ...workspace, tables: nextTables },
       response: success(request, { field: clone(fieldById(nextTable, fieldId)), normalizedConfig: clone(request.params.config) })
+    };
+  }
+
+  if (['field.set_hidden', 'field.freeze_to', 'field.set_individual_frozen'].includes(action)) {
+    const params = request.params;
+    const fieldIds = action === 'field.freeze_to' ? (params.fieldId === null ? [] : [params.fieldId]) : params.fieldIds;
+    if (!Array.isArray(fieldIds) || (action !== 'field.freeze_to' && fieldIds.length === 0) || fieldIds.length > 500 || new Set(fieldIds).size !== fieldIds.length || fieldIds.some(id => typeof id !== 'string' || !id)) {
+      return { response: failure(request, 'INVALID_REQUEST', 'Provide valid unique field IDs') };
+    }
+    if ((action === 'field.set_hidden' && typeof params.hidden !== 'boolean') || (action === 'field.set_individual_frozen' && typeof params.frozen !== 'boolean')) {
+      return { response: failure(request, 'INVALID_REQUEST', 'State must be an explicit boolean') };
+    }
+    const missing = fieldIds.find(id => !fieldById(table, id));
+    if (missing) return { response: failure(request, 'FIELD_NOT_FOUND', `Field not found: ${missing}`) };
+    const data = { ...table.data };
+    if (action === 'field.set_hidden') {
+      data.fields = data.fields.map(field => fieldIds.includes(field.id) ? { ...field, hidden: params.hidden } : field);
+    } else if (action === 'field.freeze_to') {
+      data.frozenColId = params.fieldId;
+    } else {
+      const frozen = new Set(data.individualFrozenColIds || []);
+      fieldIds.forEach(id => params.frozen ? frozen.add(id) : frozen.delete(id));
+      data.individualFrozenColIds = [...frozen];
+    }
+    const nextTables = [...workspace.tables];
+    nextTables[tableIndex] = { ...table, data };
+    return {
+      nextWorkspace: { ...workspace, tables: nextTables },
+      response: success(request, {
+        tableId: table.id,
+        hiddenFieldIds: data.fields.filter(field => field.hidden).map(field => field.id),
+        frozenColId: data.frozenColId || null,
+        individualFrozenColIds: clone(data.individualFrozenColIds || [])
+      }, effects({ columnLayoutUpdated: 1 }))
     };
   }
 

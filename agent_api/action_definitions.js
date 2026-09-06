@@ -1,11 +1,11 @@
-// AI Table Studio v2.6.6 / Table Action API Phase 4.7
+// AI Table Studio v2.6.8 / Table Action API Phase 4.7
 // Single source of truth for action metadata, parameter schemas, CLI help and
 // the generated HTTP JSON Schema artifact.
 
 export const TABLE_ACTION_API_VERSION = '0.1';
 export const TABLE_ACTION_API_PHASE = 'phase4.7';
-export const TABLE_ACTION_APP_VERSION = '2.6.6';
-export const ACTION_DEFINITION_VERSION = '1.1';
+export const TABLE_ACTION_APP_VERSION = '2.6.8';
+export const ACTION_DEFINITION_VERSION = '1.2';
 
 const id = { type: 'string', minLength: 1 };
 const text = { type: 'string' };
@@ -102,6 +102,9 @@ export const ACTION_DEFINITIONS = {
   'table.reorder': writeSchema('调整子表顺序', object({ tableId: id, toIndex: nonNegativeInteger }, ['tableId', 'toIndex'])),
 
   'view.get': read('读取 Grid 或 Gallery 视图配置', object({ tableId: id, viewMode: { type: 'string', enum: ['grid', 'gallery'] } })),
+  'field.set_hidden': writeData('隐藏或显示指定列（不删除数据）', object({ tableId: id, fieldIds: ids(), hidden: bool }, ['tableId', 'fieldIds', 'hidden'])),
+  'field.freeze_to': writeData('冻结至指定列；fieldId=null 取消连续冻结，保留单独冻结', object({ tableId: id, fieldId: { type: ['string', 'null'], minLength: 1 } }, ['tableId', 'fieldId'])),
+  'field.set_individual_frozen': writeData('设置指定列的单独冻结状态，保留连续冻结', object({ tableId: id, fieldIds: ids(), frozen: bool }, ['tableId', 'fieldIds', 'frozen'])),
   'view.update': writeData('更新筛选、排序、分组、行高或画廊设置', object({
     tableId: id,
     viewMode: { type: 'string', enum: ['grid', 'gallery'] },

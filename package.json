@@ -1,7 +1,7 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "2.6.6",
+  "version": "2.6.8",
   "type": "module",
   "main": "main.js",
   "homepage": "./",
@@ -20,6 +20,8 @@
     "dist": "vite build && electron-builder",
     "test:generation-preview": "tsx --test tests/generation_preview_policy.test.ts",
     "test:ui-workflows": "tsx --test tests/filtered_row_insertion.test.ts tests/review_media.test.ts",
+    "test:thumbnails": "node --test tests/thumbnail_scheduler.test.mjs",
+    "benchmark:thumbnails": "electron scripts/benchmark_thumbnails.cjs",
     "generate:action-schema": "node scripts/generate_table_action_schema.mjs",
     "test:action-api": "node --test agent_api/table_action_api.test.mjs agent_api/table_action_server.test.mjs scripts/table_action_client.test.mjs tests/network_job_cleanup.test.mjs && npm run test:generation-preview",
     "action-api:client": "node scripts/table_action_client.mjs"
@@ -75,6 +77,7 @@
     "files": [
       "dist/**/*",
       "main.js",
+      "thumbnail_scheduler.js",
       "preload.js",
       "network_job_store.js",
       "network_polling.js",

@@ -15,7 +15,7 @@ test('generated JSON Schema stays identical to the Action Definition source', ()
   const generated = JSON.parse(fs.readFileSync(new URL('../agent_api/table_action_api_v0.1.schema.json', import.meta.url), 'utf8'));
   assert.deepEqual(generated, buildActionRequestSchema());
   assert.equal(generated['x-phase'], 'phase4.7');
-  assert.equal(generated['x-app-version'], '2.6.6');
+  assert.equal(generated['x-app-version'], '2.6.8');
   assert.equal(generated.allOf.length, IMPLEMENTED_ACTIONS.length);
 });
 
