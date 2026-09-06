@@ -75,6 +75,9 @@ v2.6.2  临时参考会话固定 / 同列跨行沿用参考节点 / sessionStora
 v2.6.3  引用渲染换行修复 / OSS SHA256 精确复用 / 标签新建误匹配修复
 v2.6.4  Table Action API v0.1 / Agent 接管 / Revision·事务·幂等 / Generation Preview / Job·SSE
 v2.6.5  Action API phase4.7 / Action Definition 1.1 / 82 Actions / Job 精简查询与失联清理 / CLI 增强
+v2.6.6  筛选·分组锚点插行 / 新行条件预填 / 图片审阅 Photoshop 联动与缩略图刷新
+v2.6.7  侧边栏标题显示优化 / 通知精简 / 隐藏列·连续冻结·单独冻结 Action
+v2.6.8  媒体缩略图按可视区域加载 / 并发与去重调度 / 表格可视区域刷新 / 子表标题优化
 ```
 
 ### v2.4.x → v2.5.x
