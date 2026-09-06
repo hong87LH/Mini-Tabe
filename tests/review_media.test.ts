@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reviewLocalPath, isReviewImage, intersectsReviewViewport, refreshReviewImages, loadFreshReviewThumbnail, SYSTEM_THUMBNAIL_SIZE } from '../src/lib/reviewMedia';
+import { reviewLocalPath, isReviewImage, intersectsReviewViewport, refreshReviewImages, loadFreshReviewThumbnail, restoreCropViewport, SYSTEM_THUMBNAIL_SIZE } from '../src/lib/reviewMedia';
 
 test('Photoshop uses decoded local originals, not preview/blob URLs', () => {
   assert.equal(reviewLocalPath('file:///F:/素材/a%20b.png'), 'F:/素材/a b.png');
@@ -14,6 +14,36 @@ test('media classification excludes video/audio even in attachment columns', () 
   assert.equal(isReviewImage('https://example.com/id', 'image/png'), true);
   for (const path of ['F:/a.mp4', 'F:/a.wav', 'https://example.com/v.webm?token=x']) assert.equal(isReviewImage(path), false);
   assert.equal(isReviewImage('unknown', 'video'), false);
+});
+test('saved crop viewport preserves the same source rectangle when preview size changes', () => {
+  const crop = {
+    scale: 3.780481908411403,
+    x: 58.57939810363517,
+    y: 1410.9594381999266,
+    imgW: 298.535719535556,
+    imgH: 941.6250290203379,
+    maskW: 845,
+    maskH: 475.3125
+  };
+  const sourceRect = (value: typeof crop) => ({
+    x: (value.imgW * value.scale / 2 - value.x - value.maskW / 2) / (value.imgW * value.scale),
+    y: (value.imgH * value.scale / 2 - value.y - value.maskH / 2) / (value.imgH * value.scale),
+    width: value.maskW / (value.imgW * value.scale),
+    height: value.maskH / (value.imgH * value.scale)
+  });
+  const currentImgW = 360;
+  const currentImgH = currentImgW * 3785 / 1200;
+  const restored = restoreCropViewport(crop, currentImgW, currentImgH, crop.maskW, crop.maskH);
+  const reopened = sourceRect({ ...crop, ...restored, imgW: currentImgW, imgH: currentImgH });
+  const saved = sourceRect(crop);
+  for (const key of ['x', 'y', 'width', 'height'] as const) assert.ok(Math.abs(reopened[key] - saved[key]) < 5e-6, `${key} drifted`);
+});
+test('crop viewport restoration is unchanged at the original preview size', () => {
+  const crop = { scale: 2.5, x: -120, y: 85, imgW: 400, imgH: 600, maskW: 845, maskH: 475.3125 };
+  const restored = restoreCropViewport(crop, crop.imgW, crop.imgH, crop.maskW, crop.maskH);
+  assert.ok(Math.abs(restored.scale - crop.scale) < 1e-12);
+  assert.ok(Math.abs(restored.x - crop.x) < 1e-12);
+  assert.ok(Math.abs(restored.y - crop.y) < 1e-12);
 });
 test('visible area selection excludes offscreen, folded and zero-size thumbnails', () => {
   const viewport = { top: 100, bottom: 700, left: 0, right: 1000 };

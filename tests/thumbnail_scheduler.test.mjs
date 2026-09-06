@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createThumbnailScheduler, thumbnailKey } from '../thumbnail_scheduler.js';
+import { createThumbnailScheduler, normalizeThumbnailPath, thumbnailKey } from '../thumbnail_scheduler.js';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
@@ -108,6 +108,13 @@ test('failure releases slots and subsequent refresh starts a fresh request', asy
 test('path separators share a key but different sizes stay independent', () => {
   assert.equal(thumbnailKey('\\\\nas\\share\\x.png', { width:150,height:150 }), thumbnailKey('//nas/share/x.png', { width:150,height:150 }));
   assert.notEqual(thumbnailKey('x', { width:150,height:150 }), thumbnailKey('x', { width:400,height:400 }));
+});
+
+test('Windows drive paths are normalized before native thumbnail generation', () => {
+  assert.equal(normalizeThumbnailPath('F:/images/frame.png', 'win32'), 'F:\\images\\frame.png');
+  assert.equal(normalizeThumbnailPath('F:\\images\\frame.png', 'win32'), 'F:\\images\\frame.png');
+  assert.equal(normalizeThumbnailPath('//nas/share/frame.png', 'win32'), '//nas/share/frame.png');
+  assert.equal(normalizeThumbnailPath('/mnt/images/frame.png', 'linux'), '/mnt/images/frame.png');
 });
 
 test('visible thumbnail selection respects horizontal and vertical clipping', () => {

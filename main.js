@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { createThumbnailScheduler, thumbnailKey } from './thumbnail_scheduler.js';
+import { createThumbnailScheduler, normalizeThumbnailPath, thumbnailKey } from './thumbnail_scheduler.js';
 const nativeThumbnailScheduler = createThumbnailScheduler(3);
 let thumbnailRefreshSequence = 0;
 // main.js （ES Module 版本）
@@ -428,13 +428,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('thumbnail-load-stats', () => nativeThumbnailScheduler.stats());
   ipcMain.handle('get-thumbnail', async (event, filePath, size = { width: 150, height: 150 }, options = {}) => nativeThumbnailScheduler.request(options.fresh === true ? `refresh:${++thumbnailRefreshSequence}` : thumbnailKey(filePath, size), async () => {
     try {
-      try { await fs.promises.access(filePath); } catch { return null; }
-      if (/\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(filePath)) {
-        const artwork = extractEmbeddedAudioArtwork(filePath);
+      const sourcePath = normalizeThumbnailPath(filePath);
+      try { await fs.promises.access(sourcePath); } catch { return null; }
+      if (/\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(sourcePath)) {
+        const artwork = extractEmbeddedAudioArtwork(sourcePath);
         return artwork ? `data:${artwork.mime};base64,${artwork.buffer.toString('base64')}` : null;
       }
       // 调用操作系统底层的缩略图服务！速度极快且省内存。
-      const thumbnail = await nativeImage.createThumbnailFromPath(filePath, size);
+      const thumbnail = await nativeImage.createThumbnailFromPath(sourcePath, size);
       if(thumbnail && !thumbnail.isEmpty()) {
         return thumbnail.toDataURL(); // 返回 base64 给前端做渲染，完美规避读取完整10M大图
       }

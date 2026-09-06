@@ -4,7 +4,7 @@ import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment, Media
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
 import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste, Maximize2, RefreshCw } from 'lucide-react';
-import { reviewLocalPath, isReviewImage, intersectsReviewViewport, isThumbnailVisible, refreshReviewImages, loadFreshReviewThumbnail, SYSTEM_THUMBNAIL_SIZE, requestSystemThumbnail } from '../lib/reviewMedia';
+import { reviewLocalPath, isReviewImage, intersectsReviewViewport, isThumbnailVisible, refreshReviewImages, loadFreshReviewThumbnail, restoreCropViewport, SYSTEM_THUMBNAIL_SIZE, requestSystemThumbnail } from '../lib/reviewMedia';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -449,11 +449,30 @@ const ZoomableImage = ({
   const trimDataRef = useRef<MediaTrimData | null>(item.trimData || null);
   const [trimUiMode, setTrimUiMode] = useState<'manual' | 'preset'>(() => item.trimData?.mode === 'preset' ? 'preset' : 'manual');
 
+  const restoreSavedCropView = React.useCallback((crop: any, image = imgRef.current) => {
+    if (!crop || !image || image.clientWidth <= 0 || image.clientHeight <= 0) return;
+    const ratio = Number(crop.ratio) || 1;
+    const maskW = ratio <= 1 ? 845 * ratio : 845;
+    const maskH = ratio > 1 ? 845 / ratio : 845;
+    const restored = restoreCropViewport(crop, image.clientWidth, image.clientHeight, maskW, maskH);
+    setScale(restored.scale);
+    setPos({ x: restored.x, y: restored.y });
+  }, []);
+
   useEffect(() => {
     setImageLoaded(false);
     setMediaDurationMs(0);
     setMediaCurrentMs(0);
   }, [src]);
+
+  useEffect(() => {
+    if (isVideo || isAudio || !item.cropData || typeof ResizeObserver === 'undefined') return;
+    const image = imgRef.current;
+    if (!image) return;
+    const observer = new ResizeObserver(() => restoreSavedCropView(item.cropData, image));
+    observer.observe(image);
+    return () => observer.disconnect();
+  }, [src, itemInstanceKey, item.cropData, isVideo, isAudio, restoreSavedCropView]);
 
   useEffect(() => {
     // v2.6.1 rev5: always rehydrate the exact saved A/B metadata when an existing
@@ -820,8 +839,7 @@ const ZoomableImage = ({
   useEffect(() => {
     setActiveAnnotationId(null);
     if (item.cropData) {
-        setScale(item.cropData.scale || 1);
-        setPos({ x: item.cropData.x || 0, y: item.cropData.y || 0 });
+        restoreSavedCropView(item.cropData);
         setCropRatio(item.cropData.ratio || 1);
         setIsCropMode(true);
         setIsOutpaintMode(item.cropData.isOutpaint || false);
@@ -829,7 +847,7 @@ const ZoomableImage = ({
         setIsCropMode(false);
         setIsOutpaintMode(false);
     }
-  }, [item.url, item.mappedUrl, itemInstanceKey]);
+  }, [item.url, item.mappedUrl, itemInstanceKey, restoreSavedCropView]);
 
   const applyOutpaintTopStrategy = (ratio: number) => {
     if (!imgRef.current) return;
@@ -1435,7 +1453,10 @@ const ZoomableImage = ({
              src={src} 
              className="max-w-[90vw] max-h-[90vh] object-contain pointer-events-auto" 
              draggable={false} 
-             onLoad={() => setImageLoaded(true)}
+             onLoad={(event) => {
+               setImageLoaded(true);
+               restoreSavedCropView(item.cropData, event.currentTarget);
+             }}
              onDoubleClick={(e) => {
                 e.stopPropagation();
                 handleImageClick(e);

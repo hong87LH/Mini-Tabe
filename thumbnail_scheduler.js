@@ -46,3 +46,11 @@ export function createThumbnailScheduler(limit = 3) {
 export function thumbnailKey(path, size) {
   return JSON.stringify([String(path).replace(/\\/g, '/'), size.width, size.height]);
 }
+
+export function normalizeThumbnailPath(filePath, platform = typeof process !== 'undefined' ? process.platform : '') {
+  const value = String(filePath || '');
+  if (platform === 'win32' && /^[a-z]:\//i.test(value)) {
+    return value.replace(/\//g, '\\');
+  }
+  return value;
+}

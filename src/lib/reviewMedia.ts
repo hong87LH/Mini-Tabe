@@ -28,6 +28,44 @@ export function isReviewImage(path: string, type?: string): boolean {
   return type === 'image' || /^image\//i.test(type || '') || /\.(png|jpe?g|webp|gif|bmp|tiff?|avif|heic|psd)([?#]|$)/i.test(path) || /^(data:image\/|https?:\/\/|blob:|local-img:\/\/)/i.test(path);
 }
 
+export function restoreCropViewport(
+  crop: any,
+  currentImgW: number,
+  currentImgH: number,
+  currentMaskW: number,
+  currentMaskH: number
+) {
+  const fallback = {
+    scale: Number(crop?.scale) || 1,
+    x: Number(crop?.x) || 0,
+    y: Number(crop?.y) || 0
+  };
+  const savedImgW = Number(crop?.imgW);
+  const savedImgH = Number(crop?.imgH);
+  const savedMaskW = Number(crop?.maskW);
+  const savedMaskH = Number(crop?.maskH);
+  const savedScale = Number(crop?.scale);
+  const dimensions = [savedImgW, savedImgH, savedMaskW, savedMaskH, savedScale, currentImgW, currentImgH, currentMaskW, currentMaskH];
+  if (!dimensions.every(value => Number.isFinite(value) && value > 0)) return fallback;
+
+  const savedScaledW = savedImgW * savedScale;
+  const savedScaledH = savedImgH * savedScale;
+  const cropLeftRatio = (savedScaledW / 2 - fallback.x - savedMaskW / 2) / savedScaledW;
+  const cropTopRatio = (savedScaledH / 2 - fallback.y - savedMaskH / 2) / savedScaledH;
+  const cropWidthRatio = savedMaskW / savedScaledW;
+  const cropHeightRatio = savedMaskH / savedScaledH;
+  if (![cropLeftRatio, cropTopRatio, cropWidthRatio, cropHeightRatio].every(Number.isFinite) || cropWidthRatio <= 0 || cropHeightRatio <= 0) return fallback;
+
+  const scaleX = currentMaskW / (cropWidthRatio * currentImgW);
+  const scaleY = currentMaskH / (cropHeightRatio * currentImgH);
+  const scale = Math.abs(scaleX - scaleY) <= Math.max(scaleX, scaleY) * 0.01 ? (scaleX + scaleY) / 2 : scaleX;
+  return {
+    scale,
+    x: currentImgW * scale / 2 - currentMaskW / 2 - cropLeftRatio * currentImgW * scale,
+    y: currentImgH * scale / 2 - currentMaskH / 2 - cropTopRatio * currentImgH * scale
+  };
+}
+
 type Rect = { top: number; bottom: number; left: number; right: number };
 // Intersect with every scroll/clip ancestor, not just the browser viewport.
 export function isThumbnailVisible(element: Element, root: Element): boolean {
