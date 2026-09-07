@@ -1,10 +1,10 @@
-// AI Table Studio v2.6.8 / Table Action API Phase 4.7
+// AI Table Studio v2.7.0 / Table Action API Phase 4.7
 // Single source of truth for action metadata, parameter schemas, CLI help and
 // the generated HTTP JSON Schema artifact.
 
 export const TABLE_ACTION_API_VERSION = '0.1';
 export const TABLE_ACTION_API_PHASE = 'phase4.7';
-export const TABLE_ACTION_APP_VERSION = '2.6.8';
+export const TABLE_ACTION_APP_VERSION = '2.7.0';
 export const ACTION_DEFINITION_VERSION = '1.2';
 
 const id = { type: 'string', minLength: 1 };

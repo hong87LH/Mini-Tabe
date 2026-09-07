@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://hongs-ai-table.local/schema/table-action-api/0.1",
-  "title": "AI Table Studio 2.6.8 Table Action API v0.1 phase4.7",
+  "title": "AI Table Studio 2.7.0 Table Action API v0.1 phase4.7",
   "type": "object",
   "required": [
     "version",
@@ -4349,6 +4349,6 @@
     }
   ],
   "x-action-definition-version": "1.2",
-  "x-app-version": "2.6.8",
+  "x-app-version": "2.7.0",
   "x-phase": "phase4.7"
 }

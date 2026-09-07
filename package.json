@@ -1,7 +1,7 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "2.6.9",
+  "version": "2.7.0",
   "type": "module",
   "main": "main.js",
   "homepage": "./",
@@ -19,7 +19,7 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "dist": "vite build && electron-builder",
     "test:generation-preview": "tsx --test tests/generation_preview_policy.test.ts",
-    "test:ui-workflows": "tsx --test tests/filtered_row_insertion.test.ts tests/review_media.test.ts",
+    "test:ui-workflows": "tsx --test tests/filtered_row_insertion.test.ts tests/review_media.test.ts tests/network_job_reconciliation.test.ts",
     "test:thumbnails": "node --test tests/thumbnail_scheduler.test.mjs",
     "benchmark:thumbnails": "electron scripts/benchmark_thumbnails.cjs",
     "generate:action-schema": "node scripts/generate_table_action_schema.mjs",

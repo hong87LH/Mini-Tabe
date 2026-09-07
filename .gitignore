@@ -16,3 +16,6 @@ ffmpeg/**/*.7z
 ffmpeg/**/*.tar
 ffmpeg/**/*.gz
 .media-cache/
+
+# User-generated table exports
+*.csv

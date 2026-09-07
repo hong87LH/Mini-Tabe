@@ -1,3 +1,4 @@
+import { reconcileNetworkJobCells } from '../lib/networkJobReconciliation';
 import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment, MediaTrimData } from '../types';
@@ -1949,6 +1950,9 @@ const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }
     let isMounted = true;
     setFailed(false);
     
+    // Empty job placeholders are not image requests and must never retry.
+    if (typeof path !== 'string' || !path.trim()) { setSrc(''); setFailed(true); return; }
+
     // Check cache for this specific path first
     const cached = thumbnailCache.get(path);
     if (cached) {
@@ -3510,6 +3514,16 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
   const setPreviewImage = (path: string | null, allItems: any[] = [], onUpdate?: (newItems: any[]) => void, sourceRecordId?: string, preferredIndex?: number) => {
       if (!path) { setPreviewImageState(null); return; }
       if (allItems.length === 0) allItems = [{ url: path }];
+      const sourceItems = allItems;
+      const isMedia = (item: any) => !isNetworkJobCellItem(item) && !!(typeof item === 'string' ? item : item?.url);
+      const pendingItems = sourceItems.filter(item => !isMedia(item));
+      if (preferredIndex !== undefined) preferredIndex = sourceItems.slice(0, preferredIndex).filter(isMedia).length;
+      allItems = sourceItems.filter(isMedia);
+      if (allItems.length === 0) return;
+      if (onUpdate && pendingItems.length) {
+        const update = onUpdate;
+        onUpdate = items => update([...items, ...pendingItems]);
+      }
       
       const defaultSettings = gallerySettings || gallerySettingsCache.get(tableId) || { refFieldIds: [] };
       const refFieldIds = defaultSettings.refFieldIds || [];
@@ -3639,66 +3653,18 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
     const w = window as any;
     if (!w.electronAPI?.listNetworkJobs) return;
     
-    // Find all networkJob placeholders in the current grid data
-    const placeholderJobs = new Map<string, {recordId: string, fieldId: string, values: any[]}>();
-    
-    data.records.forEach(r => {
-        data.fields.forEach(f => {
-            if (f.type !== 'aiImage' && f.type !== 'aiVideo') return;
-            const vals = Array.isArray(r[f.id]) ? r[f.id] : (r[f.id] ? [r[f.id]] : []);
-            vals.forEach(v => {
-                if (v && v.type === 'networkJob' && v.jobId) {
-                    if (!placeholderJobs.has(v.jobId)) {
-                        placeholderJobs.set(v.jobId, { recordId: r.id, fieldId: f.id, values: [...vals] });
-                    }
-                }
-            });
-        });
-    });
-    
-    if (placeholderJobs.size === 0) return;
-    
+    if (!data.records.some(record => data.fields.some(field => {
+      const value = record[field.id];
+      return (Array.isArray(value) ? value : [value]).some(isNetworkJobCellItem);
+    }))) return;
+    let cancelled = false;
     w.electronAPI.listNetworkJobs().then((jobs: any[]) => {
-        const updatesToApply = new Map<string, any[]>();
-        let hasChanges = false;
-        
-        jobs.forEach(job => {
-            if ((job.phase === 'completed' || job.phase === 'failed') && placeholderJobs.has(job.localJobId)) {
-                const info = placeholderJobs.get(job.localJobId)!;
-                const existingVals = info.values;
-                const newVals = existingVals.filter(v => !(v && v.type === 'networkJob' && v.jobId === job.localJobId));
-                
-                if (job.phase === 'completed' && job.localPath) {
-                    const storedPath = normalizeLocalPathForStorage(job.localPath);
-                    const targetKey = normalizeAttachmentKey(storedPath);
-                    
-                    const alreadyExists = newVals.some(value => {
-                        const itemUrl = typeof value === 'string' ? value : value?.url;
-                        return normalizeAttachmentKey(itemUrl) === targetKey;
-                    });
-                    
-                    if (storedPath && !alreadyExists) {
-                        newVals.push(storedPath);
-                    }
-                }
-                
-                info.values = newVals;
-                const key = `${info.recordId}-${info.fieldId}`;
-                updatesToApply.set(key, info.values);
-                hasChanges = true;
-            }
-        });
-        
-        if (hasChanges && onUpdateRecordsBatch) {
-            const finalUpdates = Array.from(updatesToApply.entries()).map(([key, value]) => {
-                const [recordId, fieldId] = key.split('-');
-                return { recordId, fieldId, value };
-            });
-            onUpdateRecordsBatch(finalUpdates);
-        }
+      if (cancelled) return;
+      const updates = reconcileNetworkJobCells(data.records, data.fields, jobs, normalizeLocalPathForStorage);
+      if (updates.length && onUpdateRecordsBatch) onUpdateRecordsBatch(updates);
     }).catch((err: any) => console.error("Reconciliation error:", err));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tableId]);
+    return () => { cancelled = true; };
+  }, [tableId, data.records, data.fields, onUpdateRecordsBatch]);
 
   useEffect(() => {
     const w = window as any;
@@ -9877,6 +9843,15 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
       </div>
       <div className="flex flex-wrap gap-2 w-[340px]">
         {fileItems.map((item, index) => {
+           if (isNetworkJobCellItem(item) || !item.url) {
+             return (
+               <div key={item.jobId || index} className="relative group/attachment w-[108px] h-[108px] border rounded bg-blue-50 flex flex-col items-center justify-center gap-2 text-blue-500" title={item.jobId ? 'Job ID: ' + item.jobId : '附件路径为空'}>
+                 <Sparkles className="w-5 h-5" />
+                 <span className="text-xs">{isNetworkJobCellItem(item) ? '生成任务待回填' : '空附件'}</span>
+                 <button className="absolute top-1 right-1 p-1 rounded bg-white text-gray-500 hover:text-red-500 opacity-0 group-hover/attachment:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={(e) => { e.stopPropagation(); handleRemove(index); }} title="移除占位符（不取消后台任务）"><Trash2 className="w-3.5 h-3.5" /></button>
+               </div>
+             );
+           }
            let path = item.url;
            let fullUrl = fullImageBlobCache.get(path) || (path.startsWith('/') || path.match(/^[a-zA-Z]:[\\/]/) || path.startsWith('\\\\') ? `file://${path}` : path);
            
