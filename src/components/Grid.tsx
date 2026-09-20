@@ -3501,7 +3501,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
   const [insertColCount, setInsertColCount] = useState(1);
   const [showClearAnnotationsConfirm, setShowClearAnnotationsConfirm] = useState(false);
   const [showBatchDownloadDialog, setShowBatchDownloadDialog] = useState<Set<string> | null>(null);
-  const [cutBox, setCutBox] = useState<{ minR: number, maxR: number, minC: number, maxC: number } | null>(null);
+  const [cutBox, setCutBox] = useState<{ minR: number, maxR: number, minC: number, maxC: number; cutId: string; cells: { recordId: string; fieldId: string; r: number; c: number; value: any }[] } | null>(null);
   
   const [draggedColId, setDraggedColId] = useState<string | null>(null);
   const [dragOverColId, setDragOverColId] = useState<string | null>(null);
@@ -3720,7 +3720,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
       return false;
     };
 
-    const handleCopy = (e: ClipboardEvent) => {
+    const handleCopy = (e: ClipboardEvent, isCut = false) => {
       // Allow natural copy inside inputs
       if (isNativeEditableTarget(e.target)) return;
       if (!selectionBox && extraSelectedCells.length === 0) return;
@@ -3744,11 +3744,16 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
 
       const rows: string[] = [];
       const rawRows: any[][] = [];
+      const selectedMask: boolean[][] = [];
+      const cutId = isCut ? `${Date.now()}-${Math.random()}` : undefined;
+      const sourceCells: { recordId: string; fieldId: string; r: number; c: number; value: any }[] = [];
       
       for (let r = minR; r <= maxR; r++) {
           const colVals: string[] = [];
           const rawColVals: any[] = [];
+          const mask: boolean[] = [];
           for (let c = minC; c <= maxC; c++) {
+              mask.push(allSelectedCells.has(`${r},${c}`));
               if (allSelectedCells.has(`${r},${c}`)) {
                   const record = data.records[r];
                   const field = visibleFields[c];
@@ -3757,6 +3762,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                   // This is the proven v2.5.10 image-copy behavior: cropData survives unchanged.
                   // Audio/video trimData now follows the exact same rule automatically.
                   rawColVals.push(val);
+                  sourceCells.push({ recordId: record.id, fieldId: field.id, r: r - minR, c: c - minC, value: val });
 
                   if (field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') {
                      if (Array.isArray(val)) {
@@ -3778,7 +3784,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                   } else if (typeof val === 'object' && val !== null) {
                      val = JSON.stringify(val);
                   }
-                  colVals.push(encodeTSV(String(val || '')));
+                  colVals.push(encodeTSV(String(val ?? '')));
               } else {
                   colVals.push('');
                   rawColVals.push(null);
@@ -3786,12 +3792,13 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
           }
           rows.push(colVals.join('\t'));
           rawRows.push(rawColVals);
+          selectedMask.push(mask);
       }
 
       e.clipboardData?.setData('text/plain', rows.join('\n'));
-      e.clipboardData?.setData('application/x-bitable-copy', JSON.stringify({ rawRows }));
+      e.clipboardData?.setData('application/x-bitable-copy', JSON.stringify({ rawRows, selectedMask, cutId }));
       e.preventDefault();
-      if (cutBox) setCutBox(null);
+      setCutBox(isCut ? { minR, maxR, minC, maxC, cutId: cutId!, cells: JSON.parse(JSON.stringify(sourceCells)) } : null);
     };
 
     const handlePaste = (e: ClipboardEvent) => {
@@ -3802,6 +3809,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
       
       let rows: any[][] = [];
       let isRaw = false;
+      let pastedCutId: string | undefined;
+      let selectedMask: boolean[][] | undefined;
       
       const customDataStr = e.clipboardData?.getData('application/x-bitable-copy');
       if (customDataStr) {
@@ -3810,6 +3819,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
               if (parsed && parsed.rawRows) {
                   rows = parsed.rawRows;
                   isRaw = true;
+                  pastedCutId = parsed.cutId;
+                  selectedMask = parsed.selectedMask;
               }
           } catch (err) {}
       }
@@ -3861,7 +3872,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
       const minR = Math.min(...selectedArr.map(x => x.r));
       const minC = Math.min(...selectedArr.map(x => x.c));
 
-      const pasteCells: { rIdx: number, cIdx: number, val: any }[] = [];
+      const pasteCells: { rIdx: number, cIdx: number, val: any, sourceR: number, sourceC: number }[] = [];
       let newRecords: any[] = [];
       let neededRows = 0;
 
@@ -3869,7 +3880,10 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
           // Map to multiple selected cells with tiling relative to minR, minC
           for (const { r, c } of selectedArr) {
              const val = rows[(r - minR) % rows.length]?.[(c - minC) % (rows[0]?.length || 1)];
-             pasteCells.push({ rIdx: r, cIdx: c, val });
+             const sourceR = (r - minR) % rows.length;
+             const sourceC = (c - minC) % (rows[0]?.length || 1);
+             if (selectedMask?.[sourceR]?.[sourceC] === false) continue;
+             pasteCells.push({ rIdx: r, cIdx: c, val, sourceR, sourceC });
           }
       } else {
           neededRows = Math.max(0, minR + rows.length - data.records.length);
@@ -3883,7 +3897,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
              for (let j = 0; j < rows[i].length; j++) {
                 const cIdx = minC + j;
                 if (cIdx >= visibleFields.length) break;
-                pasteCells.push({ rIdx, cIdx, val: rows[i][j] });
+                if (selectedMask?.[i]?.[j] === false) continue;
+                pasteCells.push({ rIdx, cIdx, val: rows[i][j], sourceR: i, sourceC: j });
              }
           }
       }
@@ -3891,20 +3906,23 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
       const allRecords = [...data.records, ...newRecords];
       const batchUpdates = [];
 
-      for (const { rIdx, cIdx, val: rawVal } of pasteCells) {
+      const pastedSources = new Set<string>();
+      for (const { rIdx, cIdx, val: rawVal, sourceR, sourceC } of pasteCells) {
           if (rawVal === undefined) continue;
           
           const record = allRecords[rIdx];
           if (!record) continue; // safety check
           
           const field = visibleFields[cIdx];
+          if (!field) continue;
           let val = rawVal;
           
           if (field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') {
                 if (isRaw) {
-                   val = normalizeAttachmentItems(rawVal).map(item => 
-                     hydrateReviewProps(item, globalAttachmentPropsMap)
-                   );
+                   const items = Array.isArray(rawVal) ? rawVal : normalizeAttachmentItems(rawVal);
+                   val = items.flatMap(item => isNetworkJobCellItem(item) ? [item] : normalizeAttachmentItems([item]).map(media =>
+                     hydrateReviewProps(media, globalAttachmentPropsMap)
+                   ));
                } else {
                    let pathToAdd = val || '';
                    if (typeof pathToAdd === 'string' && pathToAdd) {
@@ -3925,9 +3943,9 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                    }
                }
           } else if (field.type === 'number') {
-             val = val ? Number(val) : null;
+             val = val === '' || val == null ? null : Number(val);
           } else if (field.type === 'checkbox') {
-             val = val === 'true' || val === '1';
+             val = val === true || val === 1 || val === 'true' || val === '1';
           } else if (!isRaw && field.type === 'singleSelect') {
              if (val && typeof val === 'string') {
                  const match = field.options?.find(o => o.name === val.trim() || o.id === val.trim());
@@ -3945,16 +3963,18 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
              }
           }
           batchUpdates.push({ recordId: record.id, fieldId: field.id, value: val });
+          pastedSources.add(`${sourceR},${sourceC}`);
       }
 
-      if (cutBox) {
-         for (let r = cutBox.minR; r <= cutBox.maxR; r++) {
-           for (let c = cutBox.minC; c <= cutBox.maxC; c++) {
-              // skip updating if the cut cell was just overwritten by the paste (optimisation)
-              // but for safety, clear it.
-              const field = visibleFields[c];
-              batchUpdates.push({ recordId: data.records[r].id, fieldId: field.id, value: field.type === 'multiSelect' ? [] : '' });
-           }
+      if (cutBox && pastedCutId === cutBox.cutId) {
+         for (const cell of cutBox.cells) {
+           // Only clear sources that were pasted, and never clear a destination in an overlapping move.
+           if (!pastedSources.has(`${cell.r},${cell.c}`)) continue;
+           if (batchUpdates.some(update => update.recordId === cell.recordId && update.fieldId === cell.fieldId)) continue;
+           const source = data.records.find(record => record.id === cell.recordId);
+           const field = data.fields.find(field => field.id === cell.fieldId);
+           if (!source || !field || JSON.stringify(source[cell.fieldId]) !== JSON.stringify(cell.value)) continue;
+           batchUpdates.push({ recordId: cell.recordId, fieldId: cell.fieldId, value: field.type === 'multiSelect' ? [] : '' });
          }
          setCutBox(null);
       }
@@ -4009,42 +4029,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
       }
     };
 
-    const handleCut = (e: ClipboardEvent) => {
-      if (isNativeEditableTarget(e.target)) return;
-      if (!selectionBox) return;
-
-      const rows: string[] = [];
-      for (let r = selectionBox.minR; r <= selectionBox.maxR; r++) {
-         const colVals: string[] = [];
-         const record = data.records[r];
-         for (let c = selectionBox.minC; c <= selectionBox.maxC; c++) {
-            const field = visibleFields[c];
-            let val = record[field.id];
-            if (field.type === 'attachment' || field.type === 'aiImage' || field.type === 'aiVideo') {
-               if (Array.isArray(val)) {
-                 val = val.map((a: any) => a.url || a).join(',');
-               } else if (typeof val === 'string') {
-                 val = val;
-               } else {
-                 val = '';
-               }
-            } else if (field.type === 'singleSelect' || field.type === 'multiSelect') {
-               if (val) {
-                 const valArray = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',').map(s=>s.trim()) : [val]);
-                 val = valArray.map(v => field.options?.find((o:any) => o.id === v)?.name || v).join(', ');
-               }
-            } else if (typeof val === 'object' && val !== null) {
-               val = JSON.stringify(val);
-            }
-            colVals.push(val || '');
-         }
-         rows.push(colVals.join('\t'));
-      }
-      e.clipboardData?.setData('text/plain', rows.join('\n'));
-      e.preventDefault();
-      
-      setCutBox(selectionBox);
-    };
+    const handleCut = (e: ClipboardEvent) => handleCopy(e, true);
 
     const handleEscapeKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && cutBox) {
@@ -4064,7 +4049,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
       window.removeEventListener('keydown', handleDeleteKey);
       window.removeEventListener('keydown', handleEscapeKey);
     };
-  }, [selectionBox, selectionStart, selectionEnd, data, activeCell, onDeleteField, cutBox, extraSelectedCells]);
+  }, [selectionBox, selectionStart, selectionEnd, data, activeCell, onDeleteField, cutBox, extraSelectedCells, visibleFields, globalAttachmentPropsMap, onPasteRecordsBatch, onUpdateRecordsBatch, onUpdateRecord]);
 
   const heightClass = {
     short: 'h-[40px]',
@@ -5630,7 +5615,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                     : false) || extraSelectedCells.some(c => c.r === index && c.c === colIdx);
 
                 const isCutBox = cutBox
-                    ? index >= cutBox.minR && index <= cutBox.maxR && colIdx >= cutBox.minC && colIdx <= cutBox.maxC 
+                    ? cutBox.cells.some(cell => cell.recordId === record.id && cell.fieldId === field.id)
                     : false;
 
                 return (
@@ -7457,9 +7442,7 @@ function HeaderCell({
                            {availableSkills
                              .filter((skill: any) => skill.enabled && !skill.duplicateDisplayName)
                              .map((skill: any) => (
-                               <option key={skill.relativePath || skill.displayName} value={skill.displayName}>
-                                 {skill.description || skill.source?.label || ''}
-                               </option>
+                               <option key={skill.relativePath || skill.displayName} value={skill.displayName} />
                              ))}
                          </datalist>
                          <select

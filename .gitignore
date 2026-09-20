@@ -19,3 +19,10 @@ ffmpeg/**/*.gz
 
 # User-generated table exports
 *.csv
+
+# Generated CSV backups
+*.csv.*
+
+# Optional locally installed skills; retain the existing bundled skill
+/skills/*/
+!/skills/h3-prompt-writing/
