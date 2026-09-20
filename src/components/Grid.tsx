@@ -294,7 +294,8 @@ const INTERNAL_MEDIA_CLIPBOARD_TYPE = 'web application/x-hongs-media-item';
 const clonePersistableMediaItem = (input: any) => {
   const source = typeof input === 'string' ? { url: input } : (input || {});
   const normalizedUrl = normalizeLocalPathForStorage(source.url || source.path || '');
-  const clean = stripPreviewOnlyProps({ ...source, url: normalizedUrl });
+  // A single-media copy drops only image crop; cell copy/cut uses rawRows unchanged.
+  const { cropData, ...clean } = stripPreviewOnlyProps({ ...source, url: normalizedUrl });
   try {
     return JSON.parse(JSON.stringify(clean));
   } catch {
@@ -315,7 +316,7 @@ const copyMediaToClipboardMagic = async (input: any) => {
   internalMediaClipboardPayload = payload;
 
   // External software receives only the path. Inside Hong's AI Table Studio we additionally
-  // keep the media-instance metadata (cropData / trimData) for a lossless attachment paste.
+  // retain trimData and review metadata, while deliberately excluding image cropData.
   try {
     const ClipboardItemCtor = (window as any).ClipboardItem;
     if (navigator.clipboard?.write && ClipboardItemCtor) {
@@ -3826,7 +3827,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
       }
 
       // A thumbnail-level Copy keeps text/plain as the path for other software, but the table
-      // can recover the exact media instance so image cropData and audio/video trimData survive.
+      // restores review/audio-video metadata without image cropData. Cell copies retain everything.
       let singleMediaPasteItem: any | null = null;
       const plainClipboardText = e.clipboardData?.getData('text/plain') || '';
       if (!isRaw && plainClipboardText) {

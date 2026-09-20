@@ -111,10 +111,11 @@ test('network and browser-only images are not downloaded or decoded by refresh',
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { normalizeAttachmentItems, hydrateReviewProps } from '../src/lib/attachmentUtils';
+import { normalizeAttachmentItems, hydrateReviewProps, stripPreviewOnlyProps } from '../src/lib/attachmentUtils';
 
 const gridSource = readFileSync(new URL('../src/components/Grid.tsx', import.meta.url), 'utf8');
 const clipboardSource = gridSource.slice(gridSource.indexOf('function encodeTSV('), gridSource.indexOf('type InternalMediaClipboardPayload'))
+  + gridSource.slice(gridSource.indexOf('const clonePersistableMediaItem ='), gridSource.indexOf('const copyMediaToClipboardMagic'))
   + gridSource.slice(gridSource.indexOf('    const isNativeEditableTarget ='), gridSource.indexOf("    window.addEventListener('copy', handleCopy)"))
   + ';globalThis.handlers = { handleCopy, handleCut, handlePaste };';
 const clipboardJs = ts.transpileModule(clipboardSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
@@ -123,8 +124,8 @@ function clipboardHarness(records: any[], fields: any[]) {
   const context: any = {
     data: { records, fields }, visibleFields: fields, selectionBox: { minR: 0, maxR: 0, minC: 0, maxC: 0 },
     selectionStart: { r: 0, c: 0 }, extraSelectedCells: [], cutBox: null, globalAttachmentPropsMap: new Map(),
-    normalizeAttachmentItems, hydrateReviewProps, internalMediaClipboardPayload: null, INTERNAL_MEDIA_CLIPBOARD_TYPE: 'web application/x-hongs-media-item',
-    normalizeLocalPathForStorage: (v: any) => String(v || '').trim(), clonePersistableMediaItem: (v: any) => JSON.parse(JSON.stringify(v)),
+    normalizeAttachmentItems, hydrateReviewProps, stripPreviewOnlyProps, internalMediaClipboardPayload: null, INTERNAL_MEDIA_CLIPBOARD_TYPE: 'web application/x-hongs-media-item',
+    normalizeLocalPathForStorage: (v: any) => String(v || '').trim(),
     isNetworkJobCellItem: (v: any) => v?.type === 'networkJob' && typeof v.jobId === 'string',
     HTMLInputElement: class {}, HTMLTextAreaElement: class {}, HTMLSelectElement: class {}, HTMLElement: class {},
     setCutBox: (v: any) => { context.cutBox = v; },
@@ -209,4 +210,35 @@ test('raw clipboard preserves commas and line breaks in individual attachment pa
   const h = clipboardHarness(rows, [{ id: 'media', type: 'attachment' }]);
   h.cut(); h.select(1); h.paste();
   assert.deepEqual(plain(rows[1].media), [{ url: media[0] }, media[1]]);
+});
+
+test('single media paste drops only image crop and preserves reviews and audio/video trim', () => {
+  const original = { url: 'F:/a.png', cropData: { scale: 2, x: 4 }, trimData: { startMs: 500, endMs: 1500 }, rating: 5, annotations: [{ id: 'note' }], status: 'approved' };
+  const { cropData, ...expected } = original;
+  for (const mode of ['custom', 'remembered']) {
+    const rows: any[] = [{ id: 'source', media: [original] }, { id: 'target', media: [] }];
+    const h = clipboardHarness(rows, [{ id: 'media', type: 'attachment' }]);
+    h.payload.set('text/plain', original.url);
+    const payload = { plainText: original.url, item: original, copiedAt: Date.now() };
+    if (mode === 'custom') h.payload.set('application/x-hongs-media-item', JSON.stringify(payload));
+    else h.context.internalMediaClipboardPayload = payload;
+    h.select(1); h.paste();
+    assert.deepEqual(plain(rows[1].media), [expected]);
+    assert.deepEqual(rows[0].media, [original]);
+  }
+});
+
+test('single-media copy payload excludes only cropData and keeps review/trim attributes', async () => {
+  const start = gridSource.indexOf('type InternalMediaClipboardPayload');
+  const end = gridSource.indexOf('const copyImageToClipboardMagic', start);
+  const source = ts.transpileModule(gridSource.slice(start, end) + ';globalThis.copyMedia = copyMediaToClipboardMagic;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  let written: any;
+  const context: any = { Blob, stripPreviewOnlyProps, normalizeLocalPathForStorage: (v: any) => String(v || ''), window: { ClipboardItem: class { constructor(public data: any) { written = data; } } }, navigator: { clipboard: { write: async () => {} } } };
+  vm.runInNewContext(source, context);
+  const original = { url: 'F:/a,b.png', cropData: { scale: 3 }, trimData: { endMs: 3000 }, rating: 5, annotations: [{ text: 'keep note' }] };
+  await context.copyMedia(original);
+  const payload = JSON.parse(await written['web application/x-hongs-media-item'].text());
+  const { cropData, ...expected } = original;
+  assert.deepEqual(payload.item, expected);
+  assert.equal(await written['text/plain'].text(), original.url);
 });
