@@ -1,3 +1,5 @@
+import { normalizeImageControls, buildImageControlParams } from '../../lingwu_image_model_profiles.js';
+import { getFirstRetouchSourceItem, getRetouchCropAspectRatio, nearestImageAspectRatio, imageRatioRequest, retouchReferenceImages } from '../lib/retouchAspectRatio.js';
 import { reconcileNetworkJobCells } from '../lib/networkJobReconciliation';
 import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
@@ -150,62 +152,55 @@ function resolveRetouchImageResize(
     return null;
   }
 
-  const template = String(config.sourceImageTemplate || '');
-  const matches = fields
-    .map(field => ({
-      field,
-      index: template.indexOf(`{${field.name}}`)
-    }))
-    .filter(match => match.index !== -1)
-    .sort((a, b) => a.index - b.index);
+  const first = getFirstRetouchSourceItem(config, fields, record);
+  if (!first || typeof first !== 'object' || !first.cropData) return null;
+  const crop = first.cropData;
+  const requiredMetrics = [
+    crop.imgW,
+    crop.imgH,
+    crop.naturalW,
+    crop.naturalH,
+    crop.scale,
+    crop.maskW,
+    crop.maskH
+  ];
 
-  for (const match of matches) {
-    const value = record[match.field.id];
-    if (!value) continue;
-
-    const items = Array.isArray(value)
-      ? value
-      : (typeof value === 'string' ? value.split(',') : [value]);
-    const first = items[0];
-
-    if (!first || typeof first !== 'object' || !first.cropData) {
-      continue;
-    }
-
-    const crop = first.cropData;
-    const requiredMetrics = [
-      crop.imgW,
-      crop.imgH,
-      crop.naturalW,
-      crop.naturalH,
-      crop.scale,
-      crop.maskW,
-      crop.maskH
-    ];
-
-    if (!requiredMetrics.every(metric => Number(metric) > 0)) {
-      return null;
-    }
-
-    const width = Math.max(
-      1,
-      Math.round(
-        (Number(crop.maskW) / Number(crop.scale)) *
-        (Number(crop.naturalW) / Number(crop.imgW))
-      )
-    );
-    const height = Math.max(
-      1,
-      Math.round(
-        (Number(crop.maskH) / Number(crop.scale)) *
-        (Number(crop.naturalH) / Number(crop.imgH))
-      )
-    );
-
-    return { width, height };
+  if (!requiredMetrics.every(metric => Number(metric) > 0)) {
+    return null;
   }
 
-  return null;
+  const width = Math.max(
+    1,
+    Math.round(
+      (Number(crop.maskW) / Number(crop.scale)) *
+      (Number(crop.naturalW) / Number(crop.imgW))
+    )
+  );
+  const height = Math.max(
+    1,
+    Math.round(
+      (Number(crop.maskH) / Number(crop.scale)) *
+      (Number(crop.naturalH) / Number(crop.imgH))
+    )
+  );
+
+  return { width, height };
+}
+
+/** Only used when the first retouch source has no crop metadata.
+ * Decode the already-prepared first source image; never substitute a second reference. */
+async function readRetouchFirstImageAspectRatio(dataUrl?: string): Promise<string | null> {
+  if (!dataUrl || !dataUrl.startsWith('data:image/')) return null;
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(
+      img.naturalWidth > 0 && img.naturalHeight > 0
+        ? nearestImageAspectRatio(img.naturalWidth / img.naturalHeight)
+        : null
+    );
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
 }
 
 function HighlightedText({ text, query }: { text: string; query?: string }) {
@@ -4149,68 +4144,27 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         if (field.type === 'aiImage') {
           const cfg = field.aiImageConfig || {};
           const count = cfg.count || 1;
+          const rawImageControls = {
+            mode: resolveTemplateString(cfg.mode || 'standard', data.fields, record),
+            quality: resolveTemplateString(cfg.quality || '', data.fields, record)
+          };
+          if (!cfg.mode) rawImageControls.mode = '';
+          const imageControls = normalizeImageControls(rawImageControls);
           
-          let ratioRaw = resolveTemplateString(cfg.ratio || "1:1", data.fields, record);
+          const hasCustomRatioTemplate = typeof cfg.ratio === 'string' && cfg.ratio.trim() !== '';
+          const ratioRaw = resolveTemplateString(hasCustomRatioTemplate ? cfg.ratio : '1:1', data.fields, record);
           let ratio = ratioRaw.replace(/：/g, ':').trim();
-          
-          if (cfg.isRetouchMode) {
-              const template = cfg.sourceImageTemplate || '';
-              const matches = data.fields
-                 .map(f => ({ f, index: template.indexOf(`{${f.name}}`) }))
-                 .filter(m => m.index !== -1)
-                 .sort((a, b) => a.index - b.index);
+          // Retouch always derives its output canvas from the FIRST source image.
+          // Saved cropData.ratio wins over the UI ratio (and over Qwen's custom ratio).
+          // If there is no saved crop, its true image aspect ratio is read below.
+          const cropAspectRatio = cfg.isRetouchMode
+            ? getRetouchCropAspectRatio(cfg, data.fields, record)
+            : null;
+          let retouchRatioSource: 'crop' | 'image' | null = cropAspectRatio ? 'crop' : null;
+          if (cropAspectRatio) ratio = cropAspectRatio;
 
-              for (let match of matches) {
-                 const f = match.f;
-                 let val = record[f.id];
-                 if (val) {
-                    const arr = Array.isArray(val) ? val : (typeof val==='string' ? val.split(',') : [val]);
-                    const first = arr[0];
-                    if (first && typeof first === 'object' && first.cropData && first.cropData.ratio) {
-                        const r = first.cropData.ratio;
-                        const standards = [
-                          { r: 1, s: '1:1' },
-                          { r: 16/9, s: '16:9' },
-                          { r: 9/16, s: '9:16' },
-                          { r: 4/3, s: '4:3' },
-                          { r: 3/4, s: '3:4' },
-                          { r: 3/2, s: '3:2' },
-                          { r: 2/3, s: '2:3' },
-                          { r: 21/9, s: '21:9' }
-                        ];
-                        const closest = standards.reduce((prev, curr) => Math.abs(curr.r - r) < Math.abs(prev.r - r) ? curr : prev);
-                        ratio = closest.s;
-                        break;
-                    }
-                 }
-              }
-          }
-          
           let resolutionRaw = resolveTemplateString(cfg.resolution || "1024x1024", data.fields, record);
           let resolution = resolutionRaw.trim().toLowerCase();
-          
-          const res4kMap: Record<string, string> = {
-            '1:1': '4096x4096',
-            '16:9': '4096x2304',
-            '9:16': '2304x4096',
-            '4:3': '4096x3072',
-            '3:4': '3072x4096'
-          };
-          const res2kMap: Record<string, string> = {
-            '1:1': '2048x2048',
-            '16:9': '2048x1152',
-            '9:16': '1152x2048',
-            '4:3': '2048x1536',
-            '3:4': '1536x2048'
-          };
-          const hdMap: Record<string, string> = {
-             '1:1': '1024x1024',
-             '16:9': '1792x1024',
-             '9:16': '1024x1792',
-             '4:3': '1024x1024',
-             '3:4': '1024x1024'
-          };
-          const sizeStr = (resolution === '4k') ? (res4kMap[ratio] || '4096x4096') : (resolution === '2k') ? (res2kMap[ratio] || '2048x2048') : (hdMap[ratio] || "1024x1024");
           
           const enabledImageProviders = getEnabledProviders(modelSettings.image);
           if (enabledImageProviders.length === 0) {
@@ -4243,14 +4197,48 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
           let finalDataUrls: string[] = [...promptDataUrls];
           finalOriginalUrls = [...promptOriginalUrls];
           finalSourceUrls = [...promptSourceUrls];
+          let firstSourceImageDataUrl: string | undefined;
+          let sourceOriginalUrls: string[] = [];
           if (cfg.sourceImageTemplate) {
              const { parts, dataUrls, originalUrls, sourceUrls } = await getBase64ImageParts(cfg.sourceImageTemplate, data.fields, record, cfg);
+             firstSourceImageDataUrl = dataUrls[0];
+             sourceOriginalUrls = originalUrls || [];
              imageParts = [...imageParts, ...parts];
              finalDataUrls = [...finalDataUrls, ...dataUrls];
              finalOriginalUrls = [...finalOriginalUrls, ...(originalUrls || [])];
              finalSourceUrls = [...finalSourceUrls, ...(sourceUrls || [])];
           }
+          if (cfg.isRetouchMode && firstSourceImageDataUrl && !retouchRatioSource) {
+             const sourceRatio = await readRetouchFirstImageAspectRatio(firstSourceImageDataUrl);
+             if (!sourceRatio) {
+               throw new Error('局部修图无法读取第一张原始图片的比例，请确认引用的第一张图片可访问。');
+             }
+             ratio = sourceRatio;
+             retouchRatioSource = 'image';
+          }
 
+          const res4kMap: Record<string, string> = {
+            '1:1': '4096x4096',
+            '16:9': '4096x2304',
+            '9:16': '2304x4096',
+            '4:3': '4096x3072',
+            '3:4': '3072x4096'
+          };
+          const res2kMap: Record<string, string> = {
+            '1:1': '2048x2048',
+            '16:9': '2048x1152',
+            '9:16': '1152x2048',
+            '4:3': '2048x1536',
+            '3:4': '1536x2048'
+          };
+          const hdMap: Record<string, string> = {
+             '1:1': '1024x1024',
+             '16:9': '1792x1024',
+             '9:16': '1024x1792',
+             '4:3': '1024x1024',
+             '3:4': '1024x1024'
+          };
+          const sizeStr = (resolution === '4k') ? (res4kMap[ratio] || '4096x4096') : (resolution === '2k') ? (res2kMap[ratio] || '2048x2048') : (hdMap[ratio] || "1024x1024");
 
           if (imgSet.provider === 'gemini') {
             throw new Error("Local Gemini Image generation not natively supported in this preview without vertex AI. Please use OpenAI-compatible proxy for images.");
@@ -4261,11 +4249,28 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
             }
             if (imgSet.provider === 'lingwu' && !imgSet.key) throw new Error("Lingwu API Key is required for Image Generation");
             
+            const normalizedModelName = String(resolvedModel || '').trim().toLowerCase();
+            const isQwenComfyModel = imgSet.provider === 'comfyui' && ['qwen-image-2.1', 'qwen-image-2.1-local', 'qwen-image-2.1-transparent-local'].includes(normalizedModelName);
+            // Retouch source ratio has priority over ANY user's ratio setting.
+            // Normal Qwen I2I still uses the native first-image latent on auto/unset.
+            const providerImages = isQwenComfyModel && cfg.isRetouchMode
+              ? retouchReferenceImages(sourceOriginalUrls, promptOriginalUrls)
+              : finalOriginalUrls;
+            const requestedAspectRatio = imageRatioRequest({
+              isQwen: isQwenComfyModel,
+              hasImages: providerImages.length > 0,
+              isRetouchMode: !!cfg.isRetouchMode,
+              hasRetouchSourceRatio: !!retouchRatioSource,
+              hasCustomRatioTemplate,
+              configuredRatio: ratioRaw.replace(/：/g, ':').trim(),
+              resolvedRatio: ratio
+            });
             // Map the prompt and params
             const params: any = {
+                ...(imgSet.provider === 'comfyui' ? imageControls : rawImageControls),
                 imageSize: String(resolution || '1K').toUpperCase(),
-                aspectRatio: ratio,
-                images: finalOriginalUrls.length > 0 ? finalOriginalUrls : undefined
+                ...(requestedAspectRatio ? { aspectRatio: requestedAspectRatio } : {}),
+                images: providerImages.length > 0 ? providerImages : undefined
             };
             
             let finalFilename = '';
@@ -4354,6 +4359,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                   ],
                   parameters: {
                     sampleCount: 1,
+                    ...buildImageControlParams(resolvedModel, rawImageControls),
                     aspectRatio: ratio
                   }
                 };
@@ -4367,6 +4373,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                   contents: [{ parts: [...imageParts, { text: finalPrompt }], role: 'user' }],
                   generationConfig: {
                     responseModalities: ["IMAGE"],
+                    ...buildImageControlParams(resolvedModel, rawImageControls, 'gemini'),
                     imageConfig
                   }
                 };
@@ -4411,12 +4418,13 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
               prompt: finalPrompt,
               n: count,
               size: sizeStr,
-              response_format: 'b64_json'
+              response_format: 'b64_json',
+              ...buildImageControlParams(resolvedModel, rawImageControls)
             };
             if (finalDataUrls && finalDataUrls.length > 0) {
               payload.base64Array = finalDataUrls;
             }
-            
+
             const res = await fetch(imgEndpoint, {
               method: 'POST',
               headers: {
@@ -5024,7 +5032,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         providerInfo.provider?.provider,
         providerInfo.resolvedModel,
         mediaCounts,
-        registeredComfyUIWorkflows
+        registeredComfyUIWorkflows,
+        field.type === 'aiImage' ? 'image' : field.type === 'aiVideo' ? 'video' : 'text'
       );
       workflowValidation.blockingReasons.forEach(reason => addReason(reason.code, reason.message, reason.details));
 
@@ -5055,13 +5064,17 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         };
       } else if (field.type === 'aiImage') {
         const resolution = resolveTemplateString(cfg.resolution || 'hd', data.fields, record).trim();
-        const ratio = resolveTemplateString(cfg.ratio || '1:1', data.fields, record).replace(/：/g, ':').trim();
+        const configuredRatio = resolveTemplateString(cfg.ratio || '1:1', data.fields, record).replace(/：/g, ':').trim();
+        const cropRatio = cfg.isRetouchMode ? getRetouchCropAspectRatio(cfg, data.fields, record) : null;
+        const ratio = cropRatio || (cfg.isRetouchMode && getFirstRetouchSourceItem(cfg, data.fields, record)
+          ? '首张原始图片比例（生成时读取）' : configuredRatio);
         const output = resolveFilenameAndFolder(cfg.filenameTemplate || 'image', cfg.folderPath || '', data.fields, record);
         resolvedConfig = {
           ...resolvedConfig,
           count: Number(cfg.count) || 1,
           resolution,
           ratio,
+          ...normalizeImageControls({ mode: resolveTemplateString(cfg.mode || 'standard', data.fields, record), quality: resolveTemplateString(cfg.quality || 'auto', data.fields, record) }),
           size: cfg.size || null,
           retouch: cfg.isRetouchMode === true,
           output: { folderPath: output.folderPath, filename: output.filename }
@@ -6518,6 +6531,10 @@ function HeaderCell({
   const [draftPrompt, setDraftPrompt] = useState(field.prompt || '');
   const [draftRefs, setDraftRefs] = useState<string[]>(field.refFields || []);
   const [draftAiImageConfig, setDraftAiImageConfig] = useState(field.aiImageConfig || { count: 1, size: '1024x1024' });
+  const isQwenImageConfig = /^qwen-image-2\.1(?:-local|-transparent-local)?$/i.test(
+    draftAiImageConfig.modelTemplate || parseProviderModels(getEnabledProviders(modelSettings?.image)[0])[0] || ''
+  );
+  const imageResolutionOptions = isQwenImageConfig ? ['0.5k', '1k', '1.5k', '2k'] : ['1k', '2k', '4k'];
   const [draftAiVideoConfig, setDraftAiVideoConfig] = useState(field.aiVideoConfig || { duration: '10', resolution: '1080P', ratio: '16:9', sound: 'false', mode: 'fast' });
   const [draftAiTextConfig, setDraftAiTextConfig] = useState(field.aiTextConfig || {});
   const [availableSkills, setAvailableSkills] = useState<any[]>([]);
@@ -7017,12 +7034,10 @@ function HeaderCell({
                                   value={draftAiImageConfig.resolution || '1k'}
                                   onChange={e => setDraftAiImageConfig(prev => ({ ...prev, resolution: e.target.value }))}
                                >
-                                  {!['1k', '2k', '4k'].includes((draftAiImageConfig.resolution || '1k').toLowerCase()) && (
+                                  {!imageResolutionOptions.includes((draftAiImageConfig.resolution || '1k').toLowerCase()) && (
                                      <option value={draftAiImageConfig.resolution}>{draftAiImageConfig.resolution}</option>
                                   )}
-                                  <option value="1k">1K</option>
-                                  <option value="2k">2K</option>
-                                  <option value="4k">4K</option>
+                                  {imageResolutionOptions.map(value => <option key={value} value={value}>{value.toUpperCase()}</option>)}
                                </select>
                                <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none">
                                  <ChevronDown className="w-3 h-3 text-gray-500" />
@@ -7053,10 +7068,11 @@ function HeaderCell({
                              <div className="relative flex-1 w-0">
                                <select 
                                   className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
-                                  value={draftAiImageConfig.ratio || '1:1'}
+                                  value={draftAiImageConfig.ratio || (isQwenImageConfig ? '' : '1:1')}
                                   onChange={e => setDraftAiImageConfig(prev => ({ ...prev, ratio: e.target.value }))}
                                >
-                                  {!['1:1', '16:9', '9:16', '4:3', '3:4'].includes(draftAiImageConfig.ratio || '1:1') && (
+                                  {isQwenImageConfig && <option value="">自动（图生图跟随首图）</option>}
+                                  {!['1:1', '16:9', '9:16', '4:3', '3:4', ''].includes(draftAiImageConfig.ratio || (isQwenImageConfig ? '' : '1:1')) && (
                                      <option value={draftAiImageConfig.ratio}>{draftAiImageConfig.ratio}</option>
                                   )}
                                   <option value="1:1">1:1</option>
@@ -7101,6 +7117,37 @@ function HeaderCell({
                            />
                          </div>
                        </div>
+                       <div className="grid grid-cols-2 gap-2">
+                         {([{ key: 'mode', label: '生成模式', fallback: 'standard', options: [['standard', 'auto'], ['enhanced', 'high']] },
+                           { key: 'quality', label: '画质', fallback: 'auto', options: [['auto', 'auto'], ['high', 'high'], ['max', 'max']] }] as const).map(control => (
+                           <div key={control.key}>
+                             <label className="block text-[10px] text-gray-500 mb-1">{control.label}</label>
+                             <div className="flex items-stretch border border-gray-300 bg-white rounded">
+                               <div className="relative flex-1 w-0">
+                               <select aria-label={control.label} className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
+                                 value={control.key === 'mode' && ['auto', 'high', '标准', '增强'].includes(draftAiImageConfig.mode || '') ? normalizeImageControls({ mode: draftAiImageConfig.mode }).mode : draftAiImageConfig[control.key] || control.fallback}
+                                 onChange={e => setDraftAiImageConfig(prev => ({ ...prev, [control.key]: e.target.value }))}>
+                                 {!(control.key === 'mode' && ['auto', 'high', '标准', '增强'].includes(draftAiImageConfig.mode || '')) && !control.options.some(option => option[0] === (draftAiImageConfig[control.key] || control.fallback)) &&
+                                   <option value={draftAiImageConfig[control.key]}>{draftAiImageConfig[control.key]}</option>}
+                                 {control.options.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                               </select>
+                               <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none"><ChevronDown className="w-3 h-3 text-gray-500" /></div>
+                               </div>
+                               <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
+                               <Plus className="w-3 h-3 text-gray-500" />
+                               <select aria-label={`${control.label}引用字段`} title="引用字段" className="absolute inset-0 opacity-0 cursor-pointer text-[10px]" value=""
+                                 onChange={e => { if (e.target.value) setDraftAiImageConfig(prev => ({ ...prev, [control.key]: `{${e.target.value}}` })); }}>
+                                 <option value="">+ 引用</option>
+                                 {allFields.filter(f => f.id !== field.id).map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                               </select>
+                               </div>
+                             </div>
+                           </div>
+                         ))}
+                       </div>
+                       {isQwenImageConfig && <p className="text-[10px] text-gray-500">
+                         Qwen：0.5–2K，最多 5 张参考图；图生图接收比例但跟随首图。auto/high/max 为 25/30/40 步；high 模式预留，当前仍使用已安装版本。透明 PNG 选 transparent 模型。
+                       </p>}
                        <div className="relative">
                           <label className="block text-[10px] text-gray-500 mb-1">保存的图片文件名</label>
                           <input 
@@ -7978,7 +8025,7 @@ const LargeTextEditorModal = ({
 
   useEffect(() => {
     if (!open || !visualMode || !visualRef.current) return;
-    visualRef.current.querySelectorAll<HTMLElement>('[data-media-url]').forEach(chip => {
+    visualRef.current.querySelectorAll<HTMLElement>('[data-media-url]').forEach((chip: HTMLElement) => {
       const url = chip.dataset.mediaUrl || '';
       const mediaType = (chip.dataset.mediaType || 'image') as DetectedMediaType;
       const thumb = url ? thumbMap[url] : '';

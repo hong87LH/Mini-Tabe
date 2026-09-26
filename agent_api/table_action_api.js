@@ -649,7 +649,7 @@ function normalizeAiConfig(field, rawConfig) {
   const commonAllowed = new Set(['prompt', 'refFields', 'model', 'sourceImage']);
   const byType = {
     aiText: new Set(['skill']),
-    aiImage: new Set(['count', 'size', 'folderPath', 'resolution', 'ratio', 'filenameTemplate', 'isRetouchMode', 'saveToSourceFolder', 'scaleToSource']),
+    aiImage: new Set(['mode', 'quality', 'count', 'size', 'folderPath', 'resolution', 'ratio', 'filenameTemplate', 'isRetouchMode', 'saveToSourceFolder', 'scaleToSource']),
     aiVideo: new Set(['duration', 'resolution', 'ratio', 'sound', 'mode', 'enhancePrompt', 'offPeak', 'folderPath', 'filenameTemplate', 'sourceVideo', 'sourceAudio'])
   };
   const allowed = new Set([...commonAllowed, ...byType[field.type]]);
@@ -673,7 +673,7 @@ function normalizeAiConfig(field, rawConfig) {
     const cfg = { ...(field.aiImageConfig || {}) };
     if ('model' in rawConfig) cfg.modelTemplate = String(rawConfig.model ?? '');
     if ('sourceImage' in rawConfig) cfg.sourceImageTemplate = String(rawConfig.sourceImage ?? '');
-    for (const key of ['size', 'folderPath', 'resolution', 'ratio', 'filenameTemplate']) {
+    for (const key of ['mode', 'quality', 'size', 'folderPath', 'resolution', 'ratio', 'filenameTemplate']) {
       if (key in rawConfig) cfg[key] = String(rawConfig[key] ?? '');
     }
     if ('count' in rawConfig) {

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { normalizeImageControls } from '../lingwu_image_model_profiles.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +32,17 @@ function normalizeLocalReference(value) {
   }
   if (/^\/[A-Za-z]:\//.test(normalized)) normalized = normalized.slice(1);
   return normalized;
+}
+
+export function normalizeQwenImageResolution(value) {
+  const text = String(value ?? '1K').trim().toUpperCase();
+  // Numeric field references are K coefficients, not megapixels or short-side pixels.
+  const match = text.match(/^(\d+(?:\.\d+)?)K?$/);
+  const coefficient = text === '1024X1024' ? 1 : match ? Number(match[1]) : NaN;
+  if (!Number.isFinite(coefficient) || coefficient < 0.5 || coefficient > 2) {
+    throw new Error('Qwen Image 2.1 分辨率须为 0.5–2 的系数或 K 档位，例如 0.5、1.5K、2K；最高 2K');
+  }
+  return Math.round(coefficient * 1024 / 32) * 32;
 }
 
 function randomSeed() {
@@ -158,8 +170,8 @@ export class ComfyUIClient {
       const loaded = loadComfyUIWorkflow(modelName, 'fast');
       const missingNodeTypes = [];
       for (const nodeType of loaded.manifest.requiredNodeTypes || []) {
-        const response = await fetch(`${this.endpoint}/object_info/${encodeURIComponent(nodeType)}`);
-        if (!response.ok) missingNodeTypes.push(nodeType);
+        const response = await this.request(`/object_info/${encodeURIComponent(nodeType)}`);
+        if (!(await response.json())?.[nodeType]) missingNodeTypes.push(nodeType);
       }
       workflow = {
         id: loaded.manifest.id,
@@ -175,7 +187,7 @@ export class ComfyUIClient {
       };
     }
     return {
-      ok: true,
+      ok: !workflow?.missingNodeTypes?.length,
       endpoint: this.endpoint,
       comfyuiVersion: system?.system?.comfyui_version,
       device: system?.devices?.[0]?.name,
@@ -266,6 +278,9 @@ export class ComfyUIClient {
   async createTask(model, prompt, params = {}, _count = 1) {
     let loaded = loadComfyUIWorkflow(model, params.mode);
     let { manifest } = loaded;
+    if (params.mediaType && params.mediaType !== manifest.mediaType) {
+      throw new Error(`${manifest.name} 属于 ${manifest.mediaType} 生成，不能用于 ${params.mediaType} 生成`);
+    }
     const merged = { ...(manifest.defaults || {}), ...(params || {}) };
     const images = Array.isArray(merged.images) ? merged.images.filter(Boolean) : [];
     const videos = Array.isArray(merged.videos) ? merged.videos.filter(Boolean) : [];
@@ -293,6 +308,19 @@ export class ComfyUIClient {
       throw new Error(`${manifest.name} 至少需要 ${manifest.capabilities.minTotalReferences} 个图片、视频或音频参考素材`);
     }
 
+    const isQwenImage = manifest.routing?.type === 'qwen-image-2.1';
+    const qwenResolution = isQwenImage ? normalizeQwenImageResolution(params.resolution ?? params.imageSize) : null;
+    const qwenAspectRatioInput = params.aspectRatio ?? params.aspect_ratio;
+    const qwenHasExplicitAspectRatio = qwenAspectRatioInput !== undefined && qwenAspectRatioInput !== null && String(qwenAspectRatioInput).trim() !== '' && !/^auto$/i.test(String(qwenAspectRatioInput).trim());
+    const qwenRatioRaw = String((qwenHasExplicitAspectRatio ? qwenAspectRatioInput : (merged.aspectRatio || merged.aspect_ratio)) || '1:1').replace(/：/g, ':').trim();
+    const qwenRatio = !qwenRatioRaw || /^auto$/i.test(qwenRatioRaw) ? '1:1' : qwenRatioRaw;
+    const ratioMatch = qwenRatio.match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)(?:\s*\([^)]*\))?$/);
+    const ratioValue = ratioMatch ? Number(ratioMatch[1]) / Number(ratioMatch[2]) : NaN;
+    if (isQwenImage && (!images.length || qwenHasExplicitAspectRatio) && (!Number.isFinite(ratioValue) || ratioValue < 1 / 8 || ratioValue > 8)) {
+      const modeLabel = images.length ? '图生图比例覆盖' : '文生图比例';
+      throw new Error(`Qwen Image 2.1 ${modeLabel}须为有效宽:高（1:8–8:1）：${qwenRatio}`);
+    }
+    const qwenControls = isQwenImage ? normalizeImageControls(params) : null;
     const uploadedImages = [];
     for (const image of images) uploadedImages.push(await this.uploadImage(image));
     const uploadedVideos = [];
@@ -310,22 +338,56 @@ export class ComfyUIClient {
       const missingTags = tags.filter(tag => !finalPrompt.includes(tag));
       if (missingTags.length) finalPrompt = `${missingTags.join(' ')} Use the referenced media as identity, motion, style and sound guidance. ${finalPrompt}`.trim();
     }
+    if (isQwenImage) {
+      const transparent = manifest.routing.transparentModels.includes(String(model).trim().toLowerCase());
+      if (transparent && !finalPrompt.startsWith('This is an RGBA format image with transparency.')) {
+        finalPrompt = `This is an RGBA format image with transparency. ${finalPrompt}. The image has an alpha channel and a transparent background.`;
+      }
+      const conditioningId = String(manifest.routing.conditioningNodeId);
+      workflow[conditioningId].inputs.resolution = qwenResolution;
+      uploadedImages.forEach((filename, index) => {
+        const nodeId = String(manifest.routing.dynamicNodeBase + index);
+        workflow[nodeId] = { class_type: 'LoadImage', inputs: { image: filename } };
+        workflow[conditioningId].inputs[`images.image_${index + 1}`] = [nodeId, 0];
+      });
+      workflow[manifest.routing.samplerNodeId].inputs.steps = { auto: 25, high: 30, max: 40 }[qwenControls.quality];
+      // Enhanced is reserved; until a 16B template exists both modes use the installed model.
+      const latentNodeId = String(manifest.routing.latentNodeId || '90');
+      if (!uploadedImages.length || qwenHasExplicitAspectRatio) {
+        const width = Math.round(qwenResolution * Math.sqrt(ratioValue) / 32) * 32;
+        const height = Math.round(qwenResolution / Math.sqrt(ratioValue) / 32) * 32;
+        // The EmptyLatentImage is declared in image_api.json; use it for T2I or explicit I2I sizing.
+        if (!workflow[latentNodeId] || workflow[latentNodeId].class_type !== 'EmptyLatentImage') {
+          throw new Error(`Qwen Image 2.1 工作流缺少空 Latent 节点 ${latentNodeId}`);
+        }
+        workflow[latentNodeId].inputs.width = width;
+        workflow[latentNodeId].inputs.height = height;
+        workflow[latentNodeId].inputs.batch_size = 1;
+        workflow[manifest.routing.samplerNodeId].inputs.latent_image = [latentNodeId, 0];
+      } else {
+        // No explicit ratio: the native latent follows image_1.
+        workflow[manifest.routing.samplerNodeId].inputs.latent_image = [manifest.routing.conditioningNodeId, 2];
+        delete workflow[latentNodeId];
+      }
+    }
     setWorkflowValue(workflow, manifest.bindings.prompt, finalPrompt);
-    setWorkflowValue(workflow, manifest.bindings.aspectRatio, normalizeAspectRatio(merged.aspectRatio || merged.aspect_ratio, manifest));
-    setWorkflowValue(
-      workflow,
-      manifest.bindings.megapixels,
-      normalizeComfyUIMegapixels(
-        merged.resolution ?? merged.imageSize,
-        merged.aspectRatio || merged.aspect_ratio,
-        manifest
-      )
-    );
-    setWorkflowValue(workflow, manifest.bindings.duration, normalizeDuration(merged.duration, manifest));
+    if (!isQwenImage) {
+      setWorkflowValue(workflow, manifest.bindings.aspectRatio, normalizeAspectRatio(merged.aspectRatio || merged.aspect_ratio, manifest));
+      setWorkflowValue(
+        workflow,
+        manifest.bindings.megapixels,
+        normalizeComfyUIMegapixels(
+          merged.resolution ?? merged.imageSize,
+          merged.aspectRatio || merged.aspect_ratio,
+          manifest
+        )
+      );
+      setWorkflowValue(workflow, manifest.bindings.duration, normalizeDuration(merged.duration, manifest));
+    }
     setWorkflowValue(workflow, manifest.bindings.seed, Number.isSafeInteger(Number(merged.seed)) && Number(merged.seed) >= 0 ? Number(merged.seed) : randomSeed());
 
     const outputToken = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
-    setWorkflowValue(workflow, manifest.bindings.outputPrefix, `video/lingwu_comfyui/${manifest.id}/${outputToken}`);
+    setWorkflowValue(workflow, manifest.bindings.outputPrefix, `${manifest.mediaType === 'image' ? 'image' : 'video'}/lingwu_comfyui/${manifest.id}/${outputToken}`);
     if (manifest.bindings.firstImage && uploadedImages[0]) {
       setWorkflowValue(workflow, manifest.bindings.firstImage, uploadedImages[0]);
     } else if (manifest.bindings.firstImage && manifest.secondImage) {

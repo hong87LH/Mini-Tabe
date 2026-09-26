@@ -4,7 +4,13 @@
 最后核对：2026-08-24  
 当前事实来源：`comfyui/workflows/*/manifest.json`、`comfyui/plugin_catalog.json`、`npm run check:comfyui`
 
-## 1. 当前可用能力
+## Qwen Image 2.1 图片生成（2026-09-25）
+
+图片配置新增 `qwen-image-2.1-local` 与 `qwen-image-2.1-transparent-local`。支持 0–5 张参考图自动路由，0.5K–2K 与字段系数，25 步原生 PNG 输出。此入口在“图片”分类，和下方 MiniMax 视频入口分开。
+
+安装版本、三项权重位置、比例规则与实测见 [工作流随附说明](../../comfyui/workflows/qwen-image-2.1/README.md)。
+
+## 1. MiniMax H3 当前可用能力
 
 AI Table Studio 当前注册两套 MiniMax H3 本地视频工作流：
 
@@ -151,3 +157,13 @@ npm run check:comfyui
 
 完整排错见 `ComfyUI_测试与故障排查.md`。
 
+
+
+## Qwen 图生图比例控制补充（v2.7.2b）
+
+- 新增 **“自动（图生图跟随首图）”** 的比例语义。
+- Qwen 文生图：始终按比例字段生成空 latent。
+- Qwen 图生图：
+  - 比例为自动/未填写：跟随第一张参考图。
+  - 比例明确为 `1:1`、`3:4`、`9:16` 等：运行时创建 `EmptyLatentImage` 覆盖画布比例。
+- 如果你发现图生图比例没有变化，先确认当前是否仍处于“自动（图生图跟随首图）”。

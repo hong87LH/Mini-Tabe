@@ -1,0 +1,101 @@
+{
+  "id": "qwen-image-2.1",
+  "aliases": [
+    "qwen-image-2.1-local",
+    "qwen-image-2.1-transparent-local"
+  ],
+  "name": "Qwen Image 2.1 本地图片路由",
+  "provider": "comfyui",
+  "mediaType": "image",
+  "templates": {
+    "fast": "image_api.json",
+    "quality": "image_api.json"
+  },
+  "defaults": {
+    "mode": "quality",
+    "aspectRatio": "1:1"
+  },
+  "capabilities": {
+    "inputImages": {
+      "min": 0,
+      "max": 5
+    },
+    "inputVideos": {
+      "min": 0,
+      "max": 0
+    },
+    "inputAudio": {
+      "min": 0,
+      "max": 0
+    },
+    "resolutions": [
+      "0.5K",
+      "1K",
+      "1.5K",
+      "2K"
+    ],
+    "resolutionCoefficient": {
+      "min": 0.5,
+      "max": 2
+    },
+    "aspectRatios": [
+      "1:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:3",
+      "9:16",
+      "16:9",
+      "21:9"
+    ],
+    "referenceAspectRatio": "first-image-when-unset",
+    "transparentPNG": true,
+    "qualities": [
+      "auto",
+      "high",
+      "max"
+    ],
+    "generationModes": [
+      "standard"
+    ],
+    "reservedGenerationModes": [
+      "enhanced"
+    ]
+  },
+  "bindings": {
+    "prompt": "7.inputs.prompt",
+    "seed": "8.inputs.seed",
+    "outputPrefix": "10.inputs.filename_prefix"
+  },
+  "routing": {
+    "type": "qwen-image-2.1",
+    "conditioningNodeId": "7",
+    "samplerNodeId": "8",
+    "dynamicNodeBase": 100,
+    "transparentModels": [
+      "qwen-image-2.1-transparent-local"
+    ],
+    "latentNodeId": "90"
+  },
+  "output": {
+    "node": "10",
+    "type": "image"
+  },
+  "requiredNodeTypes": [
+    "UNETLoader",
+    "QwenImage21Cache",
+    "CLIPLoader",
+    "VAELoader",
+    "TextEncodeQwenImage21",
+    "KSampler",
+    "VAEDecode",
+    "SaveImage",
+    "LoadImage",
+    "EmptyLatentImage"
+  ],
+  "pluginRequirements": [
+    {
+      "pluginId": "comfyui-core-qwen21"
+    }
+  ]
+}

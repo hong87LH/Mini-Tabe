@@ -42,6 +42,7 @@ export type MediaInputCounts = {
 export type RegisteredWorkflow = {
   id: string;
   aliases?: string[];
+  mediaType?: string;
   capabilities?: {
     inputImages?: { min?: number; max?: number };
     inputVideos?: { min?: number; max?: number };
@@ -64,7 +65,8 @@ export const validateSelectedWorkflowInputs = (
   provider: string | null | undefined,
   model: string | null | undefined,
   counts: MediaInputCounts,
-  workflows: readonly RegisteredWorkflow[]
+  workflows: readonly RegisteredWorkflow[],
+  expectedMediaType?: string
 ): WorkflowInputValidation => {
   if (provider !== 'comfyui' || workflows.length === 0) {
     return { workflow: null, blockingReasons: [] };
@@ -90,6 +92,9 @@ export const validateSelectedWorkflowInputs = (
 
   const capabilities = workflow.capabilities || {};
   const violations: string[] = [];
+  if (expectedMediaType && workflow.mediaType && expectedMediaType !== workflow.mediaType) {
+    violations.push(`workflow generates ${workflow.mediaType}, field requires ${expectedMediaType}`);
+  }
   const checkRange = (label: string, value: number, range?: { min?: number; max?: number }) => {
     if (!range) return;
     const min = Number(range.min ?? 0);

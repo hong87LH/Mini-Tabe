@@ -96,3 +96,10 @@ test('selected reference workflow accepts any valid remaining reference', () => 
   assert.equal(result.workflow?.id, 'minimax-h3-reference-router');
   assert.deepEqual(result.blockingReasons, []);
 });
+
+test('image workflow cannot preview as video generation', () => {
+  const workflows = [{id:'qwen-image-2.1',aliases:['qwen-image-2.1-local'],mediaType:'image',capabilities:{inputImages:{min:0,max:5}}}];
+  const counts = {images:0,videos:0,audio:0};
+  assert.equal(validateSelectedWorkflowInputs('comfyui','qwen-image-2.1-local',counts,workflows,'image').blockingReasons.length,0);
+  assert.equal(validateSelectedWorkflowInputs('comfyui','qwen-image-2.1-local',counts,workflows,'video').blockingReasons[0].code,'WORKFLOW_INPUT_UNSUPPORTED');
+});

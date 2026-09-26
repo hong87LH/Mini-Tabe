@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-12",
+  "updatedAt": "2026-09-25",
   "plugins": {
     "comfyui-core-h3": {
       "name": "ComfyUI Core with MiniMax H3",
@@ -31,8 +31,12 @@
       "repository": "https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git",
       "installDirectory": "ComfyUI-MiniMax-H3-Turbo",
       "installCommand": "git clone https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git ComfyUI-MiniMax-H3-Turbo",
-      "providedNodeTypes": ["MiniMaxH3TurboLoRA"],
-      "requiredForModes": ["fast"],
+      "providedNodeTypes": [
+        "MiniMaxH3TurboLoRA"
+      ],
+      "requiredForModes": [
+        "fast"
+      ],
       "notes": "Required by the registered Fast/Turbo templates. Quality mode does not use the Turbo LoRA node."
     },
     "hongs-node": {
@@ -44,10 +48,36 @@
       "bundledSourcePath": "ComfyUI/custom_nodes/Hongs-node",
       "installDirectory": "Hongs-node",
       "installCommand": "git clone https://github.com/hong87LH/Hongs-node.git Hongs-node",
-      "providedNodeTypes": ["H3TurboMixedReferenceFix"],
-      "requiredForWorkflows": ["minimax-h3-reference-router"],
-      "requiredForModes": ["fast"],
+      "providedNodeTypes": [
+        "H3TurboMixedReferenceFix"
+      ],
+      "requiredForWorkflows": [
+        "minimax-h3-reference-router"
+      ],
+      "requiredForModes": [
+        "fast"
+      ],
       "notes": "Used when Fast mode combines an image or video reference with independent audio. No extra Python dependencies."
+    },
+    "comfyui-core-qwen21": {
+      "name": "ComfyUI Core with Qwen Image 2.1",
+      "kind": "core",
+      "required": true,
+      "testedVersion": "0.37.0",
+      "repository": "https://github.com/Comfy-Org/ComfyUI",
+      "installMethod": "Upgrade ComfyUI core to the tested version or a compatible newer release. No custom_nodes plugin required. Install the three models listed in workflows/qwen-image-2.1/README.md.",
+      "providedNodeTypes": [
+        "UNETLoader",
+        "QwenImage21Cache",
+        "CLIPLoader",
+        "VAELoader",
+        "TextEncodeQwenImage21",
+        "KSampler",
+        "VAEDecode",
+        "SaveImage",
+        "LoadImage",
+        "EmptyLatentImage"
+      ]
     }
   }
 }

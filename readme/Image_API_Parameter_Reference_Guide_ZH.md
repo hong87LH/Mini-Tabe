@@ -1,3 +1,70 @@
+
+### 局部修图优先级（v2.7.2b 维护修复）
+
+以下规则**只在开启局部修图模式时生效**，优先于各 Provider 的普通图生图“自动/指定比例”策略：第一张实际原始图片若保存了 `cropData.ratio`，就以裁切框比例为生成请求的 `aspectRatio`；如果没有裁切记录，再读取第一张原图的实际宽高。不能借用第二张图的裁切比例，也不能使用比例下拉框覆盖局部修图原图比例。Qwen 的本地 Client 接收到这一明确比例后，以 `EmptyLatentImage`（节点90）控制采样画布；普通 Qwen 图生图仍沿用“自动跟随首图、明确指定比例覆盖”的规则。
+
+# v2.7.2 当前智能图片路由清单
+
+核对日期：2026-09-25。以下清单对应当前代码；本文后半部分保留 v2.4.8 的协议细节，其中“统一删除 quality”的旧描述已被本节的按模型映射取代。
+
+## 前台与请求链路
+
+第一行：分辨率、比例、生成数量；第二行：生成模式 `auto / high`、画质 `auto / high / max`，均可通过右侧 `+` 引用字段。
+
+`Grid.tsx` 解析字段引用 → `generate-lingwu-image` IPC → `MediaJobRunner.createImageJob` → 上传参考图 → `buildLingwuImageParams` 按准确模型名映射 → `LingwuClient.createTask` → `POST /v1/media/generate`。
+
+请求体为 `{ model, prompt, params, count }`，模型名原样传递。前台每张图独立创建一个 Job，单次 `count: 1`。模式和画质属于 `params`，不是请求体顶层。`standard/enhanced` 及旧中文值仍兼容，UI 显示小写英文。
+
+## Lingwu Format 按模型分配
+
+| 模型 | 尺寸与比例（现有路径） | mode auto / high | quality auto / high / max | 参考图配置 |
+| --- | --- | --- | --- | --- |
+| `tt-image-2.5` | 沿用 `imageSize + aspectRatio → size` 原有精确/近似换算，不改成新尺寸协议 | `version: flare / sunburst` | `quality` 原值 | 普通 WebP q90 |
+| `gemini-3.1-flash-image-preview`（Nano 2） | `imageSize` 0.5K/1K/2K/4K，`aspectRatio` 原值 | `thinkingLevel: minimal / high` | 不发送，API 无独立画质映射 | Gemini JPEG q95，Profile 上限14张 |
+| `gemini-3-pro-image-preview` | `imageSize` 1K/2K/4K，`aspectRatio` 原值 | 明确配置时透传 `mode: auto/high` | 明确配置时透传 `quality` | Gemini JPEG q95，Profile 上限14张 |
+| `doubao-seedream-5-0-260128` | `size: 2K/3K`，`aspect_ratio`；0.5/1/2K→2K，3/4K→3K | 明确配置时透传 | 明确配置时透传 | 普通 WebP q90 |
+| `gpt-image-2`、`gpt-image-2-guan`、其他未登记专属模型 | 旧 `size` 精确/近似换算 | 明确配置时透传 | 明确配置时透传 | 普通 WebP q90 |
+
+未明确配置新参数的旧表：TT 默认 flare/auto，Nano 2 默认 minimal；其他模型保持原请求字段，不额外注入 mode/quality。透传不代表平台承诺支持这些字段，基础测试表用于人工验证渠道实际响应。参考图压缩质量 q90/q95 与生成 quality 是两个独立概念。
+
+TT 的 `-flare/-sunburst` 后缀别名也识别；缺省模式保留显式后缀版本。Nano 2 保留用户指定的 `gemini-3.1-flash-image-preview`，不替换为文档示例别名 `banana-2`。
+
+### 最终请求示例（high 模式、max 画质）
+
+TT：`params = { size: "1024x1024", version: "sunburst", quality: "max" }`。
+
+Nano 2：`params = { imageSize: "1K", aspectRatio: "1:1", thinkingLevel: "high" }`。没有 `quality` 是正确行为；没有 `thinkingLevel` 才是模式未传递。
+
+本次依据用户提供的灵晤接口文档核对上述新字段。TT 比例分辨率按用户要求保留旧逻辑；不在本次新增其同步编辑协议或改写尺寸路径。
+
+## 其他 Provider
+
+| Provider | 当前图片请求与新参数 |
+| --- | --- |
+| `gemini-custom` | 前台直发 `:generateContent`；Nano 2 模式为 `generationConfig.thinkingConfig.thinkingLevel`，不发送独立 quality；`:predict` 保留既有分支 |
+| `openai` | 前台直发既有 `/images/generations`，旧 size/base64Array 路径不变；新增控件映射后加入 payload。平台是否兼容以该渠道为准 |
+| `gemini` | 仍不支持本地图片生成分支 |
+| `comfyui` | Qwen 图片专属路由，不进入 Lingwu 映射；H3 视频路由保持独立 |
+
+## Qwen 分辨率的准确含义
+
+目前字段中的数字 `1`、`2` 是 **K 系数**，不是 MP 数字：`resolution = 系数 × 1024`。原生节点按目标面积 `resolution²` 对参考图等比缩放，宽高对齐32像素；图生图**未填写比例字段**时 latent 跟随第一张缩放后的参考图，**明确填写比例字段**时会改用 `EmptyLatentImage` 覆盖采样画布。
+
+同一张2048×2048参考图，系数1：参考图和输出均为1024×1024，约1.05MP；系数2：参考图和输出均为2048×2048，约4.19MP。后者像素量四倍，通常需要更多计算/显存，但耗时和画质提升不能按四倍保证。非方图若**未填比例**，仍跟随输入长宽比；若**明确填了比例**，则按该比例重新计算宽高，不保证最长边不超过2048。
+
+画质 auto/high/max → 25/30/40步。模式 high 的16B版本仅预留，目前仍使用同一已安装模型。对照测试保持输入、提示词、画质一致，当前 UI 随机种子不同，适合比较尺寸和运行成本，不能当严格同种子的细节优劣实验。
+
+## 本次核验与手动测试
+
+- 本地模拟请求已覆盖6个已启用云端模型的文生/参考输入，21项ComfyUI与参数回归通过。
+- 真实 Electron `MediaJobRunner` → 本机模拟HTTP链路已确认 TT version/quality、Nano 2 thinkingLevel 出现在最终请求体；没有调用真实云端生成。
+- “图片模型基础测试 · 2.7.2”15行均通过生成预览，用户手动点击生成。Qwen沿用专项测试表并增加同一2K输入的1/2系数对照。
+- 主进程启动时会缓存映射模块，修改后必须保存项目并完整重启 Electron；Vite 热更新仅更新前台。2026-09-25发现运行进程15:54启动，参数映射16:08才更新，这次测试需重启再验证。
+
+---
+
+## v2.4.8 历史协议细节（冲突处以上方 v2.7.2 清单为准）
+
 > **核心逻辑**：图片字段在前端统一提供“分辨率、比例、参考图、生成数量、提示词和模型” → 根据 `provider` 分成不同协议 → 每套协议独立构造请求，不能因为模型名称都叫 Gemini 就混用参数。
 >
 > **适用版本**：Hong's AI Table Studio v2.4.8  

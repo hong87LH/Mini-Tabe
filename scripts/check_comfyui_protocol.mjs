@@ -11,8 +11,8 @@ const client = new ComfyUIClient('', endpoint);
 
 function summarizeTemplate(workflow) {
   const nodes = Object.values(workflow || {});
-  const scheduler = nodes.find(node => node.class_type === 'BasicScheduler');
-  const sampler = nodes.find(node => node.class_type === 'KSamplerSelect');
+  const scheduler = nodes.find(node => node.class_type === 'BasicScheduler' || node.class_type === 'KSampler');
+  const sampler = nodes.find(node => node.class_type === 'KSamplerSelect' || node.class_type === 'KSampler');
   return {
     steps: scheduler?.inputs?.steps ?? null,
     sampler: sampler?.inputs?.sampler_name ?? null

@@ -427,8 +427,13 @@ export class ResumableDownloader {
                     let downloadDir = this.getDownloadsDir();
                     let basename = '';
 
-                    const urlPath = new URL(job.resultUrl).pathname;
-                    const ext = path.extname(urlPath) || (job.mediaType === 'video' ? '.mp4' : '.jpg');
+                    const resultUrl = new URL(job.resultUrl);
+                    const urlPath = job.provider === 'comfyui'
+                        ? resultUrl.searchParams.get('filename') || resultUrl.pathname
+                        : resultUrl.pathname;
+                    const candidateExt = path.extname(urlPath).toLowerCase();
+                    const ext = /^\.[a-z0-9]{1,8}$/.test(candidateExt)
+                        ? candidateExt : (job.mediaType === 'video' ? '.mp4' : '.jpg');
 
                     if (job.downloadConfig) {
                         if (job.downloadConfig.folderPath) {

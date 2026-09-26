@@ -198,7 +198,7 @@ export class MediaJobRunner {
             // 4. POST createTask
             let startData;
             try {
-                startData = await client.createTask(model, prompt, finalParams, count || 1);
+                startData = await client.createTask(model, prompt, provider === 'comfyui' ? { ...finalParams, mediaType: type } : finalParams, count || 1);
             } catch (e) {
                 if (e && e.submissionUnknown) {
                     await this.jobStore.patch(localJobId, { phase: 'submission_unknown', lastError: { stage: 'creating', message: e.message, submissionUnknown: true } });

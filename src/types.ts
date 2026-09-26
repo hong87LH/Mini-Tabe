@@ -38,6 +38,8 @@ export interface Field {
     skillTemplate?: string; // Skill display name or a {Field} reference; empty keeps legacy Smart Text behavior
   };
   aiImageConfig?: {
+    mode?: string;
+    quality?: string;
     count?: number;
     size?: string;
     folderPath?: string;

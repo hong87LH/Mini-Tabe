@@ -1,3 +1,33 @@
+// Shared by the image UI and provider adapters. Missing settings preserve legacy defaults.
+export function normalizeImageControls(params = {}) {
+  const modeAliases = { auto: 'standard', high: 'enhanced', standard: 'standard', '标准': 'standard', enhanced: 'enhanced', '增强': 'enhanced' };
+  const qualityAliases = { auto: 'auto', '自动': 'auto', high: 'high', '高': 'high', max: 'max', '极致': 'max' };
+  const mode = modeAliases[String(params.mode || 'standard').trim().toLowerCase()];
+  const quality = qualityAliases[String(params.quality || 'auto').trim().toLowerCase()];
+  if (!mode) throw new Error('图片生成模式须为 auto 或 high');
+  if (!quality) throw new Error('图片画质须为 auto、high（高）或 max（极致）');
+  return { mode, quality };
+}
+
+export const isNano2ImageModel = model => ['gemini-3.1-flash-image-preview', 'gemini-3.1-flash-image', 'banana-2'].includes(normalizeLingwuModelName(model));
+export const isTT25ImageModel = model => /^tt-image-2\.5(?:-flare|-sunburst)?$/.test(normalizeLingwuModelName(model));
+
+export function buildImageControlParams(model, params = {}, protocol = 'media') {
+  const controls = normalizeImageControls(params);
+  if (isNano2ImageModel(model)) {
+    const thinkingLevel = controls.mode === 'enhanced' ? 'high' : 'minimal';
+    return protocol === 'gemini' ? { thinkingConfig: { thinkingLevel } } : { thinkingLevel };
+  }
+  if (isTT25ImageModel(model)) {
+    // An explicitly selected variant remains the default until the user selects a mode.
+    const version = params.mode ? (controls.mode === 'enhanced' ? 'sunburst' : 'flare')
+      : normalizeLingwuModelName(model).endsWith('-sunburst') ? 'sunburst' : 'flare';
+    return { version, quality: controls.quality };
+  }
+  // Unknown models keep explicit values; legacy tables do not gain new request keys.
+  return { ...(params.mode ? { mode: controls.mode === 'enhanced' ? 'high' : 'auto' } : {}), ...(params.quality ? { quality: controls.quality } : {}) };
+}
+
 export const LEGACY_LINGWU_PROFILE = {
   id: 'legacy-lingwu-image-v1',
   requestMode: 'legacy-size',
@@ -59,6 +89,7 @@ export function normalizeLingwuModelName(model) {
 }
 
 export function getLingwuImageModelProfile(model) {
+  if (isNano2ImageModel(model)) return { ...LINGWU_IMAGE_MODEL_PROFILES['gemini-3.1-flash-image-preview'], allowedImageSizes: ['0.5K','1K','2K','4K'] };
   return (
     LINGWU_IMAGE_MODEL_PROFILES[
       normalizeLingwuModelName(model)
@@ -67,10 +98,10 @@ export function getLingwuImageModelProfile(model) {
   );
 }
 
-export function normalizeGeminiImageSize(imageSize) {
+export function normalizeGeminiImageSize(imageSize, profile = {}) {
   if (!imageSize) return '1K';
   const upper = String(imageSize).toUpperCase();
-  if (['1K', '2K', '4K'].includes(upper)) return upper;
+  if ((profile.allowedImageSizes || ['1K', '2K', '4K']).includes(upper)) return upper;
   return '1K';
 }
 
@@ -157,10 +188,14 @@ export function buildLingwuImageParams({ model, params }) {
   const profile = getLingwuImageModelProfile(model);
   const input = { ...(params || {}) };
   
+  const controlParams = buildImageControlParams(model, input);
+  delete input.mode;
   delete input.quality;
+  Object.assign(input, controlParams);
+
 
   if (profile.requestMode === 'gemini-media') {
-    const imageSize = normalizeGeminiImageSize(input.imageSize);
+    const imageSize = normalizeGeminiImageSize(input.imageSize, profile);
     const aspectRatio = normalizeGeminiAspectRatio(input.aspectRatio, profile);
     return {
       ...input,

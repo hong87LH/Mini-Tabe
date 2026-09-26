@@ -92,7 +92,7 @@ test('read capabilities and tables', () => {
   const caps = ws.execute(request('system.get_capabilities'));
   assert.equal(caps.ok, true);
   assert.equal(caps.data.phase, 'phase4.7');
-  assert.equal(caps.data.appVersion, '2.6.8');
+  assert.equal(caps.data.appVersion, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
   assert.equal(caps.data.actionDefinitionVersion, '1.2');
   assert.equal(caps.data.detail, 'summary');
   assert.deepEqual(Object.keys(caps.data.implementedActions[0]), ['name']);
@@ -750,4 +750,17 @@ test('HTTP JSON Schema accepts phase 4 envelope and rejects unknown actions', ()
   const validate = new Ajv({ allErrors: true, jsonPointers: true, schemaId: 'auto' }).compile(schema);
   assert.equal(validate(request('transaction.preview', { actions: [{ action: 'row.delete', params: { tableId: 'table_1', rowIds: ['rec_1'] } }] }, { expectedRevision: 1, idempotencyKey: 'preview-001' })), true);
   assert.equal(validate(request('not.real', {})), false);
+});
+
+test('image mode and quality persist through safe AI configuration without touching video', async () => {
+  const workspace = createInMemoryWorkspace(base);
+  const created = await workspace.execute(request('table.create', {name:'Image controls',tableId:'image_controls'}, {confirmed:true}));
+  assert.equal(created.ok,true);
+  await workspace.execute(request('field.create',{tableId:'image_controls',fieldId:'image',name:'Image',type:'aiImage'},{confirmed:true}));
+  const configured = await workspace.execute(request('field.configure_ai',{tableId:'image_controls',fieldId:'image',config:{mode:'{模式}',quality:'{画质}'}},{confirmed:true}));
+  assert.equal(configured.ok,true);
+  const schema=await workspace.execute(request('table.get_schema',{tableId:'image_controls'}));
+  const field=schema.data.fields.find(f=>f.id==='image');
+  assert.equal(field.aiImageConfig.mode,'{模式}');
+  assert.equal(field.aiImageConfig.quality,'{画质}');
 });

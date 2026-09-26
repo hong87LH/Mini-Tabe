@@ -416,7 +416,25 @@ const GlobalFilterRule = ({ rule, index, data, lang, updateRule, removeRule }: {
 };
 
 function withDefaultComfyUIProvider(settings: any) {
-  const source = settings && typeof settings === 'object' ? settings : {};
+  const source = { ...(settings && typeof settings === 'object' ? settings : {}) };
+  const imageProviders = Array.isArray(source.image) ? source.image.filter(Boolean) : source.image ? [source.image] : [];
+  const qwenModels = ['qwen-image-2.1-local', 'qwen-image-2.1-transparent-local'];
+  const qwenIndex = imageProviders.findIndex((provider: any) => provider.id === 'comfyui-qwen-image21-local' ||
+    (provider.provider === 'comfyui' && String(provider.modelName || '').split(',').some((model: string) =>
+      ['qwen-image-2.1', ...qwenModels].includes(model.trim().toLowerCase()))));
+  if (qwenIndex >= 0) {
+    source.image = imageProviders.map((provider: any, index: number) => index !== qwenIndex ? provider : {
+      ...provider, modelName: Array.from(new Set([
+        ...String(provider.modelName || '').split(',').map((model: string) => model.trim()).filter(Boolean), ...qwenModels
+      ])).join(', ')
+    });
+  } else {
+    source.image = [...imageProviders, {
+      id: 'comfyui-qwen-image21-local', name: 'ComfyUI 本地 Qwen Image 2.1', provider: 'comfyui',
+      endpoint: 'http://127.0.0.1:8188', key: '', enabled: true,
+      modelName: 'qwen-image-2.1-local, qwen-image-2.1-transparent-local'
+    }];
+  }
   const existingVideoProviders = Array.isArray(source.video)
     ? source.video.filter(Boolean)
     : source.video
