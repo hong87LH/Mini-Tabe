@@ -21,3 +21,8 @@
 - `Table Action API v0.1`：localhost 协议版本。
 - `phase4.7`：Agent API 能力阶段，不是产品版本。
 - ComfyUI 工作流 ID/Alias：本地生成路由标识，不是应用版本。
+
+
+## v2.7.4（2026-10-09）
+
+局域网ComfyUI、banana-2.1映射、审阅筛选漏图修复及手动裁切预览。详见[更新说明](../v2.7.4_局域网ComfyUI与审阅优化.md)。

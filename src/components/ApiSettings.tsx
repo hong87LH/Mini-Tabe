@@ -62,6 +62,35 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const [psPath, setPsPath] = useState(localStorage.getItem('bitable_ps_path') || '');
   const [comfyuiBatPath, setComfyuiBatPath] = useState(localStorage.getItem('bitable_comfyui_bat_path') || '');
+  const [comfyuiEndpoint, setComfyuiEndpoint] = useState(() => {
+    const providers = [...(modelSettings.image || []), ...(modelSettings.video || [])].filter(p => p.provider === 'comfyui');
+    const endpoints = [...new Set(providers.map(p => String(p.endpoint || 'http://127.0.0.1:8188').trim()))];
+    return endpoints.length === 1 ? endpoints[0] : 'http://127.0.0.1:8188';
+  });
+  const [comfyuiEndpointMessage, setComfyuiEndpointMessage] = useState('');
+  const [comfyuiEndpointError, setComfyuiEndpointError] = useState(false);
+  const applyComfyuiEndpoint = () => {
+    try {
+      const raw = comfyuiEndpoint.trim() || 'http://127.0.0.1:8188';
+      const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+        throw new Error(lang === 'en' ? 'Use an HTTP(S) service address without credentials, query or fragment.' : '请填写 HTTP(S) 服务地址，不包含账号密码、查询参数或锚点。');
+      }
+      const endpoint = url.href.replace(/\/+$/, '');
+      const count = [...(modelSettings.image || []), ...(modelSettings.video || [])].filter(p => p.provider === 'comfyui').length;
+      if (!count) throw new Error(lang === 'en' ? 'Add a ComfyUI image or video provider first.' : '请先添加 ComfyUI 图片或视频提供商。');
+      setModelSettings({ ...modelSettings,
+        image: (modelSettings.image || []).map(p => p.provider === 'comfyui' ? { ...p, endpoint } : p),
+        video: (modelSettings.video || []).map(p => p.provider === 'comfyui' ? { ...p, endpoint } : p)
+      });
+      setComfyuiEndpoint(endpoint);
+      setComfyuiEndpointError(false);
+      setComfyuiEndpointMessage(lang === 'en' ? `Applied to ${count} ComfyUI providers.` : `已应用到 ${count} 个 ComfyUI 提供商。`);
+    } catch (error: any) {
+      setComfyuiEndpointError(true);
+      setComfyuiEndpointMessage(error.message || String(error));
+    }
+  };
   const [storageData, setStorageData] = useState<any>(null);
   const [storageLoading, setStorageLoading] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'api' | 'skills'>('api');
@@ -1043,6 +1072,21 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
               }
             }}
           />
+          <div>
+            <label htmlFor="comfyui-service-endpoint" className="block text-xs text-gray-600 mb-1.5">{lang === 'en' ? 'ComfyUI service address' : 'ComfyUI 服务地址'}</label>
+            <div className="flex gap-2">
+              <input id="comfyui-service-endpoint" type="text" spellCheck={false}
+                placeholder="http://127.0.0.1:8188"
+                className="flex-1 min-w-0 border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-mono text-gray-600"
+                value={comfyuiEndpoint}
+                onChange={e => { setComfyuiEndpoint(e.target.value); setComfyuiEndpointMessage(''); }}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); applyComfyuiEndpoint(); } }} />
+              <button type="button" onClick={applyComfyuiEndpoint} className="px-3 py-2 rounded border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 shrink-0">
+                {lang === 'en' ? 'Apply' : '应用'}
+              </button>
+            </div>
+            {comfyuiEndpointMessage && <p role="status" className={`mt-1 text-xs ${comfyuiEndpointError ? 'text-red-600' : 'text-green-600'}`}>{comfyuiEndpointMessage}</p>}
+          </div>
           <div>
             <div className="flex gap-2">
               <input

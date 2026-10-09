@@ -483,7 +483,7 @@ test('image adapters submit exact model and controls to local mock transport, in
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try {
     const client=new LingwuClient('mock-only',`http://127.0.0.1:${server.address().port}`);
-    for(const model of ['tt-image-2.5','gemini-3.1-flash-image-preview','gemini-3-pro-image-preview','gpt-image-2','gpt-image-2-guan','doubao-seedream-5-0-260128']) {
+    for(const model of ['tt-image-2.5','banana-2.1','gemini-3.1-flash-image-preview','gemini-3-pro-image-preview','gpt-image-2','gpt-image-2-guan','doubao-seedream-5-0-260128']) {
       for(const images of [[],['https://example.invalid/reference.png']]) {
         const params=buildLingwuImageParams({model,params:{imageSize:'1K',aspectRatio:'1:1',mode:'high',quality:'max',images}});
         await client.createTask(model,'test',params,1);
@@ -491,7 +491,7 @@ test('image adapters submit exact model and controls to local mock transport, in
         assert.equal(sent.url,'/v1/media/generate');
         assert.equal(sent.body.model,model);assert.equal(sent.body.count,1);
         assert.deepEqual(sent.body.params.images,images);
-        if(model==='gemini-3.1-flash-image-preview') {
+        if(model==='gemini-3.1-flash-image-preview' || model==='banana-2.1') {
           assert.equal(sent.body.params.thinkingLevel,'high');
           assert.ok(!('quality' in sent.body.params));assert.ok(!('mode' in sent.body.params));
         }
@@ -501,6 +501,58 @@ test('image adapters submit exact model and controls to local mock transport, in
         }
       }
     }
-    assert.equal(captured.length,12);
+    assert.equal(captured.length,14);
   } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+
+test('LAN ComfyUI uses the selected host for upload, submission, polling and download without local BAT', async t => {
+  const {ensureComfyUIAvailable,isLocalComfyUIEndpoint}=await import('../comfyui_launcher.js');
+  assert.equal(isLocalComfyUIEndpoint(''),true);
+  assert.equal(isLocalComfyUIEndpoint('http://localhost:8188'),true);
+  assert.equal(isLocalComfyUIEndpoint('http://192.168.1.20:8188'),false);
+  const address=Object.values(os.networkInterfaces()).flat().find(item=>item?.family==='IPv4'&&!item.internal)?.address;
+  if(!address){t.skip('No LAN IPv4 interface available');return;}
+  let healthy=true,uploaded=false,submitted;
+  const output=Buffer.from('mock-png-result');
+  const server=http.createServer(async(req,res)=>{
+    const send=value=>{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
+    if(req.url==='/system_stats'){res.writeHead(healthy?200:503);res.end('{}');return;}
+    if(req.url==='/upload/image'){for await(const chunk of req){} uploaded=true;send({name:'reference.png'});return;}
+    if(req.url==='/prompt'){let body='';for await(const chunk of req)body+=chunk;submitted=JSON.parse(body).prompt;send({prompt_id:'lan-mock'});return;}
+    if(req.url==='/history/lan-mock'){send({'lan-mock':{status:{completed:true,status_str:'success'},outputs:{'10':{images:[{filename:'result.png',subfolder:'remote',type:'output'}]}}}});return;}
+    if(req.url.startsWith('/view?')){res.writeHead(200,{'Content-Type':'image/png'});res.end(output);return;}
+    res.writeHead(404);res.end();
+  });
+  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,address,resolve);});
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const endpoint=`http://${address}:${server.address().port}`;
+  const ready=await ensureComfyUIAvailable({endpoint,batPath:'nonexistent-local-startup.bat'});
+  assert.equal(ready.started,false);assert.equal(ready.ok,true);
+  const client=new ComfyUIClient('',endpoint);
+  await client.createTask('qwen-image-2.1-local','LAN test',{images:['data:image/png;base64,aGVsbG8='],imageSize:'0.5K',aspectRatio:'1:1'});
+  assert.equal(uploaded,true);assert.equal(submitted['100'].inputs.image,'reference.png');
+  const status=await client.getTaskStatus('lan-mock');
+  assert.ok(status.data.result_url.startsWith(endpoint+'/view?'));
+  assert.deepEqual(Buffer.from(await(await fetch(status.data.result_url)).arrayBuffer()),output);
+  healthy=false;
+  await assert.rejects(()=>ensureComfyUIAvailable({endpoint,batPath:'nonexistent-local-startup.bat'}),/无法连接远程 ComfyUI/);
+});
+
+
+test('banana-2.1 follows its documented Flash-style parameter contract', async () => {
+  const {buildLingwuImageParams, getLingwuImageModelProfile}=await import('../lingwu_image_model_profiles.js');
+  const model='banana-2.1';
+  const profile=getLingwuImageModelProfile(model);
+  assert.equal(profile.maxReferenceImages,14);
+  assert.deepEqual(profile.allowedImageSizes,['1K','2K','4K']);
+  for (const imageSize of profile.allowedImageSizes) for (const aspectRatio of profile.allowedAspectRatios) {
+    for (const mode of ['auto','high']) {
+      const images=Array.from({length:14},(_,i)=>`https://example.invalid/${i}.png`);
+      assert.deepEqual(buildLingwuImageParams({model,params:{imageSize,aspectRatio,mode,quality:'max',images}}),
+        {imageSize,aspectRatio,images,thinkingLevel:mode==='high'?'high':'minimal'});
+    }
+  }
+  assert.deepEqual(buildLingwuImageParams({model,params:{}}),{imageSize:'1K',aspectRatio:'1:1',thinkingLevel:'minimal'});
+  assert.equal(buildLingwuImageParams({model,params:{imageSize:'0.5K'}}).imageSize,'1K');
 });

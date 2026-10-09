@@ -48,8 +48,8 @@ async function waitForComfyUI(endpoint, timeoutMs) {
 export async function ensureComfyUIAvailable({ endpoint, batPath, startupTimeoutMs = 120000 } = {}) {
   const normalizedEndpoint = normalizeEndpoint(endpoint);
   if (await probeComfyUI(normalizedEndpoint)) return { ok: true, started: false };
+  if (!isLocalComfyUIEndpoint(normalizedEndpoint)) throw new Error(`无法连接远程 ComfyUI：${normalizedEndpoint}。请检查服务端监听地址、端口及网络连接；不会启动本机 BAT。`);
   if (!batPath) return { ok: false, started: false };
-  if (!isLocalComfyUIEndpoint(normalizedEndpoint)) throw new Error('Automatic ComfyUI startup is allowed only for localhost endpoints.');
 
   const resolvedBat = validateBatPath(batPath);
   const startKey = `${normalizedEndpoint}|${resolvedBat.toLowerCase()}`;

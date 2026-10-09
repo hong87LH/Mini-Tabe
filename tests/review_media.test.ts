@@ -242,3 +242,64 @@ test('single-media copy payload excludes only cropData and keeps review/trim att
   assert.deepEqual(payload.item, expected);
   assert.equal(await written['text/plain'].text(), original.url);
 });
+
+
+test('review column filtering precedes deduplication and retains the selected record', () => {
+  const start = gridSource.indexOf('    const imagesMap = new Map();');
+  const end = gridSource.indexOf('    const renderImageCard', start);
+  assert.ok(start >= 0 && end > start);
+  const compiled = ts.transpileModule(gridSource.slice(start, end) + ';globalThis.result = displayImages;',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const data = { fields: [{ id: 'B', type: 'attachment' }, { id: 'A', type: 'aiImage' }], records: [
+    { id: 'outside', B: [{ url: 'shared.png', rating: 1 }] },
+    { id: 'selected', A: [{ url: 'shared.png', rating: 5 }, { url: 'only-a.png' }] },
+    { id: 'repeat', A: [{ url: 'shared.png', rating: 5 }] }
+  ] };
+  const run = (columnFilter: string, ratingFilter = 'all') => {
+    const context: any = { data, columnFilter, ratingFilter, statusFilter: 'all' };
+    vm.runInNewContext(compiled, context);
+    return context.result;
+  };
+  const selected = run('A');
+  assert.equal(selected.length, 2);
+  assert.equal(selected[0].record.id, 'selected');
+  assert.equal(selected[0].fieldId, 'A');
+  assert.equal(run('A', '5').length, 1);
+  assert.equal(run('B').length, 1);
+  assert.equal(run('all').length, 2);
+  assert.equal(run('missing').length, 0);
+});
+
+
+test('review preview opens full image while table preview restores saved crop', () => {
+  const start = gridSource.indexOf('    setActiveAnnotationId(null);');
+  const end = gridSource.indexOf('  }, [item.url', start);
+  assert.ok(start > 0 && end > start);
+  const cropData = { ratio: 1.5, scale: 3, x: 40, y: 20, isOutpaint: true };
+  for (const sourceViewMode of ['gallery', 'table']) {
+    const state: any = {};
+    vm.runInNewContext(gridSource.slice(start, end), {
+      item: { cropData }, sourceViewMode,
+      setActiveAnnotationId: () => {},
+      restoreSavedCropView: (crop: any) => { state.restored = crop; },
+      setCropRatio: (v: any) => { state.ratio = v; },
+      setIsCropMode: (v: any) => { state.crop = v; },
+      setIsOutpaintMode: (v: any) => { state.outpaint = v; },
+      setScale: (v: any) => { state.scale = v; },
+      setPos: (v: any) => { state.pos = v; }
+    });
+    if (sourceViewMode === 'gallery') {
+      assert.equal(state.crop, false);
+      assert.equal(state.outpaint, false);
+      assert.equal(state.scale, 1);
+      assert.equal(state.pos.x, 0);
+      assert.equal(state.pos.y, 0);
+      assert.equal(state.restored, undefined);
+    } else {
+      assert.equal(state.crop, true);
+      assert.equal(state.outpaint, true);
+      assert.equal(state.restored, cropData);
+    }
+    assert.equal(cropData.scale, 3);
+  }
+});

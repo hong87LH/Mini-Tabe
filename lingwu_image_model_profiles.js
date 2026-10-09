@@ -9,7 +9,7 @@ export function normalizeImageControls(params = {}) {
   return { mode, quality };
 }
 
-export const isNano2ImageModel = model => ['gemini-3.1-flash-image-preview', 'gemini-3.1-flash-image', 'banana-2'].includes(normalizeLingwuModelName(model));
+export const isNano2ImageModel = model => ['gemini-3.1-flash-image-preview', 'gemini-3.1-flash-image', 'banana-2', 'banana-2.1'].includes(normalizeLingwuModelName(model));
 export const isTT25ImageModel = model => /^tt-image-2\.5(?:-flare|-sunburst)?$/.test(normalizeLingwuModelName(model));
 
 export function buildImageControlParams(model, params = {}, protocol = 'media') {
@@ -89,6 +89,11 @@ export function normalizeLingwuModelName(model) {
 }
 
 export function getLingwuImageModelProfile(model) {
+  if (normalizeLingwuModelName(model) === 'banana-2.1') return {
+    ...LINGWU_IMAGE_MODEL_PROFILES['gemini-3.1-flash-image-preview'],
+    id: 'lingwu-banana-2.1',
+    allowedAspectRatios: [...LINGWU_IMAGE_MODEL_PROFILES['gemini-3.1-flash-image-preview'].allowedAspectRatios, '1:4', '4:1', '1:8', '8:1']
+  };
   if (isNano2ImageModel(model)) return { ...LINGWU_IMAGE_MODEL_PROFILES['gemini-3.1-flash-image-preview'], allowedImageSizes: ['0.5K','1K','2K','4K'] };
   return (
     LINGWU_IMAGE_MODEL_PROFILES[

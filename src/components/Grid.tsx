@@ -400,10 +400,11 @@ const ZoomableImage = ({
   // Defaults to true if launched from gallery (Review Mode), false if from table (Normal Default View).
   const [isRefMode, setIsRefMode] = useState(sourceViewMode === 'gallery');
 
-  const [scale, setScale] = useState(item.cropData?.scale || 1);
-  const [pos, setPos] = useState({ x: item.cropData?.x || 0, y: item.cropData?.y || 0 });
-  const [isCropMode, setIsCropMode] = useState(!!item.cropData);
-  const [isOutpaintMode, setIsOutpaintMode] = useState(item.cropData?.isOutpaint || false);
+  const initialCrop = sourceViewMode === 'gallery' ? null : item.cropData;
+  const [scale, setScale] = useState(initialCrop?.scale || 1);
+  const [pos, setPos] = useState({ x: initialCrop?.x || 0, y: initialCrop?.y || 0 });
+  const [isCropMode, setIsCropMode] = useState(!!initialCrop);
+  const [isOutpaintMode, setIsOutpaintMode] = useState(initialCrop?.isOutpaint || false);
   const [cropRatio, setCropRatio] = useState<number>(item.cropData?.ratio || 1);
   
   const [refScales, setRefScales] = useState<number[]>([1, 1]);
@@ -463,13 +464,13 @@ const ZoomableImage = ({
   }, [src]);
 
   useEffect(() => {
-    if (isVideo || isAudio || !item.cropData || typeof ResizeObserver === 'undefined') return;
+    if (!isCropMode || isVideo || isAudio || !item.cropData || typeof ResizeObserver === 'undefined') return;
     const image = imgRef.current;
     if (!image) return;
     const observer = new ResizeObserver(() => restoreSavedCropView(item.cropData, image));
     observer.observe(image);
     return () => observer.disconnect();
-  }, [src, itemInstanceKey, item.cropData, isVideo, isAudio, restoreSavedCropView]);
+  }, [src, itemInstanceKey, item.cropData, isVideo, isAudio, isCropMode, restoreSavedCropView]);
 
   useEffect(() => {
     // v2.6.1 rev5: always rehydrate the exact saved A/B metadata when an existing
@@ -835,7 +836,7 @@ const ZoomableImage = ({
 
   useEffect(() => {
     setActiveAnnotationId(null);
-    if (item.cropData) {
+    if (sourceViewMode !== 'gallery' && item.cropData) {
         restoreSavedCropView(item.cropData);
         setCropRatio(item.cropData.ratio || 1);
         setIsCropMode(true);
@@ -843,8 +844,12 @@ const ZoomableImage = ({
     } else {
         setIsCropMode(false);
         setIsOutpaintMode(false);
+        if (sourceViewMode === 'gallery') {
+            setScale(1);
+            setPos({ x: 0, y: 0 });
+        }
     }
-  }, [item.url, item.mappedUrl, itemInstanceKey, restoreSavedCropView]);
+  }, [item.url, item.mappedUrl, itemInstanceKey, sourceViewMode, restoreSavedCropView]);
 
   const applyOutpaintTopStrategy = (ratio: number) => {
     if (!imgRef.current) return;
@@ -1304,7 +1309,17 @@ const ZoomableImage = ({
                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
             )}
          </button>
-         <button onClick={(e) => { e.stopPropagation(); setIsCropMode(prev => !prev); }} title={lang === 'en' ? "Crop Mode" : "局部修图模式"} className={`p-2 rounded-full transition-colors flex items-center justify-center relative ${isCropMode ? 'bg-blue-600 text-white' : 'bg-black/50 text-white/70 hover:text-white'}`}>
+         <button onClick={(e) => { e.stopPropagation();
+           if (!isCropMode && item.cropData) {
+             setCropRatio(item.cropData.ratio || 1);
+             setIsOutpaintMode(item.cropData.isOutpaint || false);
+             restoreSavedCropView(item.cropData);
+           } else if (isCropMode && sourceViewMode === 'gallery') {
+             setScale(1);
+             setPos({ x: 0, y: 0 });
+             setIsOutpaintMode(false);
+           }
+           setIsCropMode(prev => !prev); }} title={lang === 'en' ? "Crop Mode" : "局部修图模式"} className={`p-2 rounded-full transition-colors flex items-center justify-center relative ${isCropMode ? 'bg-blue-600 text-white' : 'bg-black/50 text-white/70 hover:text-white'}`}>
              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>
          </button>
          <button onClick={(e) => { e.stopPropagation(); void copyMediaToClipboardMagic(item); }} title="Copy Image" className="text-white/70 hover:text-white p-2 bg-black/50 rounded-full transition-colors">
@@ -1452,7 +1467,7 @@ const ZoomableImage = ({
              draggable={false} 
              onLoad={(event) => {
                setImageLoaded(true);
-               restoreSavedCropView(item.cropData, event.currentTarget);
+               if (isCropMode) restoreSavedCropView(item.cropData, event.currentTarget);
              }}
              onDoubleClick={(e) => {
                 e.stopPropagation();
@@ -2967,6 +2982,7 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
     const imagesMap = new Map();
     data.records.forEach((rec: any) => {
         data.fields.forEach((f: any) => {
+            if (columnFilter !== 'all' && f.id !== columnFilter) return;
             if (f.type === 'attachment' || f.type === 'aiImage' || f.type === 'aiVideo') {
                 const val = rec[f.id];
                 if (val) {
@@ -3009,7 +3025,6 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
     const displayImages = enrichedImages.filter(img => {
         if (statusFilter !== 'all' && img.status !== statusFilter) return false;
         if (ratingFilter !== 'all' && String(img.rating) !== ratingFilter) return false;
-        if (columnFilter !== 'all' && img.fieldId !== columnFilter) return false;
         return true;
     });
 
