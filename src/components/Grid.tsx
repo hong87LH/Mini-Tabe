@@ -74,7 +74,7 @@ const getEnabledProviders = (value: any): any[] => {
 const getAllConfiguredModels = (value: any): string[] => {
   return Array.from(
     new Set(
-      normalizeProviderList(value).flatMap(parseProviderDisplayModels)
+      getEnabledProviders(value).flatMap(parseProviderDisplayModels)
     )
   );
 };
@@ -7192,6 +7192,7 @@ function HeaderCell({
                           <label className="block text-[10px] text-gray-500 mb-1">图片生成模型 (可引用字段，覆盖默认)</label>
                           <input 
                             type="text" 
+                            autoComplete="off"
                             list={`model-suggestions-${field.id}`}
                             className="w-full text-xs border border-gray-300 rounded p-1 outline-none placeholder:text-gray-300"
                             placeholder="例如: {Model} 或 dall-e-3"
@@ -7442,7 +7443,8 @@ function HeaderCell({
                            <div className="flex border border-gray-300 rounded overflow-hidden">
                              <input 
                                type="text" 
-                               list={`model-suggestions-${field.id}`}
+                               autoComplete="off"
+                            list={`model-suggestions-${field.id}`}
                                className="w-full text-xs p-1 outline-none placeholder:text-gray-300"
                                placeholder="例如: video-v1"
                                value={draftAiVideoConfig.modelTemplate || ''}

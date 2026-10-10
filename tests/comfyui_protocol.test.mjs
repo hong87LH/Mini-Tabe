@@ -483,7 +483,7 @@ test('image adapters submit exact model and controls to local mock transport, in
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try {
     const client=new LingwuClient('mock-only',`http://127.0.0.1:${server.address().port}`);
-    for(const model of ['tt-image-2.5','banana-2.1','gemini-3.1-flash-image-preview','gemini-3-pro-image-preview','gpt-image-2','gpt-image-2-guan','doubao-seedream-5-0-260128']) {
+    for(const model of ['tt-image-2.5','banana-2.1','gemini-3.1-flash-image-preview','banana-pro','gpt-image-2','gpt-image-2-guan','doubao-seedream-5-0-260128']) {
       for(const images of [[],['https://example.invalid/reference.png']]) {
         const params=buildLingwuImageParams({model,params:{imageSize:'1K',aspectRatio:'1:1',mode:'high',quality:'max',images}});
         await client.createTask(model,'test',params,1);
@@ -555,4 +555,17 @@ test('banana-2.1 follows its documented Flash-style parameter contract', async (
   }
   assert.deepEqual(buildLingwuImageParams({model,params:{}}),{imageSize:'1K',aspectRatio:'1:1',thinkingLevel:'minimal'});
   assert.equal(buildLingwuImageParams({model,params:{imageSize:'0.5K'}}).imageSize,'1K');
+});
+
+
+test('renamed Pro and banana-2 use the intended image profiles', async () => {
+  const {getLingwuImageModelProfile,buildLingwuImageParams}=await import('../lingwu_image_model_profiles.js');
+  assert.equal(getLingwuImageModelProfile('banana-pro').requestMode,'gemini-media');
+  assert.equal(getLingwuImageModelProfile('banana-pro').maxReferenceImages,14);
+  assert.equal(getLingwuImageModelProfile('gemini-3-pro-image-preview').requestMode,'legacy-size');
+  assert.deepEqual(buildLingwuImageParams({model:'banana-pro',params:{imageSize:'4K',aspectRatio:'3:2'}}),{imageSize:'4K',aspectRatio:'3:2'});
+  for (const mode of ['auto','high']) for (const quality of ['auto','high','max']) {
+    const params={mode,quality,imageSize:'2K',aspectRatio:'16:9',images:['ref.png']};
+    assert.deepEqual(buildLingwuImageParams({model:'banana-2',params}),buildLingwuImageParams({model:'gemini-3.1-flash-image-preview',params}));
+  }
 });

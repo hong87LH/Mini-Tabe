@@ -303,3 +303,16 @@ test('review preview opens full image while table preview restores saved crop', 
     assert.equal(cropData.scale, 3);
   }
 });
+
+
+test('model suggestions omit disabled providers and removed model names', () => {
+  const start=gridSource.indexOf('const normalizeProviderList =');
+  const end=gridSource.indexOf('const findEnabledProviderForModel =',start);
+  const code=ts.transpileModule(gridSource.slice(start,end)+';globalThis.models=getAllConfiguredModels;', {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const context:any={};vm.runInNewContext(code,context);
+  const providers=[{modelName:'banana-pro, banana-2',enabled:true},{modelName:'gemini-3-pro-image-preview, gemini-3.1-flash-image-preview',enabled:false}];
+  assert.equal(JSON.stringify(context.models(providers)),JSON.stringify(['banana-pro','banana-2']));
+  providers[0].modelName='banana-2';
+  assert.equal(JSON.stringify(context.models(providers)),JSON.stringify(['banana-2']));
+  assert.equal(context.models([]).length,0);
+});

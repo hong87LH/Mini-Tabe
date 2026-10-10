@@ -41,7 +41,7 @@ export const LINGWU_IMAGE_MODEL_PROFILES = {
     referenceProfileId: 'legacy-webp-q90-v1',
     allowedImageSizes: ['2K', '3K'],
   },
-  'gemini-3-pro-image-preview': {
+  'banana-pro': {
     id: 'lingwu-gemini-pro-v1',
     requestMode: 'gemini-media',
     referenceProfileId: 'gemini-jpeg-q95-v1',
