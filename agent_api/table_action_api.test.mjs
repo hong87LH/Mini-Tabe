@@ -93,7 +93,7 @@ test('read capabilities and tables', () => {
   assert.equal(caps.ok, true);
   assert.equal(caps.data.phase, 'phase4.7');
   assert.equal(caps.data.appVersion, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
-  assert.equal(caps.data.actionDefinitionVersion, '1.2');
+  assert.equal(caps.data.actionDefinitionVersion, '1.3');
   assert.equal(caps.data.detail, 'summary');
   assert.deepEqual(Object.keys(caps.data.implementedActions[0]), ['name']);
   assert.equal(caps.data.features.actionDefinitions, true);
@@ -763,4 +763,72 @@ test('image mode and quality persist through safe AI configuration without touch
   const field=schema.data.fields.find(f=>f.id==='image');
   assert.equal(field.aiImageConfig.mode,'{模式}');
   assert.equal(field.aiImageConfig.quality,'{画质}');
+});
+
+
+test('project folders preserve legacy arrays, table data, revision, replay and safe deletion', () => {
+  const ws = createInMemoryWorkspace(base);
+  const run = (action, params={}, extra={}) => ws.execute(request(action, params, {confirmed:true, ...extra}));
+  assert.deepEqual(run('project.list').data.projects, []);
+  const before=ws.getSnapshot();
+  assert.equal(run('project.create',{name:'A',projectId:'p1'},{dryRun:true}).ok,true);
+  assert.deepEqual(ws.getSnapshot(),before);
+  assert.equal(ws.execute(request('project.create',{name:'A'})).error.code,'CONFIRMATION_REQUIRED');
+  const created=run('project.create',{name:'A',projectId:'p1'},{idempotencyKey:'folder1'});
+  assert.ok(created.undoToken);
+  assert.equal(run('project.create',{name:'A',projectId:'p1'},{idempotencyKey:'folder1'}).data.idempotentReplay,true);
+  assert.equal(run('project.create',{name:'B',projectId:'p2'}).ok,true);
+  assert.equal(run('project.create',{name:'a'}).ok,false);
+  assert.equal(run('project.reorder',{projectId:'p2',toIndex:0}).ok,true);
+  assert.deepEqual(run('project.list').data.projects.map(p=>p.id),['p2','p1']);
+  assert.equal(run('project.rename',{projectId:'p2',name:'Renamed'}).ok,true);
+  assert.equal(run('table.move_to_project',{tableId:'table_1',projectId:'p1'}).ok,true);
+  assert.deepEqual(ws.getSnapshot().tables[0].data,base.tables[0].data);
+  assert.equal(run('table.list').data.tables[0].projectId,'p1');
+  assert.equal(run('table.move_to_project',{tableId:'table_1',projectId:'missing'}).ok,false);
+  assert.equal(run('table.move_to_project',{tableId:'table_1',projectId:null,toIndex:5}).ok,false);
+  assert.equal(run('project.delete',{projectId:'p1'},{expectedRevision:0}).error.code,'STALE_WORKSPACE');
+  assert.equal(run('project.delete',{projectId:'p1'}).ok,true);
+  assert.equal(ws.getSnapshot().tables[0].projectId,null);
+  assert.deepEqual(ws.getSnapshot().tables[0].data,base.tables[0].data);
+  assert.equal(run('project.list').data.projects.length,1);
+  const reloaded=createInMemoryWorkspace({...ws.getSnapshot(),tables:JSON.parse(JSON.stringify(ws.getSnapshot().tables))});
+  assert.equal(reloaded.execute(request('project.list')).data.projects[0].name,'Renamed');
+});
+
+test('folder metadata survives first table deletion/reorder and transaction steps', async () => {
+  const {getProjectFolders,appendProjectTables}=await import('./table_action_api.js');
+  const ws=createInMemoryWorkspace(base);
+  const run=(action,params)=>ws.execute(request(action,params,{confirmed:true}));
+  run('project.create',{name:'Empty',projectId:'p'});
+  run('table.create',{name:'Second',tableId:'t2'});
+  run('table.move_to_project',{tableId:'t2',projectId:'p'});
+  run('table.reorder',{tableId:'table_1',toIndex:1});
+  assert.equal(getProjectFolders(ws.getSnapshot().tables).length,1);
+  const transaction=run('transaction.execute',{actions:[{action:'table.delete',params:{tableId:'t2'}},{action:'project.rename',params:{projectId:'p',name:'Still here'}}]});
+  assert.equal(transaction.ok,true,JSON.stringify(transaction));
+  assert.equal(getProjectFolders(ws.getSnapshot().tables)[0].name,'Still here');
+  assert.equal(ws.getSnapshot().tables.length,1);
+  const merged=appendProjectTables(ws.getSnapshot().tables,ws.getSnapshot().tables);
+  assert.equal(merged.length,2);
+  assert.equal(new Set(merged.map(t=>t.id)).size,2);
+  assert.equal(new Set(getProjectFolders(merged).map(p=>p.id)).size,2);
+});
+
+
+test('project moves support within-folder ordering and failed transactions are atomic', () => {
+  const ws=createInMemoryWorkspace(base);
+  const run=(action,params)=>ws.execute(request(action,params,{confirmed:true}));
+  const created=run('project.create',{name:'Generated'});
+  assert.ok(created.data.projectId);
+  const projectId=created.data.projectId;
+  run('table.create',{name:'Second',tableId:'t2'});
+  run('table.create',{name:'Third',tableId:'t3'});
+  for (const tableId of ['table_1','t2','t3']) assert.equal(run('table.move_to_project',{tableId,projectId}).ok,true);
+  run('table.move_to_project',{tableId:'t3',projectId,toIndex:0});
+  assert.deepEqual(run('project.list',{}).data.projects[0].tableIds,['t3','table_1','t2']);
+  const before=ws.getSnapshot();
+  const fail=run('transaction.execute',{actions:[{action:'project.delete',params:{projectId}},{action:'table.move_to_project',params:{tableId:'missing',projectId:null}}]});
+  assert.equal(fail.ok,false);
+  assert.deepEqual(ws.getSnapshot(),before);
 });

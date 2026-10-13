@@ -126,6 +126,37 @@ function normalizeRequest(raw) {
   };
 }
 
+// Directory metadata stays on the first table so legacy project arrays remain readable.
+export function getProjectFolders(tables) {
+  return tables.find(table => Array.isArray(table.projectFolders))?.projectFolders || [];
+}
+
+export function withProjectFolders(tables, folders) {
+  return tables.map((table, index) => {
+    const { projectFolders, ...rest } = table;
+    return index === 0 ? { ...rest, projectFolders: folders } : rest;
+  });
+}
+
+export function preserveProjectFolders(tables, previous = []) {
+  if (!tables.length) return tables;
+  const source = tables.some(table => Array.isArray(table.projectFolders)) ? tables : previous;
+  if (!source.some(table => Array.isArray(table.projectFolders))) return tables;
+  return withProjectFolders(tables, getProjectFolders(source));
+}
+
+export function appendProjectTables(current, incoming) {
+  const folders = getProjectFolders(incoming);
+  const ids = new Map(folders.map(folder => [folder.id, makeId('project')]));
+  const added = incoming.map(table => {
+    const { projectFolders, ...rest } = clone(table);
+    return { ...rest, id: makeId('table'), projectId: ids.get(table.projectId) || null };
+  });
+  return withProjectFolders([...current, ...added], [
+    ...getProjectFolders(current), ...folders.map(folder => ({ ...folder, id: ids.get(folder.id) }))
+  ]);
+}
+
 function normalizeSnapshot(snapshot) {
   if (!isObject(snapshot) || !Array.isArray(snapshot.tables)) {
     throw new Error('Workspace snapshot must contain tables[]');
@@ -925,7 +956,10 @@ function applyAction(request, workspace) {
           stepIndex: index, action: item.action, cause: result.response?.error || null
         }) };
       }
-      if (result.nextWorkspace) current = result.nextWorkspace;
+      if (result.nextWorkspace) {
+        result.nextWorkspace.tables = preserveProjectFolders(result.nextWorkspace.tables, current.tables);
+        current = result.nextWorkspace;
+      }
       combined = mergeEffects(combined, result.response.effects);
       steps.push({ index, action: item.action, data: clone(result.response.data), effects: clone(result.response.effects) });
     }
@@ -1014,6 +1048,51 @@ function applyAction(request, workspace) {
     };
   }
 
+  if (action.startsWith('project.') || action === 'table.move_to_project') {
+    let folders = clone(getProjectFolders(workspace.tables));
+    let tables = workspace.tables;
+    const params = request.params;
+    let projectId = params.projectId;
+    const index = folders.findIndex(folder => folder.id === projectId);
+    const fail = (code, message) => ({ response: failure(request, code, message) });
+    if (action === 'project.list') return { response: success(request, { projects: folders.map(folder => ({ ...folder, tableIds: tables.filter(table => table.projectId === folder.id).map(table => table.id) })) }) };
+    if (action === 'project.create') {
+      const name = String(params.name || '').trim();
+      if (!name) return fail('INVALID_REQUEST', 'Project name is required');
+      if (folders.some(folder => folder.name.toLowerCase() === name.toLowerCase())) return fail('WRITE_CONFLICT', 'Project name already exists');
+      const id = projectId || makeId('project');
+      if (folders.some(folder => folder.id === id)) return fail('WRITE_CONFLICT', 'Project ID already exists');
+      folders.push({ id, name });
+      projectId = id;
+    } else if (action === 'table.move_to_project') {
+      if (projectId !== null && index < 0) return fail('NOT_FOUND', 'Project not found');
+      const table = tables.find(table => table.id === params.tableId);
+      if (!table) return fail('NOT_FOUND', 'Table not found');
+      const peers = tables.filter(other => other.id !== table.id && (folders.some(folder => folder.id === other.projectId) ? other.projectId : null) === projectId);
+      const toIndex = params.toIndex === undefined ? peers.length : params.toIndex;
+      if (!Number.isInteger(toIndex) || toIndex < 0 || toIndex > peers.length) return fail('INVALID_REQUEST', 'Invalid destination index');
+      tables = tables.filter(other => other.id !== table.id);
+      const anchor = peers[toIndex];
+      const at = anchor ? tables.findIndex(other => other.id === anchor.id) : peers.length ? tables.findIndex(other => other.id === peers[peers.length - 1].id) + 1 : tables.length;
+      tables = [...tables.slice(0, at), { ...table, projectId }, ...tables.slice(at)];
+    } else {
+      if (index < 0) return fail('NOT_FOUND', 'Project not found');
+      if (action === 'project.delete') {
+        folders.splice(index, 1);
+        tables = tables.map(table => table.projectId === projectId ? { ...table, projectId: null } : table);
+      } else if (action === 'project.rename') {
+        const name = String(params.name || '').trim();
+        if (!name) return fail('INVALID_REQUEST', 'Project name is required');
+        if (folders.some(folder => folder.id !== projectId && folder.name.toLowerCase() === name.toLowerCase())) return fail('WRITE_CONFLICT', 'Project name already exists');
+        folders[index] = { ...folders[index], name };
+      } else if (action === 'project.reorder') {
+        if (!Number.isInteger(params.toIndex) || params.toIndex < 0 || params.toIndex >= folders.length) return fail('INVALID_REQUEST', 'Invalid project index');
+        const [folder] = folders.splice(index, 1); folders.splice(params.toIndex, 0, folder);
+      }
+    }
+    return { nextWorkspace: { ...workspace, tables: withProjectFolders(tables, folders) }, response: success(request, { projects: folders, tableId: params.tableId || null, projectId: projectId || null }, effects({ tablesAffected: 1 })) };
+  }
+
   if (action === 'table.list') {
     return {
       response: success(request, {
@@ -1021,6 +1100,7 @@ function applyAction(request, workspace) {
           id: t.id,
           name: t.name,
           icon: t.icon || null,
+          projectId: t.projectId || null,
           fields: t.data?.fields?.length || 0,
           records: t.data?.records?.length || 0,
           active: t.id === workspace.activeTableId
@@ -2305,6 +2385,7 @@ export function executeTableActionRequest(rawRequest, rawSnapshot) {
     return result;
   }
 
+  if (result.nextWorkspace) result.nextWorkspace.tables = preserveProjectFolders(result.nextWorkspace.tables, workspace.tables);
   const tablesChanged = !!result.nextWorkspace && JSON.stringify(result.nextWorkspace.tables) !== JSON.stringify(workspace.tables);
   const contextChanged = !!result.nextWorkspace && result.nextWorkspace.activeTableId !== workspace.activeTableId;
   const changed = tablesChanged || contextChanged;

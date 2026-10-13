@@ -250,3 +250,18 @@ node scripts/table_action_client.mjs <action> --help
 - API 只监听 `127.0.0.1`，不会主动开放局域网入口。
 - 不提供任意 JavaScript、Shell、Provider 密钥修改或 OSS 清理。
 - 当前 MCP 的正确方向是把 Action Definition 映射为 Tool，再通过 localhost Action API 执行；不应在 MCP 层重新实现表格、生成和 Job 业务逻辑。
+
+## 项目文件夹 Action（2026-10-13，Action Definition 1.3）
+
+项目文件夹与工程文件本身不同，是工程内对子表的一层收纳目录。产品版本为2.7.6，API协议仍为0.1。
+
+- project.list：读取项目清单及各项目有序tableIds。
+- project.create：{name, projectId?}，创建空项目，返回projectId。
+- project.rename：{projectId, name}。
+- project.delete：{projectId}，仅解散目录，子表保留并移回根目录。
+- project.reorder：{projectId, toIndex}，索引为项目列表中从0开始的位置。
+- table.move_to_project：{tableId, projectId, toIndex?}。projectId=null移回根目录；toIndex是移除源表后的目标目录内索引，省略则追加到末尾。可用于项目内、跨项目及根目录排序。
+
+上述写操作为write:schema，继承confirmed、dryRun、expectedRevision、idempotencyKey、undoToken和事务机制。先读取最新revision，再预览和执行。table.list增加projectId，旧表为null。创建子表后可用table.move_to_project收纳；也可以组合进transaction.execute原子提交。删除项目不会删除数据。
+
+JSON沿用既有子表数组格式，目录清单存于首表可选projectFolders中，归属存于各子表可选projectId中。项目变化仍通过同一tables提交、保存和撤销链路，避免独立目录状态与表格状态不同步。不要把projectFolders当作普通单元格字段。旧版本可读表格内容，但不保证旧版本编辑后保留新目录元数据。

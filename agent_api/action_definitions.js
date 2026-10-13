@@ -4,8 +4,8 @@
 
 export const TABLE_ACTION_API_VERSION = '0.1';
 export const TABLE_ACTION_API_PHASE = 'phase4.7';
-export const TABLE_ACTION_APP_VERSION = '2.7.5';
-export const ACTION_DEFINITION_VERSION = '1.2';
+export const TABLE_ACTION_APP_VERSION = '2.7.6';
+export const ACTION_DEFINITION_VERSION = '1.3';
 
 const id = { type: 'string', minLength: 1 };
 const text = { type: 'string' };
@@ -82,6 +82,13 @@ export const ACTION_DEFINITIONS = {
   'system.get_capabilities': read('列出当前 API、Runtime 与 Provider 能力', object({ detail: { type: 'string', enum: ['summary', 'full'] } })),
   'system.describe_action': read('返回单个 Action 的精确参数 Schema、权限和示例', object({ action: nonEmptyText }, ['action'])),
   'context.get_current': read('读取当前工程、活动表格、Cell 与选择区上下文', empty),
+
+  'project.list': read('列出项目文件夹和子表归属', empty),
+  'project.create': writeSchema('创建项目文件夹', object({ name: nonEmptyText, projectId: id }, ['name'])),
+  'project.rename': writeSchema('重命名项目文件夹', object({ projectId: id, name: nonEmptyText }, ['projectId', 'name'])),
+  'project.delete': writeSchema('解散项目文件夹，子表保留并移回根目录', object({ projectId: id }, ['projectId'])),
+  'project.reorder': writeSchema('移动项目位置，toIndex为从0开始的项目顺序', object({ projectId: id, toIndex: nonNegativeInteger }, ['projectId', 'toIndex'])),
+  'table.move_to_project': writeSchema('移动子表到项目或根目录，toIndex为目标目录内从0开始的顺序', object({ tableId: id, projectId: { type: ['string', 'null'], minLength: 1 }, toIndex: nonNegativeInteger }, ['tableId', 'projectId'])),
 
   'table.list': read('列出全部子表及活动状态', empty),
   'table.get_schema': read('读取子表字段结构与记录统计', object({ tableId: id }, ['tableId'])),

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://hongs-ai-table.local/schema/table-action-api/0.1",
-  "title": "AI Table Studio 2.7.5 Table Action API v0.1 phase4.7",
+  "title": "AI Table Studio 2.7.6 Table Action API v0.1 phase4.7",
   "type": "object",
   "required": [
     "version",
@@ -61,6 +61,12 @@
         "system.get_capabilities",
         "system.describe_action",
         "context.get_current",
+        "project.list",
+        "project.create",
+        "project.rename",
+        "project.delete",
+        "project.reorder",
+        "table.move_to_project",
         "table.list",
         "table.get_schema",
         "table.create",
@@ -225,6 +231,198 @@
           "params": {
             "type": "object",
             "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "project.list"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "project.create"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "projectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "project.rename"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "projectId",
+              "name"
+            ],
+            "properties": {
+              "projectId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "project.delete"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "projectId"
+            ],
+            "properties": {
+              "projectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "project.reorder"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "projectId",
+              "toIndex"
+            ],
+            "properties": {
+              "projectId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "toIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "table.move_to_project"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "projectId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "projectId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "toIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
             "additionalProperties": false
           }
         }
@@ -4351,7 +4549,7 @@
       }
     }
   ],
-  "x-action-definition-version": "1.2",
-  "x-app-version": "2.7.5",
+  "x-action-definition-version": "1.3",
+  "x-app-version": "2.7.6",
   "x-phase": "phase4.7"
 }

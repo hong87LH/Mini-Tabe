@@ -7,14 +7,14 @@ import { Grid, refreshVisibleGridThumbnails } from './components/Grid';
 import { RefreshCw } from 'lucide-react';
 import { ApiSettings } from './components/ApiSettings';
 import { FieldType, Attachment, GridData } from './types';
-import { Search, Activity, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy, Image as ImageIcon, Video, User, FileText, Folder } from 'lucide-react';
+import { Search, Activity, UserCircle, Share2, Grid as GridIcon, Filter, ArrowDownUp, Eye, EyeOff, LayoutTemplate, Settings, Bell, MoreHorizontal, ChevronDown, Plus, Download, Upload, FileJson, X, AlignJustify, Trash2, Edit2, Undo2, Redo2, PanelLeftClose, PanelLeftOpen, Cpu, Sparkles, FolderOpen, Save, FileEdit, Copy, Image as ImageIcon, Video, User, FileText, Folder, CornerUpLeft } from 'lucide-react';
 import Papa from 'papaparse';
 import { Parser } from 'expr-eval';
 import { getStringColor } from './lib/utils';
 import { getHandle, setHandle } from './lib/idb';
 import { resolveFieldValueForAI } from './components/Grid';
 import { parseSelectText, selectValueToText } from './lib/selectFieldConversion.js';
-import { executeTableActionRequest, getActionMetadata } from '../agent_api/table_action_api.js';
+import { executeTableActionRequest, getActionMetadata, getProjectFolders, preserveProjectFolders, appendProjectTables } from '../agent_api/table_action_api.js';
 import { removeNetworkJobPlaceholders } from '../network_job_cleanup.js';
 import { getFilterInsertDefaults, getGroupInsertDefaults, insertRecordsAtAnchor, matchesViewFilters } from './lib/filteredRowInsertion';
 
@@ -170,6 +170,7 @@ function TableNavItem({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
+      data-table-nav-id={tbl.id}
       onDragEnd={onDragEnd}
     >
       <div className="flex items-center truncate min-w-0 flex-1">
@@ -179,7 +180,6 @@ function TableNavItem({
            onClick={handleIconClick}
            onMouseDown={(e) => e.stopPropagation()}
            onDoubleClick={(e) => e.stopPropagation()}
-           onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
            <div 
              className="w-5 h-5 flex items-center justify-center cursor-pointer hover:bg-white/50 rounded transition-colors"
@@ -807,7 +807,8 @@ export default function App() {
 
   const setTables = (update: any) => {
      setTablesInternal(prev => {
-        const result = typeof update === 'function' ? update(prev) : update;
+        const next = typeof update === 'function' ? update(prev) : update;
+        const result = next === prev || Array.isArray(next[0]?.projectFolders) ? next : preserveProjectFolders(next, prev);
         if (result !== prev) {
            setPastStates(h => {
               const last = h.length > 0 ? h[h.length - 1] : null;
@@ -829,6 +830,7 @@ export default function App() {
      setActiveTableIdState(id);
   };
 
+  const [sidebarProjectId, setSidebarProjectId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [showTableMenu, setShowTableMenu] = useState(false);
   const [headerRename, setHeaderRename] = useState<{ id: string; name: string } | null>(null);
@@ -838,6 +840,42 @@ export default function App() {
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [showRecentMenu, setShowRecentMenu] = useState(false);
   const [recentProjects, setRecentProjects] = useState<{name: string, handle: any, path?: string}[]>([]);
+  const [projectDraft, setProjectDraft] = useState<{ id?: string; name: string; tableId?: string } | null>(null);
+  const [rootDropActive, setRootDropActive] = useState(false);
+  const [tableProjectMenu, setTableProjectMenu] = useState<{ tableId: string; x: number; y: number } | null>(null);
+  const dragSourceRef = useRef<{ type: 'table' | 'project'; id: string } | null>(null);
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  const [hoverProjectMenu, setHoverProjectMenu] = useState<{ id: string; top: number; left: number } | null>(null);
+  const projectFolders: any[] = getProjectFolders(tables);
+  const rootTables = tables.filter(table => !projectFolders.some(folder => folder.id === table.projectId));
+  const sidebarProject = projectFolders.find(folder => folder.id === sidebarProjectId);
+  const compactTables = sidebarProject ? tables.filter(table => table.projectId === sidebarProject.id) : rootTables;
+  useEffect(() => {
+    const active = tables.find(table => table.id === activeTableId);
+    setSidebarProjectId(getProjectFolders(tables).some(folder => folder.id === active?.projectId) ? active.projectId : null);
+  }, [activeTableId, tables.find(table => table.id === activeTableId)?.projectId]);
+  const runDirectoryAction = (action: string, params: any) => {
+    const result = executeTableActionRequest({ version: '0.1', action, params, confirmed: true }, { tables, activeTableId, projectName, workspaceRevision: workspaceRevisionRef.current });
+    if (!result.response.ok) { alert(result.response.error?.message || 'Directory operation failed'); return; }
+    if (result.nextWorkspace) setTables(result.nextWorkspace.tables);
+  };
+  const addProjectFolder = () => setProjectDraft({ name: '' });
+  const saveProjectFolder = () => {
+    if (!projectDraft?.name.trim()) return;
+    const result = executeTableActionRequest({ version: '0.1', action: projectDraft.id ? 'project.rename' : 'project.create', params: { ...(projectDraft.id ? { projectId: projectDraft.id } : {}), name: projectDraft.name.trim() }, confirmed: true }, { tables, activeTableId, projectName });
+    if (!result.response.ok) { alert(result.response.error?.message); return; }
+    if (result.nextWorkspace) {
+      let next = result.nextWorkspace;
+      if (projectDraft.tableId) {
+        const moved = executeTableActionRequest({ version: '0.1', action: 'table.move_to_project', params: { tableId: projectDraft.tableId, projectId: result.response.data.projectId }, confirmed: true }, next);
+        if (!moved.response.ok) { alert(moved.response.error?.message); return; }
+        next = moved.nextWorkspace || next;
+      }
+      setTables(next.tables);
+    }
+    setProjectDraft(null);
+  };
+  useEffect(() => { if (!showTableMenu) setHoverProjectMenu(null); }, [showTableMenu]);
   const [draggedTableId, setDraggedTableId] = useState<string | null>(null);
   const [dragOverTableId, setDragOverTableId] = useState<string | null>(null);
   const [dragOverTablePosition, setDragOverTablePosition] = useState<'top' | 'bottom' | null>(null);
@@ -849,7 +887,8 @@ export default function App() {
       const target = prev[idx];
       const newId = `table_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       const newData = JSON.parse(JSON.stringify(target.data));
-      const newTable = { ...target, id: newId, name: `${target.name} Copy`, data: newData };
+      const { projectFolders: ignoredFolders, ...tableCopy } = target;
+      const newTable = { ...tableCopy, id: newId, name: `${target.name} Copy`, data: newData };
       const res = [...prev];
       res.splice(idx + 1, 0, newTable);
       return res;
@@ -865,6 +904,7 @@ export default function App() {
   const activeTableName = tables[activeTableIndex]?.name || 'Master Table';
 
   const activeTable = tables[activeTableIndex] || {};
+  const activeProject = projectFolders.find(folder => folder.id === activeTable.projectId);
   const activeViewMode = activeTable.activeViewMode || 'grid';
   const setActiveViewMode = (mode: 'grid'|'gallery') => {
       setTables((prev: any[]) => prev.map(t => t.id === activeTableId ? { ...t, activeViewMode: mode } : t));
@@ -1030,11 +1070,12 @@ export default function App() {
     });
   };
 
-  const handleAddTable = () => {
+  const handleAddTable = (projectId: string | null = null) => {
     const newId = `table_${Date.now()}`;
     setTables(prev => [...prev, {
       id: newId,
       name: `New Table ${prev.length + 1}`,
+      ...(projectId ? { projectId } : {}),
       data: {
         fields: [
           { id: 'fld_title', name: 'Text', type: 'text', width: 200 },
@@ -2407,9 +2448,9 @@ export default function App() {
                    setPastStates([]);
                    setFutureStates([]);
                } else {
-                   const newTables = parsed.map((t: any) => ({...t, id: `table_${Date.now()}_${Math.random().toString(36).substring(2, 9)}` }));
-                   setTables((prev: any[]) => [...prev, ...newTables]);
-                   setActiveTableId(newTables[0].id);
+                   const combined = appendProjectTables(tables, parsed);
+                   setTables(combined);
+                   setActiveTableId(combined[tables.length].id);
                }
            } else {
                setTablesInternal(parsed);
@@ -2669,6 +2710,15 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900 font-sans overflow-hidden">
+      {tableProjectMenu && createPortal(<>
+        <div className="fixed inset-0 z-[100]" onClick={() => setTableProjectMenu(null)} onContextMenu={e => { e.preventDefault(); setTableProjectMenu(null); }} />
+        <div role="menu" className="fixed z-[101] w-56 bg-white border border-gray-200 rounded-lg shadow-lg py-1 text-sm" style={{ left: Math.max(8, tableProjectMenu.x), top: Math.max(8, tableProjectMenu.y) }} onKeyDown={e => { if (e.key === 'Escape') setTableProjectMenu(null); }}>
+          <div className="px-3 py-1 text-xs text-gray-400">{lang === 'en' ? 'Move to project' : '移入项目'}</div>
+          <div className="max-h-40 overflow-y-auto">{projectFolders.map(folder => <button key={folder.id} role="menuitem" className="flex gap-2 w-full px-3 py-2 text-left hover:bg-gray-100" onClick={() => { runDirectoryAction('table.move_to_project', { tableId: tableProjectMenu.tableId, projectId: folder.id }); setTableProjectMenu(null); }}><Folder className="w-4 h-4 text-gray-500 shrink-0" /><span className="truncate">{folder.name}</span></button>)}</div>
+          <button role="menuitem" className="w-full px-3 py-2 text-left hover:bg-gray-100" onClick={() => { runDirectoryAction('table.move_to_project', { tableId: tableProjectMenu.tableId, projectId: null }); setTableProjectMenu(null); }}>{lang === 'en' ? 'Move to root' : '移回根目录'}</button>
+          <button role="menuitem" className="flex items-center gap-2 w-full px-3 py-2 text-left text-gray-700 border-t border-gray-100 hover:bg-gray-100" onClick={() => { setProjectDraft({ name: '', tableId: tableProjectMenu.tableId }); setTableProjectMenu(null); }}><Plus className="w-4 h-4 text-gray-500 shrink-0" />{lang === 'en' ? 'New project and move here' : '新建项目并移入'}</button>
+        </div>
+      </>, document.body)}
       {/* Sidebar Navigation */}
       <div className={`transition-all duration-300 ease-in-out flex flex-col shrink-0 flex-none overflow-hidden h-full z-10 bg-white border-r border-gray-200 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.05)] ${sidebarCollapsed ? 'w-14 items-center' : 'w-60'}`}>
         <div className="h-14 w-full flex items-center px-4 border-b border-gray-200 shrink-0 select-none">
@@ -2698,18 +2748,42 @@ export default function App() {
              </div>
           )}
         </div>
-        <div className={`p-3 flex-1 overflow-y-auto hide-scrollbar select-none w-full ${sidebarCollapsed ? 'px-2' : ''}`}>
+        <div className={`p-3 flex-1 overflow-y-auto select-none w-full ${sidebarCollapsed ? 'px-1 compact-sidebar-scroll' : 'hide-scrollbar'}`}>
           {!sidebarCollapsed ? (
              <>
                 <div className="flex items-center justify-between px-2 mb-2 group/header">
-                  <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Tables</span>
-                  <button onClick={handleAddTable} className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50" title="New table">
+                  <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (draggedTableId) runDirectoryAction('table.move_to_project', { tableId: draggedTableId, projectId: null }); setDraggedTableId(null); }}>Tables</span>
+                  <button onClick={addProjectFolder} title={lang === 'en' ? 'New project folder' : '新建项目文件夹'} className="ml-auto p-1 text-gray-400 hover:text-blue-600"><Folder className="w-4 h-4" /></button>
+                  <button onClick={() => handleAddTable()} className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50" title={lang === 'en' ? 'New table' : '新建子表'}>
                     <Plus className="w-4 h-4" />
                   </button>
                 </div>
-                <div className="space-y-0.5">
-                  {tables.map(tbl => (
-                    <TableNavItem 
+                {projectDraft && <div className="flex gap-1 mb-2 px-1">
+                  <input autoFocus aria-label="Project name" className="min-w-0 w-full border rounded px-2 py-1 text-sm" placeholder={lang === 'en' ? 'Project name' : '项目名称'} value={projectDraft.name} onChange={e => setProjectDraft({ ...projectDraft, name: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') saveProjectFolder(); if (e.key === 'Escape') setProjectDraft(null); }} />
+                  <button title="Save project" className="text-xs text-blue-600" onClick={saveProjectFolder}>{lang === 'en' ? 'Save' : '保存'}</button><button title="Cancel project edit" onClick={() => setProjectDraft(null)}><X className="w-4 h-4" /></button>
+                </div>}
+                <div className="relative space-y-0.5">
+                  {draggedTableId && <div data-root-drop title={lang === 'en' ? 'Move to root' : '移回根目录'} className="absolute -top-1 left-0 right-0 h-3 z-20" onDragOver={e => { e.preventDefault(); e.stopPropagation(); setRootDropActive(true); }} onDragLeave={() => setRootDropActive(false)} onDrop={e => { e.preventDefault(); e.stopPropagation(); const source = dragSourceRef.current; if (source?.type === 'table') runDirectoryAction('table.move_to_project', { tableId: source.id, projectId: null, toIndex: 0 }); dragSourceRef.current = null; setDraggedTableId(null); setRootDropActive(false); }}><div className={`h-0.5 mt-1 ${rootDropActive ? 'bg-blue-500' : 'bg-transparent'}`} /></div>}
+                  {[...projectFolders.flatMap(folder => [{ folder }, ...(collapsedProjects.has(folder.id) ? [] : tables.filter(table => table.projectId === folder.id).map(table => ({ table })))]), ...rootTables.map(table => ({ table }))].map((entry: any) => {
+                    if (entry.folder) {
+                      const folder = entry.folder;
+                      return <div key={folder.id} draggable onDragStart={e => { e.stopPropagation(); dragSourceRef.current = { type: 'project', id: folder.id }; setDraggedTableId(null); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', folder.id); }} onDragEnd={() => { dragSourceRef.current = null;  }}
+                        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                        onDrop={e => { e.preventDefault(); e.stopPropagation();
+                          if (dragSourceRef.current?.type === 'project') runDirectoryAction('project.reorder', { projectId: dragSourceRef.current.id, toIndex: projectFolders.findIndex(p => p.id === folder.id) });
+                          else if (dragSourceRef.current?.type === 'table') runDirectoryAction('table.move_to_project', { tableId: dragSourceRef.current.id, projectId: folder.id });
+                           setDraggedTableId(null);
+                        }} className="group flex items-center gap-1 px-2 py-2 rounded hover:bg-gray-100 text-sm text-gray-700" data-project-id={folder.id}>
+                        <button className="flex items-center gap-2 flex-1 min-w-0 text-left" onClick={() => setCollapsedProjects(prev => { const next = new Set(prev); next.has(folder.id) ? next.delete(folder.id) : next.add(folder.id); return next; })}>
+                          <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${collapsedProjects.has(folder.id) ? '-rotate-90' : ''}`} />{collapsedProjects.has(folder.id) ? <Folder className="w-4 h-4 shrink-0 text-gray-500" /> : <FolderOpen className="w-4 h-4 shrink-0 text-gray-500" />}<span className="truncate" title={folder.name}>{folder.name}</span>
+                        </button>
+                        <button title={lang === 'en' ? 'New table' : '新建子表'} className="opacity-0 group-hover:opacity-100 p-1" onClick={() => { handleAddTable(folder.id); setCollapsedProjects(prev => { const next = new Set(prev); next.delete(folder.id); return next; }); }}><Plus className="w-3 h-3" /></button>
+                        <button title="Rename project" className="opacity-0 group-hover:opacity-100 p-1" onClick={() => { setProjectDraft({ id: folder.id, name: folder.name }); }}><Edit2 className="w-3 h-3" /></button>
+                        <button title="Delete project (keep tables)" className="opacity-0 group-hover:opacity-100 p-1" onClick={() => { if (window.confirm(lang === 'en' ? 'Remove folder and keep all tables?' : '删除项目文件夹？子表将保留并移回根目录。')) runDirectoryAction('project.delete', { projectId: folder.id }); }}><Trash2 className="w-3 h-3" /></button>
+                      </div>;
+                    }
+                    const tbl = entry.table;
+                    return <div key={tbl.id} onContextMenu={e => { e.preventDefault(); setTableProjectMenu({ tableId: tbl.id, x: Math.min(e.clientX, window.innerWidth - 232), y: Math.min(e.clientY, window.innerHeight - 260) }); }} className={tbl.projectId && projectFolders.some(p => p.id === tbl.projectId) ? 'ml-5' : ''}><TableNavItem
                       key={tbl.id}
                       tbl={tbl}
                       isActive={tbl.id === activeTableId}
@@ -2722,7 +2796,11 @@ export default function App() {
                       isDragOverTop={dragOverTableId === tbl.id && dragOverTablePosition === 'top'}
                       isDragOverBottom={dragOverTableId === tbl.id && dragOverTablePosition === 'bottom'}
                       onDragStart={(e) => {
+                         e.stopPropagation();
+                         dragSourceRef.current = { type: 'table', id: tbl.id };
                          setDraggedTableId(tbl.id);
+
+                         e.dataTransfer.setData('text/plain', tbl.id);
                          e.dataTransfer.effectAllowed = 'move';
                       }}
                       onDragOver={(e) => {
@@ -2743,39 +2821,37 @@ export default function App() {
                       onDrop={(e) => {
                         e.preventDefault();
                         if (draggedTableId && draggedTableId !== tbl.id) {
-                           setTables((prev: any[]) => {
-                              const dragIdx = prev.findIndex(t => t.id === draggedTableId);
-                              const dropIdx = prev.findIndex(t => t.id === tbl.id);
-                              if (dragIdx === -1 || dropIdx === -1) return prev;
-                              const newTables = [...prev];
-                              const [moved] = newTables.splice(dragIdx, 1);
-                              
-                              // Calculate new drop index after splice
-                              const finalDropIdx = newTables.findIndex(t => t.id === tbl.id);
-                              newTables.splice(dragOverTablePosition === 'bottom' ? finalDropIdx + 1 : finalDropIdx, 0, moved);
-                              return newTables;
-                           });
+                           const projectId = projectFolders.some(p => p.id === tbl.projectId) ? tbl.projectId : null;
+                           const peers = tables.filter(t => t.id !== draggedTableId && (projectFolders.some(p => p.id === t.projectId) ? t.projectId : null) === projectId);
+                           const toIndex = peers.findIndex(t => t.id === tbl.id) + (dragOverTablePosition === 'bottom' ? 1 : 0);
+                           runDirectoryAction('table.move_to_project', { tableId: draggedTableId, projectId, toIndex });
                         }
+                        dragSourceRef.current = null;
+                        setRootDropActive(false);
                         setDraggedTableId(null);
                         setDragOverTableId(null);
                         setDragOverTablePosition(null);
                       }}
                       onDragEnd={() => {
+                        dragSourceRef.current = null;
+                        setRootDropActive(false);
                         setDraggedTableId(null);
                         setDragOverTableId(null);
                         setDragOverTablePosition(null);
                       }}
-                    />
-                  ))}
+                    /></div>;
+                  })}
                 </div>
              </>
           ) : (
             <div className="flex flex-col items-center space-y-2">
-               <button onClick={handleAddTable} className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-blue-600 transition-colors rounded hover:bg-blue-50" title="New table">
+               <button onClick={() => handleAddTable(sidebarProject?.id || null)} className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-blue-600 transition-colors rounded hover:bg-blue-50" title={lang === 'en' ? 'New table' : '新建子表'}>
                   <Plus className="w-5 h-5" />
                </button>
-               {tables.map(tbl => (
+               {sidebarProject ? <button data-project-back title={sidebarProject.name + (lang === 'en' ? ' · Back to root' : ' · 返回根目录')} aria-label={sidebarProject.name + (lang === 'en' ? ' · Back to root' : ' · 返回根目录')} onClick={() => setSidebarProjectId(null)} className="w-10 h-10 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100"><span className="relative w-6 h-6"><FolderOpen className="absolute bottom-0 left-0 w-5 h-5" /><CornerUpLeft className="absolute -top-1 -right-1 w-3 h-3 bg-white rounded-sm" /></span></button> : projectFolders.map(folder => <button key={folder.id} data-compact-project={folder.id} title={folder.name} onClick={() => setSidebarProjectId(folder.id)} className="w-10 h-10 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100"><Folder className="w-5 h-5" /></button>)}
+               {compactTables.map(tbl => (
                   <button 
+                    data-compact-table={tbl.id}
                     key={tbl.id} 
                     title={tbl.name}
                     onClick={() => setActiveTableId(tbl.id)}
@@ -2845,6 +2921,7 @@ export default function App() {
                   if (activeTableId) setHeaderRename({ id: activeTableId, name: activeTableName });
                 }}
               >
+                 {activeProject && <span data-project-breadcrumb title={activeProject.name} className="flex items-center gap-1.5 mr-2 min-w-0 text-sm font-normal text-gray-500"><span className="truncate max-w-[160px]">{activeProject.name}</span><span className="text-gray-400">›</span></span>}
                  {tables[activeTableIndex]?.icon && <span className="mr-2 text-[22px] leading-none flex items-center text-gray-500">{renderTableIconNode(tables[activeTableIndex].icon, "w-5 h-5")}</span>}
                  {headerRename && headerRename.id === activeTableId ? <input
                    autoFocus
@@ -2868,8 +2945,9 @@ export default function App() {
                  <ChevronDown className="w-4 h-4 ml-1 text-gray-400 opacity-50 group-hover:opacity-100 transition-opacity" />
               </div>
               {showTableMenu && (
-                <div className="absolute top-full left-0 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-[0_4px_20px_rgba(0,0,0,0.1)] py-1 z-50">
-                  {tables.map(tbl => (
+                <div className="absolute top-full left-0 mt-1 w-56 max-w-[calc(100vw-24px)] max-h-[calc(100vh-140px)] overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-[0_4px_20px_rgba(0,0,0,0.1)] py-1 z-50" onScroll={() => setHoverProjectMenu(null)} onMouseLeave={e => { const next = e.relatedTarget as HTMLElement; if (!next?.closest?.('[data-project-submenu]')) setHoverProjectMenu(null); }}>
+                  {projectFolders.map(folder => <button key={folder.id} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" onMouseEnter={e => { const rect = e.currentTarget.getBoundingClientRect(); setHoverProjectMenu({ id: folder.id, top: Math.max(8, Math.min(rect.top, window.innerHeight - 260)), left: rect.right + 224 < window.innerWidth ? rect.right : Math.max(8, rect.left - 224) }); }} onFocus={e => { const rect = e.currentTarget.getBoundingClientRect(); setHoverProjectMenu({ id: folder.id, top: Math.max(8, Math.min(rect.top, window.innerHeight - 260)), left: rect.right + 224 < window.innerWidth ? rect.right : Math.max(8, rect.left - 224) }); }}>{hoverProjectMenu?.id === folder.id ? <FolderOpen className="w-4 h-4 text-gray-500 shrink-0" /> : <Folder className="w-4 h-4 text-gray-500 shrink-0" />}<span className="truncate flex-1 text-left">{folder.name}</span><span>›</span></button>)}
+                  {rootTables.map(tbl => (
                     <button 
                       key={tbl.id}
                       onClick={() => { setActiveTableId(tbl.id); setShowTableMenu(false); }}
@@ -2886,10 +2964,15 @@ export default function App() {
                     className="w-full flex items-center px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 font-medium transition-colors"
                   >
                     <Plus className="w-4 h-4 mr-2" />
-                    New empty table
+                    {lang === 'en' ? 'New table' : '新建子表'}
                   </button>
                 </div>
               )}
+              {showTableMenu && hoverProjectMenu && <div data-project-submenu className="fixed w-56 max-w-[calc(100vw-16px)] overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-[60]" style={{ top: hoverProjectMenu.top, left: hoverProjectMenu.left, maxHeight: `calc(100vh - ${hoverProjectMenu.top + 8}px)` }} onMouseLeave={() => setHoverProjectMenu(null)}>
+                {tables.filter(t => t.projectId === hoverProjectMenu.id).map(tbl => <button key={tbl.id} title={tbl.name} onClick={() => { setActiveTableId(tbl.id); setShowTableMenu(false); }} className={`w-full flex items-center gap-2 px-4 py-2 text-sm text-left hover:bg-gray-100 ${tbl.id === activeTableId ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}`}><span className="shrink-0">{tbl.icon ? renderTableIconNode(tbl.icon, 'w-4 h-4') : <GridIcon className="w-4 h-4" />}</span><span className="truncate">{tbl.name}</span></button>)}
+                <button className="w-full px-4 py-2 text-sm text-left text-blue-600 border-t border-gray-100 hover:bg-gray-50" onClick={() => { handleAddTable(hoverProjectMenu.id); setShowTableMenu(false); }}>{lang === 'en' ? '+ New table' : '+ 新建子表'}</button>
+                {!tables.some(t => t.projectId === hoverProjectMenu.id) && <div className="px-4 py-2 text-xs text-gray-400">{lang === 'en' ? 'Empty project' : '暂无子表'}</div>}
+              </div>}
             </div>
             
             <div className="w-px h-5 bg-gray-200 mx-1"></div>

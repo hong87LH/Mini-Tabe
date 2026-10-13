@@ -14,3 +14,12 @@ table:has(td[data-cell-editing="true"]) .cell-large-editor-button {
   opacity: 0 !important;
   pointer-events: none !important;
 }
+
+/* Keep compact navigation quiet until the pointer enters its scroll area. */
+.compact-sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.compact-sidebar-scroll:hover {
+  scrollbar-color: #9ca3af transparent;
+}

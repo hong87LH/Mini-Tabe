@@ -1,8 +1,8 @@
-# AI Table Studio v2.6.8 · Table Action API v0.1 · Phase 4.7
+# AI Table Studio v2.7.6 · Table Action API v0.1 · Phase 4.7
 
 这是从 v2.6.3 分出的 Agent API 探索分支。v2.6.5 / Phase 4.7 在既有协作、完整编辑和长任务能力之上，继续降低 Agent 的调用成本，并补齐“远端已经失联、UI 仍显示处理中”的 Job 专项清理能力。
 
-当前产品版本为 **v2.6.8**，Action Definition 为 **1.2**，协议 v0.1 / phase4.7 保持不变。85 个 Action 保持兼容。保存工程并重启 Electron 后加载新主进程和 preload。详见 [v2.6.8 升级报告](../readme/v2.6.8_缩略图按需加载与测量报告.md)。
+当前主工程产品版本为 **v2.7.6**，Action Definition 为 **1.3**，协议 v0.1 / phase4.7 保持不变。当前包含 91 个 Action（含项目文件夹管理扩展），以本地 action_definitions.js 为准。保存工程并重启 Electron 后加载新主进程和 preload。已发布版本说明见 [v2.7.6 升级报告](../readme/v2.7.6_项目文件夹与导航升级.md)。
 
 ## v2.6.7 列显示与冻结
 
@@ -123,12 +123,21 @@ node scripts/table_action_client.mjs job.cleanup_stale --token=test-123456 --con
 - `--params-file` 读取纯 `params` JSON，`--request-file` 读取完整请求，`--stdin` 从标准输入读取 `params`。
 - `--validate-only` 只做本地 Schema 校验；`--print-request` 会隐藏 Token、Secret、Credential 与 API Key 字段。
 
-Windows 复杂参数仍推荐使用参数文件，避免 CMD / PowerShell / JSON 多层转义：
+Windows 复杂调用统一使用 --params-file 或 --stdin，避免 CMD / PowerShell / JSON 多层转义。参数文件使用 UTF-8 编码；包含中文、空格、Emoji、路径、长提示词或嵌套数组时，不使用旧式内联 --params：
 
 ```bat
 node scripts/table_action_client.mjs cell.batch_set --token=test-123456 --confirmed --params-file=cell-batch-set.json
 ```
 
+通过 PowerShell 的标准输入传参（显式指定 UTF-8，兼容 Windows PowerShell 的管道编码）：
+
+```powershell
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Get-Content -LiteralPath .\cell-batch-set.json -Raw -Encoding UTF8 |
+  node scripts/table_action_client.mjs cell.batch_set --stdin --confirmed --token=test-123456
+```
+
+可先添加 --validate-only 做本地参数校验，不提交操作。--stdin、--params-file、--params、--request-file 四种输入来源互斥。
 查询精确 Action 定义：
 
 ```bat
@@ -136,7 +145,7 @@ node scripts/table_action_client.mjs field.configure_ai --help
 node scripts/table_action_client.mjs system.describe_action --token=test-123456 --params="{\"action\":\"field.configure_ai\"}"
 ```
 
-旧式 `--params="{...}"` 继续支持。Phase 4.7 会安全尝试严格 JSON、JSON5 与常见 Windows `\"`/边界反斜杠损坏的恢复，但绝不执行输入中的 JavaScript。若内容包含长提示词、中文路径或多层数组，仍优先使用 `--params-file` 或 `--stdin`。
+旧式 `--params="{...}"` 继续支持。Phase 4.7 会安全尝试严格 JSON、JSON5 与常见 Windows `\"`/边界反斜杠损坏的恢复，但绝不执行输入中的 JavaScript。这只是尽力兼容：包含中文、空格和 Emoji 等复杂内容时仍可能因 Windows Shell 转义失败；标准调用应使用 `--params-file` 或 `--stdin`。
 
 只读取响应的一部分可使用：
 
