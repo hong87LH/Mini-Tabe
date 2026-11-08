@@ -47,6 +47,7 @@ export interface Field {
     ratio?: string;
     filenameTemplate?: string;
     modelTemplate?: string;
+    loraProfiles?: string[];
     sourceImageTemplate?: string;
     sourceImageFields?: string[]; // Legacy
     isRetouchMode?: boolean;

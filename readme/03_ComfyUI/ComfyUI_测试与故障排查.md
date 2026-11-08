@@ -1,7 +1,7 @@
 # ComfyUI 测试与故障排查
 
-适用工程：AI Table Studio v2.6.3 后续分支  
-最后核对：2026-08-24
+适用工程：AI Table Studio v2.7.7 及兼容后续版本
+最后核对：2026-11-07
 
 ## 1. 三层测试
 
@@ -17,12 +17,12 @@ npm run test:comfyui
 不连接真实 ComfyUI，不产生生成费用。当前基线：
 
 ```text
-11 tests
-11 pass
+28 tests
+28 pass
 0 fail
 ```
 
-覆盖：两套 H3 注册、0 图文生、Fast/Quality、混合参考修正、清晰度映射、图片/视频/音频上传路由、Manifest Binding 和结果 URL 解析。
+覆盖：两套 H3、默认 Qwen、Qwen Face、0 图文生、Fast/Quality、混合参考修正、清晰度映射、图片/视频/音频上传、Manifest Binding、Face 双图语义、Consistency Profile、结构化模型要求、模型缺失检测和结果 URL 解析。
 
 ### 第二层：真实环境检查
 
@@ -34,9 +34,10 @@ npm run check:comfyui
 
 - Endpoint 是否可连接；
 - ComfyUI 版本和设备；
-- 两套工作流是否注册；
+- 四套工作流是否注册；
 - Fast/Quality 模板步数和 Sampler；
 - Required Node Types；
+- `modelRequirements` 对应模型是否出现在加载节点选项中；
 - 缺失插件与安装建议。
 
 2026-08-24 本机检查：ComfyUI `0.31.0`、RTX 4060 Laptop GPU、Health 正常、当前目标工作流无缺失节点。
@@ -62,8 +63,8 @@ Fast
 
 在 UI 与 API 都启动后：
 
-1. `generation.get_capabilities`：确认 ComfyUI Provider/Model 可用。
-2. `generation.preview`：确认 Prompt、媒体顺序、Crop/Trim、分辨率、时长、目录和阻塞原因。
+1. `generation.get_capabilities`：确认 ComfyUI Provider/Model、模型要求和可用 LoRA Profile。
+2. `generation.preview`：确认 Prompt、媒体顺序、Crop/Trim、分辨率、时长、实际 `loraProfiles`、目录和阻塞原因。
 3. `generation.run --confirmed`：使用唯一 `idempotencyKey`。
 4. `job.list/get` 或 SSE：核对 Job Center。
 5. 相同 Key 重试必须复用原任务，不新增付费/计算任务。
@@ -87,7 +88,22 @@ Fast
 ```text
 minimax-h3-local
 minimax-h3-Ref-local
+qwen-image-2.1-local
+qwen-image-2.1-face-local
 ```
+
+旧字段中的 `qwen-image-2.1-consistency-local` 仍可解析；新字段使用 `qwen-image-2.1-local` 加 `loraProfiles: ["consistency"]`。
+
+### 缺失模型
+
+`npm run check:comfyui` 的 `health.workflow.missingModels` 会列出 Manifest 已登记、但没有出现在对应加载节点选项中的模型文件。优先核对：
+
+1. 文件是否位于 `models/diffusion_models`、`models/text_encoders`、`models/vae` 或 `models/loras` 的登记目录；
+2. 文件名是否与 Manifest 和 API JSON 完全一致；
+3. ComfyUI 是否在放入模型后完成重启或刷新；
+4. 当前 Endpoint 是否连接到装有该模型的正确 ComfyUI 实例。
+
+如果自定义节点不公开下拉选项，检查器保持不误报；此时仍以真实低成本生成验证。
 
 ### 缺失节点
 
@@ -96,6 +112,7 @@ minimax-h3-Ref-local
 | `MiniMaxH3TurboLoRA` | 安装/更新 ComfyUI-MiniMax-H3-Turbo |
 | `H3TurboMixedReferenceFix` | 安装/更新 Hongs-node |
 | H3、ResolutionSelector、LoadVideo、LoadAudio、CreateVideo | 升级 ComfyUI Core |
+| `TextEncodeQwenImage21`、`QwenImage21Cache` | 升级到兼容 Qwen Image 2.1 的 ComfyUI Core |
 
 插件目录存在但节点仍缺失时，查看 ComfyUI 启动窗口中的 Import Error；安装或更新后必须重启 ComfyUI。
 

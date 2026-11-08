@@ -140,7 +140,7 @@ network_polling.js                  Job 状态事件
 2. 必要时先 `table.activate`，等待 Grid Runtime Ready。
 3. 使用 `row.query` 读取目标记录；需要与 UI 当前可见内容一致时使用 `scope=current_view`。
 4. 操作媒体前调用 `media.get`、`media.list_by_row` 或 `media.get_effective_context`。
-5. 操作 AI 字段前调用 `generation.get_capabilities` 和 `generation.preview`。
+5. 操作 AI 字段前调用 `generation.get_capabilities` 和 `generation.preview`；ComfyUI 场景同时核对 workflow 的 `modelRequirements`、`loraProfiles` 与输入数量。
 
 ### C. 写入计划
 
@@ -177,7 +177,7 @@ node scripts/table_action_client.mjs cell.set --token=%HONGS_TABLE_ACTION_TOKEN%
 
 ### E. 生成任务
 
-1. 先 `generation.preview`，确认 `ready`、Prompt、Provider、Model、媒体引用、输出目录与 `mayCostMoney`。
+1. 先 `generation.preview`，确认 `ready`、Prompt、Provider、Model、媒体引用、实际 `resolvedConfig.loraProfiles`、输出目录与 `mayCostMoney`；出现 `WORKFLOW_LORA_PROFILE_UNSUPPORTED` 时先修正字段配置，不能直接运行。
 2. 用户授权后再 `generation.run --confirmed`。
 3. 付费生成必须使用稳定的 `idempotencyKey`；网络状态不明时先查 `job.list`，不要直接重新提交。
 4. 通过 `job.get / batch.get` 查询结果，或订阅 SSE：
@@ -253,7 +253,7 @@ node scripts/table_action_client.mjs <action> --help
 
 ## 项目文件夹 Action（2026-10-13，Action Definition 1.3）
 
-项目文件夹与工程文件本身不同，是工程内对子表的一层收纳目录。产品版本为2.7.6，API协议仍为0.1。
+项目文件夹与工程文件本身不同，是工程内对子表的一层收纳目录。产品版本为 2.7.7，API 协议仍为 0.1。
 
 - project.list：读取项目清单及各项目有序tableIds。
 - project.create：{name, projectId?}，创建空项目，返回projectId。

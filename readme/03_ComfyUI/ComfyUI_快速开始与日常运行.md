@@ -1,14 +1,14 @@
 # ComfyUI 快速开始与日常运行
 
-适用工程：AI Table Studio v2.6.3 后续分支  
-最后核对：2026-08-24  
+适用工程：AI Table Studio v2.7.7 及兼容后续版本
+最后核对：2026-11-07
 当前事实来源：`comfyui/workflows/*/manifest.json`、`comfyui/plugin_catalog.json`、`npm run check:comfyui`
 
 ## Qwen Image 2.1 图片生成（2026-09-25）
 
-图片配置新增 `qwen-image-2.1-local` 与 `qwen-image-2.1-transparent-local`。支持 0–5 张参考图自动路由，0.5K–2K 与字段系数，25 步原生 PNG 输出。此入口在“图片”分类，和下方 MiniMax 视频入口分开。
+图片配置包含 `qwen-image-2.1-local`、`qwen-image-2.1-transparent-local` 与双图 Face 模型 `qwen-image-2.1-face-local`。默认 Qwen 支持 0–5 张参考图、0.5K–2K 与字段系数；Consistency 通过“保真增强”或 `loraProfiles: ["consistency"]` 叠加，不新增模型列表项。
 
-安装版本、三项权重位置、比例规则与实测见 [工作流随附说明](../../comfyui/workflows/qwen-image-2.1/README.md)。
+安装版本、精确权重、Face/Consistency、比例与 Action API 说明见 [Qwen 参数与 LoRA](ComfyUI_Qwen_Image_2.1_参数与LoRA.md)；单工作流复现见各 workflow 目录的 README。
 
 ## 1. MiniMax H3 当前可用能力
 
@@ -53,7 +53,7 @@ cd /d F:\01_AIGC\12_AI_studio\bitable-clone
 npm run check:comfyui
 ```
 
-4. 确认输出包含两套 `registeredWorkflows`，并且 `health.ok=true`、`missingNodeTypes=[]`。
+4. 确认输出包含四套 `registeredWorkflows`，并且目标工作流 `health.ok=true`、`missingNodeTypes=[]`、`missingModels=[]`。
 5. 启动 AI Table Studio：
 
 ```bat
@@ -124,8 +124,8 @@ npm run test:comfyui
 当前预期：
 
 ```text
-11 tests
-11 pass
+28 tests
+28 pass
 0 fail
 ```
 

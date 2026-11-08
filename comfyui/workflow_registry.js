@@ -20,16 +20,44 @@ function listManifestPaths() {
     .filter(filePath => fs.existsSync(filePath));
 }
 
+function extractWorkflowPromptDefaults(manifest, manifestPath) {
+  if (!manifest.bindings?.prompt) return [];
+  const byPrompt = new Map();
+  for (const [mode, templateFile] of Object.entries(manifest.templates || {})) {
+    try {
+      const template = readJson(path.join(path.dirname(manifestPath), templateFile));
+      const text = String(getWorkflowValue(template, manifest.bindings.prompt) || '').trim();
+      if (!text) continue;
+      const existing = byPrompt.get(text) || { modes: [], text };
+      existing.modes.push(mode);
+      byPrompt.set(text, existing);
+    } catch {
+      // Keep registry discovery resilient; loadComfyUIWorkflow reports broken templates on use.
+    }
+  }
+  return [...byPrompt.values()];
+}
+
 export function listComfyUIWorkflows() {
   return listManifestPaths().map(manifestPath => {
     const manifest = readJson(manifestPath);
+    const loraProfiles = Object.entries(manifest.loraProfiles || {}).map(([id, profile]) => ({
+      id,
+      ...profile
+    }));
     return {
       id: manifest.id,
       aliases: manifest.aliases || [],
       name: manifest.name,
       mediaType: manifest.mediaType,
+      defaultMode: manifest.defaults?.mode || null,
+      promptPolicy: manifest.promptPolicy || { mode: 'none' },
+      promptDefaults: extractWorkflowPromptDefaults(manifest, manifestPath),
       capabilities: manifest.capabilities || {},
-      pluginRequirements: manifest.pluginRequirements || []
+      pluginRequirements: manifest.pluginRequirements || [],
+      modelRequirements: manifest.modelRequirements || [],
+      loraProfiles,
+      aliasLoraProfiles: manifest.aliasLoraProfiles || {}
     };
   });
 }
@@ -47,6 +75,18 @@ export function resolveWorkflowPluginRequirements(manifest, mode = null) {
       if (!plugin) throw new Error(`Unknown ComfyUI plugin catalog id: ${requirement.pluginId}`);
       return { id: requirement.pluginId, modes: requirement.modes || [], ...plugin };
     });
+}
+
+export function resolveWorkflowModelRequirements(manifest, modelName = '', mode = null) {
+  const alias = String(modelName || '').trim().toLowerCase();
+  const profileIds = new Set(Object.entries(manifest.aliasLoraProfiles || {})
+    .filter(([name]) => name.trim().toLowerCase() === alias)
+    .flatMap(([, profiles]) => profiles || []));
+  return (manifest.modelRequirements || []).filter(requirement => {
+    if (mode && Array.isArray(requirement.modes) && !requirement.modes.includes(mode)) return false;
+    if (requirement.required !== false) return true;
+    return requirement.profile && profileIds.has(requirement.profile);
+  });
 }
 
 export function loadComfyUIWorkflow(modelName, requestedMode) {
@@ -96,6 +136,19 @@ export function setWorkflowValue(workflow, dottedPath, value) {
     current = current[key];
   }
   current[parts.at(-1)] = value;
+}
+
+export function getWorkflowValue(workflow, dottedPath) {
+  const parts = String(dottedPath || '').split('.').filter(Boolean);
+  if (parts.length === 0) throw new Error('工作流绑定路径为空');
+  let current = workflow;
+  for (const key of parts) {
+    if (!current || typeof current !== 'object' || !(key in current)) {
+      throw new Error(`工作流绑定路径不存在：${dottedPath}`);
+    }
+    current = current[key];
+  }
+  return current;
 }
 
 export function deleteWorkflowValue(workflow, dottedPath) {

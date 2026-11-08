@@ -5,6 +5,21 @@
       "enabled": true,
       "displayName": "MiniMax H3 Prompt Writing",
       "id": "h3-prompt-writing"
+    },
+    "ecom-image-prompt-director": {
+      "enabled": true,
+      "displayName": "ecom-image-prompt-director",
+      "id": "ecom-image-prompt-director"
+    },
+    "qwen-image-2-1-prompter": {
+      "enabled": false,
+      "displayName": "qwen-image-2-1-prompter",
+      "id": "qwen-image-2-1-prompter"
+    },
+    "qwen-image-prompt-en": {
+      "enabled": true,
+      "displayName": "qwen-image-prompt-en",
+      "id": "qwen-image-prompt-en"
     }
   }
 }

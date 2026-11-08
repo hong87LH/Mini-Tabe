@@ -1,7 +1,7 @@
 # ComfyUI 架构与工作流接入
 
-适用工程：AI Table Studio v2.6.3 后续分支  
-最后核对：2026-08-24
+适用工程：AI Table Studio v2.7.7 及兼容后续版本
+最后核对：2026-11-07
 
 ## 1. 设计目标
 
@@ -29,7 +29,7 @@ AI Table Studio 字段
 | `comfyui/comfyui_client.js` | 参数规范化、素材上传、Prompt 提交、状态和结果解析 |
 | `comfyui/workflow_registry.js` | 扫描 Manifest、匹配别名、加载模板、设置节点值 |
 | `comfyui/plugin_catalog.json` | 节点类型到核心/插件的机器可读映射 |
-| `comfyui/workflows/*/manifest.json` | 工作流能力、Alias、模板、Binding、插件要求 |
+| `comfyui/workflows/*/manifest.json` | 工作流能力、Alias、模板、Binding、模型/插件要求、Prompt 与 LoRA Profile 策略 |
 | `comfyui/workflows/*/*_api.json` | ComfyUI API Format 工作流模板 |
 | `scripts/check_comfyui_protocol.mjs` | 当前工作流和 ComfyUI 环境检查 |
 | `tests/comfyui_protocol.test.mjs` | 不付费的协议回归测试 |
@@ -42,11 +42,23 @@ comfyui/workflows/
     manifest.json
     fast_api.json
     quality_api.json
+    README.md
 
   minimax-h3-reference-router/
     manifest.json
     fast_api.json
     quality_api.json
+    README.md
+
+  qwen-image-2.1/
+    manifest.json
+    image_api.json
+    README.md
+
+  qwen-image-2.1-face/
+    manifest.json
+    image_api.json
+    README.md
 ```
 
 目录名只用于组织；模型匹配以 Manifest 的 `id` 和 `aliases` 为准。
@@ -63,7 +75,9 @@ comfyui/workflows/
 - 支持的比例、清晰度、模式和时长；
 - 前台语义参数到 API JSON 节点输入的 Binding；
 - 输出节点；
-- 必需节点和插件。
+- 必需节点和插件；
+- 精确模型文件、ComfyUI 目录、来源及可选 Hash；
+- 可选 LoRA Profile、旧别名映射和提示词策略。
 
 Manifest 是“前台语义合同”，API JSON 是“当前 ComfyUI 节点实现”。两者必须一起版本化和测试。
 
@@ -75,11 +89,13 @@ Manifest 是“前台语义合同”，API JSON 是“当前 ComfyUI 节点实�
 4. 放入一个或多个 API JSON 模板。
 5. 编写 Manifest，先声明最小能力和明确 Alias。
 6. 从导出的 JSON 核对每一个节点 ID、`class_type` 和输入字段名。
-7. 把必需节点加入 `requiredNodeTypes`，把来源加入 `pluginRequirements` 和 `plugin_catalog.json`。
-8. 为 Registry/Binding/输入路由/输出解析增加协议测试。
-9. 运行 `npm run test:comfyui`。
-10. 启动真实 ComfyUI，运行 `npm run check:comfyui`。
-11. 用低成本参数完成至少一次真实生成，并记录实际输出尺寸、时长和文件。
+7. 把必需节点加入 `requiredNodeTypes`，把插件来源加入 `pluginRequirements` 和 `plugin_catalog.json`。
+8. 在 `modelRequirements` 登记精确模型名、目录、来源、加载节点和输入名；LoRA 同时登记 Profile 或固定模板用途。
+9. 编写 workflow 随附 `README.md`，说明输入语义、提示词策略、安装和最小验证方式。
+10. 为 Registry/Binding/输入路由/输出解析增加协议测试。
+11. 运行 `npm run test:comfyui`。
+12. 启动真实 ComfyUI，运行 `npm run check:comfyui`。
+13. 用低成本参数完成至少一次真实生成，并记录实际输出尺寸、时长和文件。
 
 ## 6. 哪些扩展通常不需要修改 Client
 
@@ -113,7 +129,9 @@ field.configure_ai
   → job.get / batch.get / SSE
 ```
 
-`generation.preview` 应先展示最终模型、Provider、媒体引用、Crop/Trim、清晰度、比例、时长、输出路径与费用可能性。`generation.run` 继续复用 Grid 已验证的 ComfyUI Runtime。
+`generation.get_capabilities` 返回 workflow 的能力、`modelRequirements`、`loraProfiles` 和旧别名 Profile 映射。`generation.preview` 应先展示最终模型、Provider、媒体引用、Crop/Trim、清晰度、比例、时长、实际 LoRA Profile、输出路径与费用可能性；不支持的 Profile 必须在预览阶段阻塞。`generation.run` 继续复用 Grid 已验证的 ComfyUI Runtime。
+
+工作流注册表还会按 `bindings.prompt` 从每个模板自动抽取 `promptDefaults`，因此 Face 等工作流级默认提示词不需要在 Manifest 重复维护。单独 LoRA 的提示词行为写在 `loraProfiles.<id>.promptPolicy`：`mode` 支持 `none / prepend / append`，`kind` 用于界面区分 `trigger / default / none`，`text` 是触发词或默认词，`separator` 控制与用户提示词的连接方式。未声明等价于 `none`，旧 Manifest 保持兼容。
 
 ## 9. 安全边界
 
@@ -129,6 +147,8 @@ field.configure_ai
 - [ ] ID/Alias 不与现有工作流冲突。
 - [ ] Fast/Quality 模板与 Manifest 来自同一版本。
 - [ ] Required Nodes 与 Plugin Catalog 完整。
+- [ ] `modelRequirements` 的文件名、目录、来源和模板完全一致。
+- [ ] workflow 随附 README、`readme/03_ComfyUI` 和版本记录职责清晰且同步。
 - [ ] `npm run test:comfyui` 全部通过。
 - [ ] `npm run check:comfyui` 无缺失节点。
 - [ ] 低成本真实生成成功并检查实际文件。

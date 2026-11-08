@@ -680,7 +680,7 @@ function normalizeAiConfig(field, rawConfig) {
   const commonAllowed = new Set(['prompt', 'refFields', 'model', 'sourceImage']);
   const byType = {
     aiText: new Set(['skill']),
-    aiImage: new Set(['mode', 'quality', 'count', 'size', 'folderPath', 'resolution', 'ratio', 'filenameTemplate', 'isRetouchMode', 'saveToSourceFolder', 'scaleToSource']),
+    aiImage: new Set(['mode', 'quality', 'count', 'size', 'folderPath', 'resolution', 'ratio', 'filenameTemplate', 'loraProfiles', 'isRetouchMode', 'saveToSourceFolder', 'scaleToSource']),
     aiVideo: new Set(['duration', 'resolution', 'ratio', 'sound', 'mode', 'enhancePrompt', 'offPeak', 'folderPath', 'filenameTemplate', 'sourceVideo', 'sourceAudio'])
   };
   const allowed = new Set([...commonAllowed, ...byType[field.type]]);
@@ -711,6 +711,10 @@ function normalizeAiConfig(field, rawConfig) {
       const count = Number(rawConfig.count);
       if (!Number.isInteger(count) || count < 1 || count > 20) return { error: 'count must be an integer between 1 and 20' };
       cfg.count = count;
+    }
+    if ('loraProfiles' in rawConfig) {
+      if (!Array.isArray(rawConfig.loraProfiles)) return { error: 'loraProfiles must be an array' };
+      cfg.loraProfiles = [...new Set(rawConfig.loraProfiles.map(value => String(value).trim()).filter(Boolean))];
     }
     for (const key of ['isRetouchMode', 'saveToSourceFolder', 'scaleToSource']) {
       if (key in rawConfig) cfg[key] = rawConfig[key] === true;

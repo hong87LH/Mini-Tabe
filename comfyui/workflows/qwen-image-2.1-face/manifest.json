@@ -1,0 +1,146 @@
+{
+  "id": "qwen-image-2.1-face",
+  "aliases": [
+    "qwen-image-2.1-face-local"
+  ],
+  "name": "Qwen Image 2.1 本地双图换脸",
+  "provider": "comfyui",
+  "mediaType": "image",
+  "templates": {
+    "fast": "image_api.json",
+    "quality": "image_api.json"
+  },
+  "defaults": {
+    "mode": "quality",
+    "aspectRatio": "1:1"
+  },
+  "capabilities": {
+    "inputImages": {
+      "min": 2,
+      "max": 2
+    },
+    "inputVideos": {
+      "min": 0,
+      "max": 0
+    },
+    "inputAudio": {
+      "min": 0,
+      "max": 0
+    },
+    "resolutions": [
+      "0.5K",
+      "1K",
+      "1.5K",
+      "2K"
+    ],
+    "resolutionCoefficient": {
+      "min": 0.5,
+      "max": 2
+    },
+    "aspectRatios": [
+      "1:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:3",
+      "9:16",
+      "16:9",
+      "21:9"
+    ],
+    "referenceAspectRatio": "first-image-when-unset",
+    "transparentPNG": false,
+    "qualities": [
+      "auto",
+      "high",
+      "max"
+    ],
+    "generationModes": [
+      "standard"
+    ],
+    "reservedGenerationModes": [
+      "enhanced"
+    ]
+  },
+  "modelRequirements": [
+    {
+      "id": "qwen21-diffusion-int8",
+      "kind": "diffusion_model",
+      "directory": "models/diffusion_models",
+      "file": "qwen_image_2.1_int8_convrot.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors",
+      "loaderNodeType": "UNETLoader",
+      "inputName": "unet_name",
+      "required": true
+    },
+    {
+      "id": "qwen21-text-encoder-int8",
+      "kind": "text_encoder",
+      "directory": "models/text_encoders",
+      "file": "qwen3vl_8b_int8_convrot.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+      "loaderNodeType": "CLIPLoader",
+      "inputName": "clip_name",
+      "required": true
+    },
+    {
+      "id": "qwen21-vae-bf16",
+      "kind": "vae",
+      "directory": "models/vae",
+      "file": "qwen_image_2.1_vae_bf16.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+      "loaderNodeType": "VAELoader",
+      "inputName": "vae_name",
+      "required": true
+    },
+    {
+      "id": "qwen21-bfs-head-v1.1",
+      "kind": "lora",
+      "directory": "models/loras",
+      "file": "bfs_head_v1.1_qwen_2.1.safetensors",
+      "source": "https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap/resolve/main/bfs_head_v1.1_qwen_2.1.safetensors",
+      "sha256": "d1d748d5601077f3b6d05766f6823510e901970d916afa404a97e85dc92fa88e",
+      "loaderNodeType": "LoraLoaderModelOnly",
+      "inputName": "lora_name",
+      "required": true
+    }
+  ],
+  "bindings": {
+    "prompt": "7.inputs.prompt",
+    "seed": "8.inputs.seed",
+    "outputPrefix": "10.inputs.filename_prefix"
+  },
+  "promptPolicy": {
+    "mode": "append",
+    "separator": "\n"
+  },
+  "routing": {
+    "type": "qwen-image-2.1",
+    "conditioningNodeId": "7",
+    "samplerNodeId": "8",
+    "dynamicNodeBase": 100,
+    "transparentModels": [],
+    "latentNodeId": "90"
+  },
+  "output": {
+    "node": "10",
+    "type": "image"
+  },
+  "requiredNodeTypes": [
+    "UNETLoader",
+    "QwenImage21Cache",
+    "CLIPLoader",
+    "VAELoader",
+    "TextEncodeQwenImage21",
+    "KSampler",
+    "VAEDecode",
+    "SaveImage",
+    "LoadImage",
+    "EmptyLatentImage",
+    "LoraLoaderModelOnly"
+  ],
+  "pluginRequirements": [
+    {
+      "pluginId": "comfyui-core-qwen21"
+    }
+  ]
+}

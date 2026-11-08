@@ -2,7 +2,8 @@
   "id": "qwen-image-2.1",
   "aliases": [
     "qwen-image-2.1-local",
-    "qwen-image-2.1-transparent-local"
+    "qwen-image-2.1-transparent-local",
+    "qwen-image-2.1-consistency-local"
   ],
   "name": "Qwen Image 2.1 本地图片路由",
   "provider": "comfyui",
@@ -62,10 +63,71 @@
       "enhanced"
     ]
   },
+  "modelRequirements": [
+    {
+      "id": "qwen21-diffusion-int8",
+      "kind": "diffusion_model",
+      "directory": "models/diffusion_models",
+      "file": "qwen_image_2.1_int8_convrot.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors",
+      "loaderNodeType": "UNETLoader",
+      "inputName": "unet_name",
+      "required": true
+    },
+    {
+      "id": "qwen21-text-encoder-int8",
+      "kind": "text_encoder",
+      "directory": "models/text_encoders",
+      "file": "qwen3vl_8b_int8_convrot.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+      "loaderNodeType": "CLIPLoader",
+      "inputName": "clip_name",
+      "required": true
+    },
+    {
+      "id": "qwen21-vae-bf16",
+      "kind": "vae",
+      "directory": "models/vae",
+      "file": "qwen_image_2.1_vae_bf16.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+      "loaderNodeType": "VAELoader",
+      "inputName": "vae_name",
+      "required": true
+    },
+    {
+      "id": "qwen21-consistency",
+      "kind": "lora",
+      "directory": "models/loras",
+      "file": "qwen-image-2.1-consistency.safetensors",
+      "source": "https://huggingface.co/zimageapp/qwen-image-2.1-loras/resolve/main/qwen-image-2.1-consistency.safetensors",
+      "sha256": "4f44ada1be2189cc23b3d010f9603543403f48454e2f76842a3d30109b20bd63",
+      "loaderNodeType": "LoraLoaderModelOnly",
+      "inputName": "lora_name",
+      "required": false,
+      "profile": "consistency"
+    }
+  ],
   "bindings": {
     "prompt": "7.inputs.prompt",
     "seed": "8.inputs.seed",
     "outputPrefix": "10.inputs.filename_prefix"
+  },
+  "loraProfiles": {
+    "consistency": {
+      "name": "Qwen Image 2.1 Consistency",
+      "file": "qwen-image-2.1-consistency.safetensors",
+      "defaultStrength": 1,
+      "modelRequirementId": "qwen21-consistency",
+      "promptPolicy": {
+        "mode": "none",
+        "kind": "none"
+      }
+    }
+  },
+  "aliasLoraProfiles": {
+    "qwen-image-2.1-consistency-local": [
+      "consistency"
+    ]
   },
   "routing": {
     "type": "qwen-image-2.1",
@@ -75,7 +137,12 @@
     "transparentModels": [
       "qwen-image-2.1-transparent-local"
     ],
-    "latentNodeId": "90"
+    "latentNodeId": "90",
+    "modelPipeline": {
+      "sourceNodeId": "1",
+      "targetNodeId": "2",
+      "dynamicLoraNodeBase": 2000
+    }
   },
   "output": {
     "node": "10",

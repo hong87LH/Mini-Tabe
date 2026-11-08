@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {
   buildOptionalMediaReferenceWarnings,
   isGenerationPreviewReady,
-  validateSelectedWorkflowInputs
+  parseResolvedLoraProfiles,
+  validateSelectedWorkflowInputs,
+  validateSelectedWorkflowLoraProfiles,
+  validateSelectedWorkflowResolution
 } from '../src/lib/generationPreviewPolicy.ts';
 
 const workflows = [
@@ -102,4 +105,59 @@ test('image workflow cannot preview as video generation', () => {
   const counts = {images:0,videos:0,audio:0};
   assert.equal(validateSelectedWorkflowInputs('comfyui','qwen-image-2.1-local',counts,workflows,'image').blockingReasons.length,0);
   assert.equal(validateSelectedWorkflowInputs('comfyui','qwen-image-2.1-local',counts,workflows,'video').blockingReasons[0].code,'WORKFLOW_INPUT_UNSUPPORTED');
+});
+
+test('Qwen LoRA profiles resolve explicit and legacy alias configuration', () => {
+  const workflow = {
+    id: 'qwen-image-2.1',
+    aliases: ['qwen-image-2.1-local', 'qwen-image-2.1-consistency-local'],
+    loraProfiles: [{ id: 'consistency', file: 'qwen-image-2.1-consistency.safetensors' }],
+    aliasLoraProfiles: { 'qwen-image-2.1-consistency-local': ['consistency'] }
+  };
+  assert.deepEqual(
+    validateSelectedWorkflowLoraProfiles(workflow, 'qwen-image-2.1-local', ['consistency']).appliedProfiles,
+    ['consistency']
+  );
+  assert.deepEqual(
+    validateSelectedWorkflowLoraProfiles(workflow, 'qwen-image-2.1-consistency-local').appliedProfiles,
+    ['consistency']
+  );
+});
+
+test('preview blocks LoRA profiles that the selected workflow does not register', () => {
+  const faceWorkflow = {
+    id: 'qwen-image-2.1-face',
+    aliases: ['qwen-image-2.1-face-local'],
+    loraProfiles: []
+  };
+  const result = validateSelectedWorkflowLoraProfiles(faceWorkflow, 'qwen-image-2.1-face-local', ['consistency']);
+  assert.equal(result.blockingReasons[0].code, 'WORKFLOW_LORA_PROFILE_UNSUPPORTED');
+  assert.deepEqual(result.blockingReasons[0].details.unsupportedProfiles, ['consistency']);
+});
+
+test('Qwen face preview shares the Qwen 0.5-2K resolution contract', () => {
+  const faceWorkflow = {
+    id: 'qwen-image-2.1-face',
+    aliases: ['qwen-image-2.1-face-local'],
+    capabilities: {
+      resolutions: ['0.5K', '1K', '1.5K', '2K'],
+      resolutionCoefficient: { min: 0.5, max: 2 }
+    }
+  };
+  for (const resolution of ['0.5', '0.5K', '1', '1K', '1.5', '1.5K', '2', '2K', '1024x1024']) {
+    assert.deepEqual(
+      validateSelectedWorkflowResolution(faceWorkflow, 'qwen-image-2.1-face-local', resolution).blockingReasons,
+      []
+    );
+  }
+  const invalid = validateSelectedWorkflowResolution(faceWorkflow, 'qwen-image-2.1-face-local', '4K');
+  assert.equal(invalid.blockingReasons[0].code, 'WORKFLOW_RESOLUTION_UNSUPPORTED');
+  assert.deepEqual(invalid.blockingReasons[0].details.availableResolutions, ['0.5K', '1K', '1.5K', '2K']);
+});
+
+test('resolved LoRA field values support single or delimited profile IDs', () => {
+  assert.deepEqual(
+    parseResolvedLoraProfiles(['consistency', 'garment-stitch, character-a', 'character-a\nmaterial-detail', '']),
+    ['consistency', 'garment-stitch', 'character-a', 'material-detail']
+  );
 });

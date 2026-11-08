@@ -5,11 +5,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   deleteWorkflowValue,
+  getWorkflowValue,
   listComfyUIWorkflows,
   loadComfyUIWorkflow,
+  resolveWorkflowModelRequirements,
   resolveWorkflowPluginRequirements,
   setWorkflowValue
 } from './workflow_registry.js';
+import { composeLoraProfilePrompt, composeWorkflowPromptWithTemplate } from './lora_prompt_policy.js';
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.mkv']);
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus']);
@@ -115,6 +118,57 @@ function normalizeDuration(value, manifest) {
   return duration;
 }
 
+export function composeWorkflowPrompt(manifest, templatePrompt, userPrompt) {
+  return composeWorkflowPromptWithTemplate(manifest.promptPolicy, templatePrompt, userPrompt);
+}
+
+export function applyWorkflowLoraProfiles(workflow, manifest, modelName, requestedProfiles = []) {
+  const available = manifest.loraProfiles || {};
+  const alias = String(modelName || '').trim().toLowerCase();
+  const aliasProfiles = manifest.aliasLoraProfiles?.[alias] || [];
+  const requested = Array.isArray(requestedProfiles)
+    ? requestedProfiles
+    : String(requestedProfiles || '').split(',').map(value => value.trim()).filter(Boolean);
+  const profileIds = [...new Set([...aliasProfiles, ...requested].map(value => String(value).trim()).filter(Boolean))];
+  if (profileIds.length === 0) return [];
+
+  const pipeline = manifest.routing?.modelPipeline;
+  if (!pipeline) throw new Error(`工作流 ${manifest.id} 不支持 LoRA Profile 叠加`);
+  const sourceNodeId = String(pipeline.sourceNodeId);
+  const targetNodeId = String(pipeline.targetNodeId);
+  const source = workflow[sourceNodeId];
+  const target = workflow[targetNodeId];
+  if (!source || !target?.inputs) throw new Error(`工作流 ${manifest.id} 的模型链节点配置无效`);
+
+  let modelInput = [sourceNodeId, 0];
+  const applied = [];
+  profileIds.forEach((profileId, index) => {
+    const profile = available[profileId];
+    if (!profile) throw new Error(`工作流 ${manifest.id} 未登记 LoRA Profile：${profileId}`);
+    const nodeId = String(Number(pipeline.dynamicLoraNodeBase || 2000) + index);
+    workflow[nodeId] = {
+      class_type: 'LoraLoaderModelOnly',
+      inputs: {
+        lora_name: profile.file,
+        strength_model: Number(profile.defaultStrength ?? 1),
+        model: modelInput
+      },
+      _meta: { title: `LoRA Profile: ${profile.name || profileId}` }
+    };
+    modelInput = [nodeId, 0];
+    applied.push(profileId);
+  });
+  target.inputs.model = modelInput;
+  return applied;
+}
+
+export function requiredNodeTypesForModel(manifest, modelName) {
+  const required = new Set(manifest.requiredNodeTypes || []);
+  const alias = String(modelName || '').trim().toLowerCase();
+  if ((manifest.aliasLoraProfiles?.[alias] || []).length > 0) required.add('LoraLoaderModelOnly');
+  return [...required];
+}
+
 function collectOutputFiles(outputs) {
   const files = [];
   for (const [nodeId, nodeOutput] of Object.entries(outputs || {})) {
@@ -169,14 +223,36 @@ export class ComfyUIClient {
     if (modelName) {
       const loaded = loadComfyUIWorkflow(modelName, 'fast');
       const missingNodeTypes = [];
-      for (const nodeType of loaded.manifest.requiredNodeTypes || []) {
+      const objectInfoByNodeType = new Map();
+      for (const nodeType of requiredNodeTypesForModel(loaded.manifest, modelName)) {
         const response = await this.request(`/object_info/${encodeURIComponent(nodeType)}`);
-        if (!(await response.json())?.[nodeType]) missingNodeTypes.push(nodeType);
+        const objectInfo = await response.json();
+        objectInfoByNodeType.set(nodeType, objectInfo);
+        if (!objectInfo?.[nodeType]) missingNodeTypes.push(nodeType);
+      }
+      const requiredModels = resolveWorkflowModelRequirements(loaded.manifest, modelName, loaded.mode);
+      const missingModels = [];
+      for (const requirement of requiredModels) {
+        if (!requirement.loaderNodeType || !requirement.inputName) continue;
+        let objectInfo = objectInfoByNodeType.get(requirement.loaderNodeType);
+        if (!objectInfo) {
+          objectInfo = await (await this.request(`/object_info/${encodeURIComponent(requirement.loaderNodeType)}`)).json();
+          objectInfoByNodeType.set(requirement.loaderNodeType, objectInfo);
+        }
+        const nodeInfo = objectInfo?.[requirement.loaderNodeType];
+        const input = nodeInfo?.input?.required?.[requirement.inputName]
+          ?? nodeInfo?.input?.optional?.[requirement.inputName];
+        const choices = Array.isArray(input) && Array.isArray(input[0]) ? input[0] : null;
+        if (choices && !choices.some(choice => String(choice).replace(/\\/g, '/').split('/').at(-1) === requirement.file)) {
+          missingModels.push(requirement);
+        }
       }
       workflow = {
         id: loaded.manifest.id,
         name: loaded.manifest.name,
         missingNodeTypes,
+        requiredModels,
+        missingModels,
         requiredPlugins: resolveWorkflowPluginRequirements(loaded.manifest, loaded.mode),
         missingPlugins: resolveWorkflowPluginRequirements(loaded.manifest, loaded.mode)
           .map(plugin => ({
@@ -187,7 +263,7 @@ export class ComfyUIClient {
       };
     }
     return {
-      ok: !workflow?.missingNodeTypes?.length,
+      ok: !workflow?.missingNodeTypes?.length && !workflow?.missingModels?.length,
       endpoint: this.endpoint,
       comfyuiVersion: system?.system?.comfyui_version,
       device: system?.devices?.[0]?.name,
@@ -309,6 +385,7 @@ export class ComfyUIClient {
     }
 
     const isQwenImage = manifest.routing?.type === 'qwen-image-2.1';
+    const appliedLoraProfiles = applyWorkflowLoraProfiles(workflow, manifest, model, params.loraProfiles);
     const qwenResolution = isQwenImage ? normalizeQwenImageResolution(params.resolution ?? params.imageSize) : null;
     const qwenAspectRatioInput = params.aspectRatio ?? params.aspect_ratio;
     const qwenHasExplicitAspectRatio = qwenAspectRatioInput !== undefined && qwenAspectRatioInput !== null && String(qwenAspectRatioInput).trim() !== '' && !/^auto$/i.test(String(qwenAspectRatioInput).trim());
@@ -328,7 +405,12 @@ export class ComfyUIClient {
     const uploadedAudio = [];
     for (const audioReference of audio) uploadedAudio.push(await this.uploadMedia(audioReference, 'audio'));
 
-    let finalPrompt = String(prompt || '').trim();
+    const profilePrompt = composeLoraProfilePrompt(manifest, appliedLoraProfiles, prompt);
+    let finalPrompt = composeWorkflowPrompt(
+      manifest,
+      getWorkflowValue(workflow, manifest.bindings.prompt),
+      profilePrompt
+    );
     if (manifest.routing?.type === 'reference-multimodal') {
       const tags = [
         ...uploadedImages.map((_, index) => `<Picture ${index + 1}>`),
@@ -473,7 +555,8 @@ export class ComfyUIClient {
         provider: 'comfyui',
         workflow: manifest.id,
         mode,
-        queue_number: result.number
+        queue_number: result.number,
+        loraProfiles: appliedLoraProfiles
       }
     };
   }

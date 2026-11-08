@@ -752,17 +752,20 @@ test('HTTP JSON Schema accepts phase 4 envelope and rejects unknown actions', ()
   assert.equal(validate(request('not.real', {})), false);
 });
 
-test('image mode and quality persist through safe AI configuration without touching video', async () => {
+test('image mode, quality and LoRA profiles persist through safe AI configuration without touching video', async () => {
   const workspace = createInMemoryWorkspace(base);
   const created = await workspace.execute(request('table.create', {name:'Image controls',tableId:'image_controls'}, {confirmed:true}));
   assert.equal(created.ok,true);
   await workspace.execute(request('field.create',{tableId:'image_controls',fieldId:'image',name:'Image',type:'aiImage'},{confirmed:true}));
-  const configured = await workspace.execute(request('field.configure_ai',{tableId:'image_controls',fieldId:'image',config:{mode:'{模式}',quality:'{画质}'}},{confirmed:true}));
+  const configured = await workspace.execute(request('field.configure_ai',{tableId:'image_controls',fieldId:'image',config:{mode:'{模式}',quality:'{画质}',loraProfiles:['consistency','{功能LoRA}','consistency']}},{confirmed:true}));
   assert.equal(configured.ok,true);
   const schema=await workspace.execute(request('table.get_schema',{tableId:'image_controls'}));
   const field=schema.data.fields.find(f=>f.id==='image');
   assert.equal(field.aiImageConfig.mode,'{模式}');
   assert.equal(field.aiImageConfig.quality,'{画质}');
+  assert.deepEqual(field.aiImageConfig.loraProfiles,['consistency','{功能LoRA}']);
+  const invalid = await workspace.execute(request('field.configure_ai',{tableId:'image_controls',fieldId:'image',config:{loraProfiles:'consistency'}},{confirmed:true}));
+  assert.equal(invalid.ok,false);
 });
 
 

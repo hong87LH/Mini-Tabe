@@ -5,6 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { ComfyUIClient, normalizeComfyUIMegapixels } from '../comfyui/comfyui_client.js';
+import { composeLoraProfilePrompt, composeRegisteredWorkflowPrompt } from '../comfyui/lora_prompt_policy.js';
 import {
   deleteWorkflowValue,
   listComfyUIWorkflows,
@@ -34,6 +35,32 @@ test('two H3 router models are registered', () => {
   assert.deepEqual(reference.capabilities.inputImages, { min: 0, max: 9 });
   assert.deepEqual(reference.capabilities.inputVideos, { min: 0, max: 3 });
   assert.deepEqual(reference.capabilities.inputAudio, { min: 0, max: 3 });
+});
+
+test('LoRA prompt policies support trigger, default-prefix and user-only modes', () => {
+  const manifest = {
+    loraProfiles: {
+      defaultBlock: { promptPolicy: { mode: 'prepend', kind: 'default', text: 'preserve identity and composition', separator: '\n' } },
+      triggerStyle: { promptPolicy: { mode: 'prepend', kind: 'trigger', text: 'atelier_style', separator: ', ' } },
+      userOnly: { promptPolicy: { mode: 'none', kind: 'none' } }
+    }
+  };
+  assert.equal(
+    composeLoraProfilePrompt(manifest, ['defaultBlock', 'triggerStyle', 'userOnly'], 'red coat'),
+    'preserve identity and composition\natelier_style, red coat'
+  );
+  assert.equal(composeLoraProfilePrompt(manifest, ['userOnly'], 'red coat'), 'red coat');
+  assert.equal(composeLoraProfilePrompt(manifest, ['triggerStyle'], 'atelier_style, red coat'), 'atelier_style, red coat');
+  assert.throws(() => composeLoraProfilePrompt({ loraProfiles: { bad: { promptPolicy: { mode: 'merge', text: 'x' } } } }, ['bad'], 'y'), /不支持/);
+});
+
+test('workflow registry extracts template prompts for user guidance and preview', () => {
+  const face = listComfyUIWorkflows().find(item => item.id === 'qwen-image-2.1-face');
+  assert.equal(face.promptPolicy.mode, 'append');
+  assert.equal(face.promptDefaults.some(entry => entry.text.includes('head_swap:')), true);
+  assert.equal(composeRegisteredWorkflowPrompt(face, 'quality', ''), face.promptDefaults[0].text);
+  const qwen = listComfyUIWorkflows().find(item => item.id === 'qwen-image-2.1');
+  assert.equal(qwen.loraProfiles.find(profile => profile.id === 'consistency').promptPolicy.mode, 'none');
 });
 
 test('reference router rejects empty inputs without changing the selected workflow', async () => {
@@ -390,6 +417,28 @@ test('Qwen health rejects empty object_info and reports core dependency', async 
   assert.equal(health.workflow.missingPlugins[0].id, 'comfyui-core-qwen21');
 });
 
+test('ComfyUI health reports a missing registered model separately from missing nodes', async () => {
+  const client = new ComfyUIClient('', 'http://127.0.0.1:1');
+  client.request = async url => ({
+    json: async () => {
+      if (url === '/system_stats') return { system: { comfyui_version: '0.37.0' } };
+      const nodeType = decodeURIComponent(url.split('/').at(-1));
+      const input = nodeType === 'UNETLoader'
+        ? { required: { unet_name: [['qwen_image_2.1_int8_convrot.safetensors']] } }
+        : nodeType === 'CLIPLoader'
+          ? { required: { clip_name: [['some-other-encoder.safetensors']] } }
+          : nodeType === 'VAELoader'
+            ? { required: { vae_name: [['qwen_image_2.1_vae_bf16.safetensors']] } }
+            : {};
+      return { [nodeType]: { input } };
+    }
+  });
+  const health = await client.healthCheck('qwen-image-2.1-local');
+  assert.deepEqual(health.workflow.missingNodeTypes, []);
+  assert.deepEqual(health.workflow.missingModels.map(item => item.file), ['qwen3vl_8b_int8_convrot.safetensors']);
+  assert.equal(health.ok, false);
+});
+
 test('ComfyUI PNG output filename survives history parsing', async () => {
   const client = new ComfyUIClient('', 'http://127.0.0.1:1');
   client.request = async () => ({ json: async () => ({qwen:{status:{completed:true},outputs:{'10':{images:[{filename:'alpha.png',subfolder:'image/qwen21',type:'output'}]}}}}) });
@@ -568,4 +617,117 @@ test('renamed Pro and banana-2 use the intended image profiles', async () => {
     const params={mode,quality,imageSize:'2K',aspectRatio:'16:9',images:['ref.png']};
     assert.deepEqual(buildLingwuImageParams({model:'banana-2',params}),buildLingwuImageParams({model:'gemini-3.1-flash-image-preview',params}));
   }
+});
+
+test('Qwen face workflow requires two ordered inputs and retains the face LoRA', async () => {
+  const client = new ComfyUIClient('', 'http://127.0.0.1:1');
+  client.uploadImage = async image => image;
+  const submitted = [];
+  client.request = async (_url, options) => {
+    submitted.push(JSON.parse(options.body).prompt);
+    return { json: async () => ({ prompt_id: 'qwen-face-mock', node_errors: {} }) };
+  };
+
+  const model = 'qwen-image-2.1-face-local';
+  const basePrompt = 'head_swap: start with <image1> as the base image, keeping its lighting, environment, pose, and background. Replace the head and face with the identity from <image2>. Preserve the target head rotation, gaze direction, expression, hair detail, realistic skin, sharp details, no extra text or logos';
+  await assert.rejects(client.createTask(model, '保留眼镜', { images: ['base.png'] }), /2-2/);
+  await client.createTask(model, '', {
+    images: ['base.png', 'donor.png'],
+    imageSize: '1K',
+    quality: 'high'
+  });
+  await client.createTask(model, '保留眼镜和原发型', {
+    images: ['base.png', 'donor.png'],
+    imageSize: '1K',
+    quality: 'high'
+  });
+  await client.createTask(model, basePrompt, {
+    images: ['base.png', 'donor.png'],
+    imageSize: '1K',
+    quality: 'high'
+  });
+
+  assert.equal(submitted[0]['7'].inputs.prompt, basePrompt);
+  assert.equal(submitted[1]['7'].inputs.prompt, `${basePrompt}\n保留眼镜和原发型`);
+  assert.equal(submitted[2]['7'].inputs.prompt, basePrompt);
+  assert.equal(submitted[1]['100'].inputs.image, 'base.png');
+  assert.equal(submitted[1]['101'].inputs.image, 'donor.png');
+  assert.deepEqual(submitted[1]['7'].inputs['images.image_1'], ['100', 0]);
+  assert.deepEqual(submitted[1]['7'].inputs['images.image_2'], ['101', 0]);
+  assert.deepEqual(submitted[1]['2'].inputs.model, ['2000', 0]);
+  assert.equal(submitted[1]['2000'].inputs.lora_name, 'bfs_head_v1.1_qwen_2.1.safetensors');
+  assert.equal(submitted[1]['8'].inputs.steps, 30);
+  assert.deepEqual(submitted[1]['8'].inputs.latent_image, ['7', 2]);
+});
+
+test('Qwen face workflow uses the shared Qwen 0.5-2K resolution limits', async () => {
+  const client = new ComfyUIClient('', 'http://127.0.0.1:1');
+  client.uploadImage = async image => image;
+  const submitted = [];
+  client.request = async (_url, options) => {
+    submitted.push(JSON.parse(options.body).prompt);
+    return { json: async () => ({ prompt_id: 'qwen-face-resolution-mock', node_errors: {} }) };
+  };
+
+  const expected = new Map([['0.5K', 512], ['1K', 1024], ['1.5K', 1536], ['2K', 2048]]);
+  for (const [imageSize, resolution] of expected) {
+    await client.createTask('qwen-image-2.1-face-local', '', {
+      images: ['base.png', 'donor.png'],
+      imageSize
+    });
+    assert.equal(submitted.at(-1)['7'].inputs.resolution, resolution);
+  }
+  await assert.rejects(client.createTask('qwen-image-2.1-face-local', '', {
+    images: ['base.png', 'donor.png'],
+    imageSize: '4K'
+  }), /最高 2K/);
+});
+
+test('Qwen consistency profile reuses the default 0-5 image route and keeps the user prompt unchanged', async () => {
+  const client = new ComfyUIClient('', 'http://127.0.0.1:1');
+  client.uploadImage = async image => image;
+  const submitted = [];
+  client.request = async (_url, options) => {
+    submitted.push(JSON.parse(options.body).prompt);
+    return { json: async () => ({ prompt_id: 'qwen-consistency-mock', node_errors: {} }) };
+  };
+
+  const model = 'qwen-image-2.1-consistency-local';
+  for (const count of [1, 2, 5]) {
+    const images = Array.from({ length: count }, (_, index) => `reference-${index + 1}.png`);
+    await client.createTask(model, '只修改指定内容，保持其余画面不变', { images, imageSize: '1K', quality: 'auto' });
+  }
+
+  submitted.forEach((workflow, submissionIndex) => {
+    assert.equal(workflow['7'].inputs.prompt, '只修改指定内容，保持其余画面不变');
+    assert.deepEqual(workflow['2'].inputs.model, ['2000', 0]);
+    assert.equal(workflow['2000'].inputs.lora_name, 'qwen-image-2.1-consistency.safetensors');
+    assert.equal(workflow['8'].inputs.steps, 25);
+    assert.deepEqual(workflow['8'].inputs.latent_image, ['7', 2]);
+    const count = [1, 2, 5][submissionIndex];
+    for (let index = 0; index < count; index++) {
+      assert.equal(workflow[String(100 + index)].inputs.image, `reference-${index + 1}.png`);
+      assert.deepEqual(workflow['7'].inputs[`images.image_${index + 1}`], [String(100 + index), 0]);
+    }
+  });
+
+  await client.createTask('qwen-image-2.1-local', '普通流程显式启用保真层', {
+    images: ['base.png'],
+    loraProfiles: ['consistency']
+  });
+  assert.equal(submitted.at(-1)['2000'].inputs.lora_name, 'qwen-image-2.1-consistency.safetensors');
+  await assert.rejects(client.createTask('qwen-image-2.1-local', '非法配置', {
+    images: ['base.png'],
+    loraProfiles: ['unregistered-lora']
+  }), /未登记 LoRA Profile/);
+});
+
+test('workflow registry exposes machine-readable model and LoRA maintenance requirements', () => {
+  const workflows = listComfyUIWorkflows();
+  const qwen = workflows.find(workflow => workflow.id === 'qwen-image-2.1');
+  const face = workflows.find(workflow => workflow.id === 'qwen-image-2.1-face');
+  assert.equal(qwen.modelRequirements.some(item => item.file === 'qwen_image_2.1_int8_convrot.safetensors'), true);
+  assert.equal(qwen.loraProfiles.some(profile => profile.id === 'consistency'), true);
+  assert.deepEqual(qwen.aliasLoraProfiles['qwen-image-2.1-consistency-local'], ['consistency']);
+  assert.equal(face.modelRequirements.some(item => item.file === 'bfs_head_v1.1_qwen_2.1.safetensors'), true);
 });

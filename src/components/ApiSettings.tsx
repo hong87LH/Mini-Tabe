@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronUp, Database, Server, Image as ImageIcon, Video, Download, Upload, ServerCrash, Cpu, Eye, EyeOff, BookOpen, RefreshCw, Github } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronUp, Database, Server, Image as ImageIcon, Video, Download, Upload, ServerCrash, Cpu, Eye, EyeOff, BookOpen, RefreshCw, Github, Copy, Check } from 'lucide-react';
 
 function buildStandardOssDomain(endpoint: string, bucket: string): string {
   const cleanBucket = String(bucket || '').trim();
@@ -102,6 +102,8 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const [installedSkillsExpanded, setInstalledSkillsExpanded] = useState(true);
   const [skillLibraryExpanded, setSkillLibraryExpanded] = useState(true);
   const [skillError, setSkillError] = useState('');
+  const [registeredComfyUIWorkflows, setRegisteredComfyUIWorkflows] = useState<any[]>([]);
+  const [copiedLoraKey, setCopiedLoraKey] = useState('');
 
   const toggleExpand = (id: string) => {
     setExpandedSections(prev => ({ ...prev, [id]: !prev[id] }));
@@ -188,6 +190,30 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
     if (settingsTab === 'skills') loadSkills();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsTab]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const api = (window as any).electronAPI;
+    if (!api?.listComfyUIWorkflows) return;
+    api.listComfyUIWorkflows()
+      .then((workflows: any) => {
+        if (!cancelled) setRegisteredComfyUIWorkflows(Array.isArray(workflows) ? workflows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRegisteredComfyUIWorkflows([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const copyLoraName = async (key: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedLoraKey(key);
+      window.setTimeout(() => setCopiedLoraKey(current => current === key ? '' : current), 1200);
+    } catch {
+      setCopiedLoraKey('');
+    }
+  };
   
   const checkOssStorage = async () => {
     if (!ossConfig.accessKeyId) {
@@ -338,6 +364,47 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
     const isExpanded = expandedSections[`${type}_${idx}`];
     const modelCount = parseProviderModels(provider).length;
     const enabled = isProviderEnabled(provider);
+    const providerModels = new Set(
+      [provider.modelName, provider.modelAliases]
+        .filter(Boolean)
+        .join(',')
+        .split(',')
+        .map(model => model.trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const matchingWorkflows = registeredComfyUIWorkflows.filter(workflow => (
+      [workflow.id, ...(workflow.aliases || [])]
+        .some(name => providerModels.has(String(name).trim().toLowerCase()))
+    ));
+    const registeredLoras = Array.from(new Map(matchingWorkflows.flatMap(workflow => [
+      ...(workflow.loraProfiles || []).map((profile: any) => ({
+        key: `profile:${profile.id}`,
+        kind: 'profile',
+        name: profile.id,
+        file: profile.file || '',
+        workflowName: workflow.name || workflow.id,
+        copyValue: profile.id,
+        promptPolicy: profile.promptPolicy || { mode: 'none', kind: 'none' }
+      })),
+      ...(workflow.modelRequirements || [])
+        .filter((requirement: any) => requirement.kind === 'lora' && !requirement.profile)
+        .map((requirement: any) => ({
+          key: `builtin:${requirement.file}`,
+          kind: 'builtin',
+          name: requirement.file,
+          file: requirement.file,
+          workflowName: workflow.name || workflow.id,
+          copyValue: requirement.file
+        }))
+    ]).map(entry => [entry.key, entry])).values());
+    const workflowPromptDefaults = Array.from(new Map(matchingWorkflows.flatMap(workflow => (
+      workflow.promptPolicy?.mode === 'append' ? (workflow.promptDefaults || []).map((promptDefault: any) => ({
+        key: `workflow-prompt:${workflow.id}:${(promptDefault.modes || []).join(',')}`,
+        workflowName: workflow.name || workflow.id,
+        modes: promptDefault.modes || [],
+        text: promptDefault.text || ''
+      })) : []
+    )).map(entry => [entry.key, entry])).values());
     
     return (
       <div
@@ -473,6 +540,111 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
                 onChange={e => updateProvider(type, idx, { modelName: e.target.value })}
               />
             </div>
+
+            {provider.provider === 'comfyui' && (
+              <div className="rounded-lg border border-gray-200 bg-gray-50/70 p-3">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <div>
+                    <div className="text-xs font-medium text-gray-700">{lang === 'en' ? 'Workflow / LoRA guidance' : '工作流 / LoRA 使用参考'}</div>
+                    <div className="text-[10px] text-gray-400">{lang === 'en' ? 'Extracted from workflow manifests and templates' : '从 Workflow Manifest 与模板自动提取，只读'}</div>
+                  </div>
+                  <span className="text-[10px] text-gray-400">{registeredLoras.length}</span>
+                </div>
+                {workflowPromptDefaults.length > 0 && (
+                  <div className="mb-2 space-y-1.5">
+                    {workflowPromptDefaults.map((entry: any) => (
+                      <div key={entry.key} className="flex items-center gap-2 rounded-md border border-amber-100 bg-amber-50/60 px-2.5 py-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-[11px] font-medium text-gray-700">{entry.workflowName}</span>
+                            <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] text-amber-700">
+                              {lang === 'en' ? 'Workflow default' : '工作流默认词'}
+                            </span>
+                          </div>
+                          <div className="truncate text-[10px] text-gray-500" title={entry.text}>
+                            {(entry.modes || []).join(' / ')} · {entry.text}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={event => {
+                            event.stopPropagation();
+                            void copyLoraName(entry.key, entry.text);
+                          }}
+                          className="shrink-0 rounded p-1.5 text-gray-400 transition-colors hover:bg-white hover:text-amber-700"
+                          title={lang === 'en' ? 'Copy workflow prompt' : '复制工作流默认提示词'}
+                        >
+                          {copiedLoraKey === entry.key ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {registeredLoras.length === 0 ? (
+                  <div className="text-[11px] text-gray-400 py-1">
+                    {lang === 'en' ? 'No LoRA is registered for these models.' : '当前模型暂无已注册 LoRA；字段引用入口仍可使用。'}
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {registeredLoras.map((entry: any) => (
+                      <div key={entry.key} className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-2.5 py-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <code className="truncate text-[11px] text-gray-700">{entry.name}</code>
+                            <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] ${entry.kind === 'profile' ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-500'}`}>
+                              {entry.kind === 'profile' ? (lang === 'en' ? 'Field value' : '字段值') : (lang === 'en' ? 'Built in' : '内置')}
+                            </span>
+                            <span className="shrink-0 rounded bg-violet-50 px-1.5 py-0.5 text-[9px] text-violet-600">
+                              {entry.kind !== 'profile'
+                                ? (lang === 'en' ? 'Workflow prompt' : '随工作流提示')
+                                : entry.promptPolicy?.mode === 'none' || !entry.promptPolicy?.text
+                                  ? (lang === 'en' ? 'No prompt' : '无自动词')
+                                  : entry.promptPolicy?.kind === 'trigger'
+                                    ? (lang === 'en' ? 'Trigger' : '触发词')
+                                    : (lang === 'en' ? 'Default prompt' : '默认前置词')}
+                            </span>
+                          </div>
+                          <div
+                            className="truncate text-[10px] text-gray-400"
+                            title={entry.promptPolicy?.text || `${entry.workflowName}${entry.file ? ` · ${entry.file}` : ''}`}
+                          >
+                            {entry.promptPolicy?.text || `${entry.workflowName}${entry.kind === 'profile' && entry.file ? ` · ${entry.file}` : ''}`}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center">
+                          {entry.promptPolicy?.text && (
+                            <button
+                              type="button"
+                              onClick={event => {
+                                event.stopPropagation();
+                                void copyLoraName(`${entry.key}:prompt`, entry.promptPolicy.text);
+                              }}
+                              className="rounded p-1.5 text-gray-400 transition-colors hover:bg-violet-50 hover:text-violet-600"
+                              title={lang === 'en' ? 'Copy prompt text' : '复制提示词'}
+                            >
+                              {copiedLoraKey === `${entry.key}:prompt` ? <Check className="h-3.5 w-3.5 text-green-600" /> : <BookOpen className="h-3.5 w-3.5" />}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={event => {
+                              event.stopPropagation();
+                              void copyLoraName(entry.key, entry.copyValue);
+                            }}
+                            className="rounded p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
+                            title={entry.kind === 'profile'
+                              ? (lang === 'en' ? 'Copy field value' : '复制字段配置值')
+                              : (lang === 'en' ? 'Copy LoRA filename' : '复制 LoRA 文件名')}
+                          >
+                            {copiedLoraKey === entry.key ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

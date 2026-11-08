@@ -1,4 +1,5 @@
 import { normalizeImageControls, buildImageControlParams } from '../../lingwu_image_model_profiles.js';
+import { composeLoraProfilePrompt, composeRegisteredWorkflowPrompt } from '../../comfyui/lora_prompt_policy.js';
 import { getFirstRetouchSourceItem, getRetouchCropAspectRatio, nearestImageAspectRatio, imageRatioRequest, retouchReferenceImages } from '../lib/retouchAspectRatio.js';
 import { reconcileNetworkJobCells } from '../lib/networkJobReconciliation';
 import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
@@ -25,7 +26,10 @@ import {
 import {
   buildOptionalMediaReferenceWarnings,
   isGenerationPreviewReady,
-  validateSelectedWorkflowInputs
+  parseResolvedLoraProfiles,
+  validateSelectedWorkflowInputs,
+  validateSelectedWorkflowLoraProfiles,
+  validateSelectedWorkflowResolution
 } from '../lib/generationPreviewPolicy';
 
 type NetworkJobCellItem = {
@@ -2167,6 +2171,10 @@ export const resolveTemplateString = (templateStr: string, fields: Field[], reco
   return str;
 };
 
+const resolveLoraProfilesForRecord = (profiles: readonly string[] | undefined, fields: Field[], record: any) => (
+  parseResolvedLoraProfiles((profiles || []).map(profile => resolveTemplateString(profile, fields, record)))
+);
+
 const resolveFilenameAndFolder = (filenameTemplate: string, folderPathTpl: string, fields: Field[], record: any) => {
    let filename = resolveTemplateString(filenameTemplate || 'image', fields, record).trim();
    let folderPath = resolveTemplateString(folderPathTpl || '', fields, record).trim();
@@ -4265,7 +4273,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
             if (imgSet.provider === 'lingwu' && !imgSet.key) throw new Error("Lingwu API Key is required for Image Generation");
             
             const normalizedModelName = String(resolvedModel || '').trim().toLowerCase();
-            const isQwenComfyModel = imgSet.provider === 'comfyui' && ['qwen-image-2.1', 'qwen-image-2.1-local', 'qwen-image-2.1-transparent-local'].includes(normalizedModelName);
+            const isQwenComfyModel = imgSet.provider === 'comfyui' && ['qwen-image-2.1', 'qwen-image-2.1-local', 'qwen-image-2.1-transparent-local', 'qwen-image-2.1-face', 'qwen-image-2.1-face-local', 'qwen-image-2.1-consistency-local'].includes(normalizedModelName);
+            const supportsQwenLoraProfiles = imgSet.provider === 'comfyui' && ['qwen-image-2.1', 'qwen-image-2.1-local', 'qwen-image-2.1-transparent-local', 'qwen-image-2.1-consistency-local'].includes(normalizedModelName);
             // Retouch source ratio has priority over ANY user's ratio setting.
             // Normal Qwen I2I still uses the native first-image latent on auto/unset.
             const providerImages = isQwenComfyModel && cfg.isRetouchMode
@@ -4285,6 +4294,9 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 ...(imgSet.provider === 'comfyui' ? imageControls : rawImageControls),
                 imageSize: String(resolution || '1K').toUpperCase(),
                 ...(requestedAspectRatio ? { aspectRatio: requestedAspectRatio } : {}),
+                loraProfiles: supportsQwenLoraProfiles
+                  ? resolveLoraProfilesForRecord(cfg.loraProfiles, data.fields, record)
+                  : undefined,
                 images: providerImages.length > 0 ? providerImages : undefined
             };
             
@@ -5000,8 +5012,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         if (!reasons.includes(code)) reasons.push(code);
         blockingReasons.push({ code, ...(message ? { message } : {}), ...(details ? { details } : {}) });
       };
-      const resolvedPrompt = resolveTemplateString(field.prompt || '', data.fields, record);
-      if (!field.prompt || !resolvedPrompt.trim()) addReason('PROMPT_EMPTY', 'Prompt resolves to an empty string.');
+      const userResolvedPrompt = resolveTemplateString(field.prompt || '', data.fields, record);
 
       const providerInfo: any = resolveAgentProviderForRow(field, record);
       if (providerInfo.errorCode) addReason(providerInfo.errorCode, providerInfo.errorMessage, { model: providerInfo.resolvedModel || null });
@@ -5051,6 +5062,25 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         field.type === 'aiImage' ? 'image' : field.type === 'aiVideo' ? 'video' : 'text'
       );
       workflowValidation.blockingReasons.forEach(reason => addReason(reason.code, reason.message, reason.details));
+      const loraValidation = validateSelectedWorkflowLoraProfiles(
+        workflowValidation.workflow,
+        providerInfo.resolvedModel,
+        field.type === 'aiImage'
+          ? resolveLoraProfilesForRecord(cfg.loraProfiles, data.fields, record)
+          : []
+      );
+      loraValidation.blockingReasons.forEach(reason => addReason(reason.code, reason.message, reason.details));
+      const profileResolvedPrompt = composeLoraProfilePrompt(
+        workflowValidation.workflow,
+        loraValidation.appliedProfiles,
+        userResolvedPrompt
+      );
+      const resolvedPrompt = composeRegisteredWorkflowPrompt(
+        workflowValidation.workflow,
+        cfg.mode,
+        profileResolvedPrompt
+      );
+      if (!resolvedPrompt.trim()) addReason('PROMPT_EMPTY', 'Prompt resolves to an empty string.');
 
       let resolvedConfig: any = {
         model: providerInfo.resolvedModel || null,
@@ -5063,6 +5093,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         const durationRaw = resolveTemplateString(cfg.duration || '10', data.fields, record).trim();
         const duration = parseInt(durationRaw) || 10;
         const resolution = resolveTemplateString(cfg.resolution || '1080P', data.fields, record).trim();
+        validateSelectedWorkflowResolution(workflowValidation.workflow, providerInfo.resolvedModel, resolution)
+          .blockingReasons.forEach(reason => addReason(reason.code, reason.message, reason.details));
         const ratio = resolveTemplateString(cfg.ratio || '16:9', data.fields, record).replace(/：/g, ':').trim();
         const modeValue = resolveTemplateString(cfg.mode || 'fast', data.fields, record).trim();
         const output = resolveFilenameAndFolder(cfg.filenameTemplate || 'video', cfg.folderPath || '', data.fields, record);
@@ -5078,7 +5110,11 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
           output: { folderPath: output.folderPath, filename: output.filename }
         };
       } else if (field.type === 'aiImage') {
-        const resolution = resolveTemplateString(cfg.resolution || 'hd', data.fields, record).trim();
+        const workflowResolutions = workflowValidation.workflow?.capabilities?.resolutions || [];
+        const defaultResolution = workflowResolutions.some(value => String(value).toUpperCase() === '1K') ? '1K' : 'hd';
+        const resolution = resolveTemplateString(cfg.resolution || defaultResolution, data.fields, record).trim();
+        validateSelectedWorkflowResolution(workflowValidation.workflow, providerInfo.resolvedModel, resolution)
+          .blockingReasons.forEach(reason => addReason(reason.code, reason.message, reason.details));
         const configuredRatio = resolveTemplateString(cfg.ratio || '1:1', data.fields, record).replace(/：/g, ':').trim();
         const cropRatio = cfg.isRetouchMode ? getRetouchCropAspectRatio(cfg, data.fields, record) : null;
         const ratio = cropRatio || (cfg.isRetouchMode && getFirstRetouchSourceItem(cfg, data.fields, record)
@@ -5092,6 +5128,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
           ...normalizeImageControls({ mode: resolveTemplateString(cfg.mode || 'standard', data.fields, record), quality: resolveTemplateString(cfg.quality || 'auto', data.fields, record) }),
           size: cfg.size || null,
           retouch: cfg.isRetouchMode === true,
+           loraProfiles: loraValidation.appliedProfiles,
           output: { folderPath: output.folderPath, filename: output.filename }
         };
       } else {
@@ -6546,9 +6583,22 @@ function HeaderCell({
   const [draftPrompt, setDraftPrompt] = useState(field.prompt || '');
   const [draftRefs, setDraftRefs] = useState<string[]>(field.refFields || []);
   const [draftAiImageConfig, setDraftAiImageConfig] = useState(field.aiImageConfig || { count: 1, size: '1024x1024' });
-  const isQwenImageConfig = /^qwen-image-2\.1(?:-local|-transparent-local)?$/i.test(
-    draftAiImageConfig.modelTemplate || parseProviderModels(getEnabledProviders(modelSettings?.image)[0])[0] || ''
-  );
+  const [registeredComfyUIWorkflows, setRegisteredComfyUIWorkflows] = useState<any[]>([]);
+  const configuredImageModel = draftAiImageConfig.modelTemplate || parseProviderDisplayModels(getEnabledProviders(modelSettings?.image)[0])[0] || '';
+  const isLegacyConsistencyModel = /^qwen-image-2\.1-consistency-local$/i.test(configuredImageModel);
+  const isQwenFaceConfig = /^qwen-image-2\.1-face(?:-local)?$/i.test(configuredImageModel);
+  const isQwenImageConfig = /^qwen-image-2\.1(?:-local|-transparent-local|-consistency-local|-face(?:-local)?)?$/i.test(configuredImageModel);
+  const supportsQwenLoraProfiles = isQwenImageConfig && !isQwenFaceConfig;
+  const isConsistencyEnabled = isLegacyConsistencyModel || (draftAiImageConfig.loraProfiles || []).includes('consistency');
+  const registeredImageWorkflow = registeredComfyUIWorkflows.find(workflow => (
+    [workflow.id, ...(workflow.aliases || [])]
+      .some(name => String(name).trim().toLowerCase() === configuredImageModel.trim().toLowerCase())
+  ));
+  const qwenFunctionalLoraOptions: Array<{ id: string; label: string }> = (registeredImageWorkflow?.loraProfiles || [])
+    .filter((profile: any) => profile.id && profile.id !== 'consistency')
+    .map((profile: any) => ({ id: profile.id, label: profile.name || profile.id }));
+  const selectedFunctionalLora = (draftAiImageConfig.loraProfiles || [])
+    .find(profile => profile !== 'consistency') || '';
   const imageResolutionOptions = isQwenImageConfig ? ['0.5k', '1k', '1.5k', '2k'] : ['1k', '2k', '4k'];
   const [draftAiVideoConfig, setDraftAiVideoConfig] = useState(field.aiVideoConfig || { duration: '10', resolution: '1080P', ratio: '16:9', sound: 'false', mode: 'fast' });
   const [draftAiTextConfig, setDraftAiTextConfig] = useState(field.aiTextConfig || {});
@@ -6565,6 +6615,24 @@ function HeaderCell({
       setIsTypeExpanded(true);
     }
   }, [showMenu, field.prompt, field.refFields, field.aiImageConfig, field.aiVideoConfig, field.aiTextConfig]);
+
+  useEffect(() => {
+    if (!showMenu || field.type !== 'aiImage') return;
+    let cancelled = false;
+    const api = (window as any).electronAPI;
+    if (!api?.listComfyUIWorkflows) {
+      setRegisteredComfyUIWorkflows([]);
+      return;
+    }
+    api.listComfyUIWorkflows()
+      .then((workflows: any) => {
+        if (!cancelled) setRegisteredComfyUIWorkflows(Array.isArray(workflows) ? workflows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRegisteredComfyUIWorkflows([]);
+      });
+    return () => { cancelled = true; };
+  }, [showMenu, field.type]);
 
   useEffect(() => {
     if (!showMenu || field.type !== 'aiText') return;
@@ -7161,8 +7229,84 @@ function HeaderCell({
                          ))}
                        </div>
                        {isQwenImageConfig && <p className="text-[10px] text-gray-500">
-                         Qwen：0.5–2K，最多 5 张参考图；图生图接收比例但跟随首图。auto/high/max 为 25/30/40 步；high 模式预留，当前仍使用已安装版本。透明 PNG 选 transparent 模型。
+                         {isQwenFaceConfig
+                           ? 'Qwen Face：0.5–2K，固定 2 张参考图；图 1 为基图，图 2 为身份参考，默认跟随首图比例。'
+                           : 'Qwen：0.5–2K，最多 5 张参考图；图生图默认跟随首图比例，画质 auto/high/max 对应 25/30/40 步。'}
                        </p>}
+                       {supportsQwenLoraProfiles && (
+                         <div className="flex items-center justify-between gap-2">
+                           <label className="flex items-center gap-1 cursor-pointer w-max">
+                             <input
+                               type="checkbox"
+                               checked={isConsistencyEnabled}
+                               onChange={e => setDraftAiImageConfig(prev => {
+                                 const profiles = new Set(prev.loraProfiles || []);
+                                 if (e.target.checked) profiles.add('consistency'); else profiles.delete('consistency');
+                                 return {
+                                   ...prev,
+                                   modelTemplate: /^qwen-image-2\.1-consistency-local$/i.test(prev.modelTemplate || '')
+                                     ? 'qwen-image-2.1-local'
+                                     : prev.modelTemplate,
+                                   loraProfiles: [...profiles]
+                                 };
+                               })}
+                               onMouseDown={e => e.stopPropagation()}
+                             />
+                             <span className="text-[10px] text-gray-600">保真增强</span>
+                           </label>
+                           <div className="flex items-stretch w-40 border border-gray-300 rounded bg-white overflow-hidden">
+                             <div className="relative flex-1 min-w-0">
+                               <select
+                                 aria-label="功能 LoRA"
+                                 title="选择已注册的功能 LoRA"
+                                 disabled={qwenFunctionalLoraOptions.length === 0 && !selectedFunctionalLora}
+                                 value={selectedFunctionalLora}
+                                 onChange={e => setDraftAiImageConfig(prev => ({
+                                   ...prev,
+                                   loraProfiles: [
+                                     ...(prev.loraProfiles || []).filter(profile => profile === 'consistency'),
+                                     ...(e.target.value ? [e.target.value] : [])
+                                   ]
+                                 }))}
+                                 className="w-full h-full text-[10px] text-gray-600 py-1 pl-2 pr-5 bg-transparent outline-none appearance-none disabled:bg-gray-50 disabled:text-gray-400"
+                               >
+                                 <option value="">{qwenFunctionalLoraOptions.length === 0 ? '功能 LoRA（暂无）' : '选择功能 LoRA'}</option>
+                                 {selectedFunctionalLora && !qwenFunctionalLoraOptions.some(option => option.id === selectedFunctionalLora) && (
+                                   <option value={selectedFunctionalLora}>{selectedFunctionalLora}</option>
+                                 )}
+                                 {qwenFunctionalLoraOptions.map(option => (
+                                   <option key={option.id} value={option.id}>{option.label}</option>
+                                 ))}
+                               </select>
+                               <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none" />
+                             </div>
+                             <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
+                               <Plus className="w-3 h-3 text-gray-500" />
+                               <select
+                                 aria-label="功能 LoRA 引用字段"
+                                 title="引用字段"
+                                 className="absolute inset-0 opacity-0 cursor-pointer text-[10px]"
+                                 value=""
+                                 onChange={e => {
+                                   if (!e.target.value) return;
+                                   setDraftAiImageConfig(prev => ({
+                                     ...prev,
+                                     loraProfiles: [
+                                       ...(prev.loraProfiles || []).filter(profile => profile === 'consistency'),
+                                       `{${e.target.value}}`
+                                     ]
+                                   }));
+                                 }}
+                               >
+                                 <option value="">+ 引用</option>
+                                 {allFields.filter(refField => refField.id !== field.id).map(refField => (
+                                   <option key={refField.id} value={refField.name}>{refField.name}</option>
+                                 ))}
+                               </select>
+                             </div>
+                           </div>
+                         </div>
+                       )}
                        <div className="relative">
                           <label className="block text-[10px] text-gray-500 mb-1">保存的图片文件名</label>
                           <input 

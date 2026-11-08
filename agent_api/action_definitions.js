@@ -4,7 +4,7 @@
 
 export const TABLE_ACTION_API_VERSION = '0.1';
 export const TABLE_ACTION_API_PHASE = 'phase4.7';
-export const TABLE_ACTION_APP_VERSION = '2.7.6';
+export const TABLE_ACTION_APP_VERSION = '2.7.7';
 export const ACTION_DEFINITION_VERSION = '1.3';
 
 const id = { type: 'string', minLength: 1 };
@@ -157,7 +157,7 @@ export const ACTION_DEFINITIONS = {
   'field.options.update': writeSchema('更新单个选项名称或颜色', object({ tableId: id, fieldId: id, optionId: id, name: nonEmptyText, color: text }, ['tableId', 'fieldId', 'optionId'], { minProperties: 4 })),
   'field.options.remove': writeSchema('删除选项，并可明确清理已引用值', object({ tableId: id, fieldId: id, optionId: id, clearValues: bool }, ['tableId', 'fieldId', 'optionId'])),
   'field.options.reorder': writeSchema('调整选项顺序', object({ tableId: id, fieldId: id, optionId: id, toIndex: nonNegativeInteger }, ['tableId', 'fieldId', 'optionId', 'toIndex'])),
-  'field.configure_ai': writeSchema('安全配置 AI Text、AI Image 或 AI Video 字段', object({
+  'field.configure_ai': writeSchema('安全配置 AI Text、AI Image 或 AI Video 字段；本地 Qwen 可通过 model 选择 Face 工作流，并通过 loraProfiles 或字段引用启用已登记的增强层', object({
     tableId: id,
     fieldId: id,
     config: object({
@@ -174,6 +174,7 @@ export const ACTION_DEFINITIONS = {
       resolution: text,
       ratio: text,
       filenameTemplate: text,
+      loraProfiles: { type: 'array', items: nonEmptyText, uniqueItems: true, maxItems: 8 },
       isRetouchMode: bool,
       saveToSourceFolder: bool,
       scaleToSource: bool,
@@ -184,7 +185,9 @@ export const ACTION_DEFINITIONS = {
       enhancePrompt: { type: ['boolean', 'string'] },
       offPeak: { type: ['boolean', 'string'] }
     }, [], { minProperties: 1 })
-  }, ['tableId', 'fieldId', 'config'])),
+  }, ['tableId', 'fieldId', 'config']), {
+    notes: ['loraProfiles 可写已登记 Profile ID，也可写 {字段名}；字段值按行解析，多个 ID 使用逗号、分号或换行分隔。']
+  }),
   'field.delete': destructive('删除字段并清理记录值、引用与 Cell Link', object({ tableId: id, fieldId: id }, ['tableId', 'fieldId'])),
   'field.convert.preview': read('预览字段类型转换影响，不修改数据', object({ tableId: id, fieldId: id, targetType: nonEmptyText }, ['tableId', 'fieldId', 'targetType'])),
   'field.convert.run': writeSchema('执行字段类型转换', object({
@@ -261,8 +264,14 @@ export const ACTION_DEFINITIONS = {
   'media.clear_trim': writeMedia('清除视频或音频媒体实例的 A-B 时间范围', object({ ...mediaLocatorProperties }, mediaLocatorRequired), { alwaysConfirm: true }),
   'media.set_rating': writeMedia('设置媒体实例 0–5 星评分', object({ ...mediaLocatorProperties, rating: { type: 'number', minimum: 0, maximum: 5 } }, [...mediaLocatorRequired, 'rating']), { alwaysConfirm: true }),
 
-  'generation.get_capabilities': read('列出当前已配置的生成 Provider、Model 与 ComfyUI Workflow', empty, { runtime: true }),
-  'generation.preview': read('解析最终 Prompt、媒体、模型、参数与输出路径，不产生费用', object({ tableId: id, fieldId: id, rowIds: ids(), mode: { type: 'string', enum: ['missing_only', 'force'] } }, ['tableId', 'fieldId', 'rowIds']), { runtime: true }),
+  'generation.get_capabilities': read('列出当前已配置的生成 Provider、Model、ComfyUI Workflow、模板默认提示词与 LoRA 提示词策略', empty, {
+    runtime: true,
+    notes: ['ComfyUI Workflow 返回 promptDefaults；LoRA Profile 返回 promptPolicy，mode 支持 none / prepend / append。']
+  }),
+  'generation.preview': read('解析最终 Prompt、媒体、模型、参数与输出路径，并按已登记 Workflow 能力预检输入和分辨率，不产生费用', object({ tableId: id, fieldId: id, rowIds: ids(), mode: { type: 'string', enum: ['missing_only', 'force'] } }, ['tableId', 'fieldId', 'rowIds']), {
+    runtime: true,
+    notes: ['Qwen Image 2.1 与 Face 工作流支持 0.5K / 1K / 1.5K / 2K；超限返回 WORKFLOW_RESOLUTION_UNSUPPORTED。']
+  }),
   'generation.run': define({
     permission: 'execute:generation', write: true, runtime: true, alwaysConfirm: true,
     summary: '提交 AI Text、AI Image 或 AI Video 生成任务',
@@ -363,7 +372,7 @@ function placeholderFor(propertyName, schema) {
 const EXAMPLE_PARAMS = {
   'system.get_capabilities': { detail: 'summary' },
   'system.describe_action': { action: 'field.configure_ai' },
-  'field.configure_ai': { tableId: 'table_xxx', fieldId: 'field_ai_video', config: { folderPath: 'F:/output', duration: '{时长}', resolution: '{分辨率}', ratio: '{比例}' } },
+  'field.configure_ai': { tableId: 'table_xxx', fieldId: 'field_ai_image', config: { model: 'qwen-image-2.1-local', loraProfiles: ['consistency'], folderPath: 'F:/output', resolution: '{分辨率}', ratio: '{比例}' } },
   'cell.batch_set': { tableId: 'table_xxx', writeMode: 'replace', updates: [{ rowId: 'row_xxx', fieldId: 'field_xxx', value: 'Example' }] },
   'media.move': { tableId: 'table_xxx', source: { rowId: 'row_source', fieldId: 'field_media', index: 0 }, target: { rowId: 'row_target', fieldId: 'field_media' } },
   'generation.run': { tableId: 'table_xxx', fieldId: 'field_ai_xxx', rowIds: ['row_xxx'], mode: 'missing_only', idempotencyKey: 'generation-001' },

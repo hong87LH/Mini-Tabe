@@ -33,6 +33,59 @@
     "durations": [3, 5, 8, 10, 15],
     "audio": true
   },
+  "modelRequirements": [
+    {
+      "id": "h3-fl2va-int8",
+      "kind": "diffusion_model",
+      "directory": "models/diffusion_models",
+      "file": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "loaderNodeType": "UNETLoader",
+      "inputName": "unet_name",
+      "required": true
+    },
+    {
+      "id": "h3-qwen3vl-32b",
+      "kind": "text_encoder",
+      "directory": "models/text_encoders",
+      "file": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "loaderNodeType": "CLIPLoader",
+      "inputName": "clip_name",
+      "required": true
+    },
+    {
+      "id": "h3-video-vae",
+      "kind": "vae",
+      "directory": "models/vae",
+      "file": "minimax_h3_video_vae_fp16.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors",
+      "loaderNodeType": "VAELoader",
+      "inputName": "vae_name",
+      "required": true
+    },
+    {
+      "id": "h3-audio-vae",
+      "kind": "vae",
+      "directory": "models/vae",
+      "file": "minimax_h3_audio_vae_fp32.safetensors",
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors",
+      "loaderNodeType": "VAELoader",
+      "inputName": "vae_name",
+      "required": true
+    },
+    {
+      "id": "h3-turbo-v4",
+      "kind": "lora",
+      "directory": "models/loras",
+      "file": "minimax_h3_turbo_v4_step600_ema.safetensors",
+      "source": "https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo",
+      "loaderNodeType": "MiniMaxH3TurboLoRA",
+      "inputName": "lora_name",
+      "required": true,
+      "modes": ["fast"]
+    }
+  ],
   "bindings": {
     "prompt": "131.inputs.prompt",
     "aspectRatio": "115.inputs.aspect_ratio",

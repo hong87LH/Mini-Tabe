@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-25",
+  "updatedAt": "2026-11-07",
   "plugins": {
     "comfyui-core-h3": {
       "name": "ComfyUI Core with MiniMax H3",
@@ -76,7 +76,8 @@
         "VAEDecode",
         "SaveImage",
         "LoadImage",
-        "EmptyLatentImage"
+        "EmptyLatentImage",
+        "LoraLoaderModelOnly"
       ]
     }
   }

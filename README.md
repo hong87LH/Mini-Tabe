@@ -86,6 +86,7 @@ v2.7.3  ComfyUI 局域网服务地址 / 图片·视频远程调用 / 留空沿�
 v2.7.4  banana-2.1 参数映射 / 审阅列筛选漏图修复 / 审阅裁切改为手动开启
 v2.7.5  banana-pro 模型更名 / banana-2 映射兼容 / 模型候选列表修复
 v2.7.6  项目文件夹管理 / 折叠导航与标题路径 / JSON 兼容 / Action API 项目操作
+v2.7.7  Qwen Face 双图工作流 / Consistency 保真增强 / LoRA Profile、提示词策略与 Action 能力同步
 ```
 
 ### v2.4.x → v2.5.x
@@ -106,3 +107,5 @@ v2.5.7   图片、视频、音频附件分类导出
 - v2.7.5：模型更名与候选列表修复，详见 [更新说明](readme/v2.7.5_模型更名与候选列表修复.md)。
 
 - v2.7.6：项目文件夹与导航升级，详见 [更新说明](readme/v2.7.6_项目文件夹与导航升级.md)。
+
+- v2.7.7：新增 Qwen Image 2.1 Face 双图工作流、默认流程 Consistency 保真增强与可登记 LoRA 叠加；支持字段引用、Workflow 默认提示词自动抽取、LoRA 触发词／默认词／无自动词策略，并同步 Generation Preview 与 Action 能力发现。详见 [更新说明](readme/90_版本记录/v2.7.7_ComfyUI工作流维护与Action同步.md)。
