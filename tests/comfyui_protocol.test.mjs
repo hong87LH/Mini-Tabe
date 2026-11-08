@@ -506,11 +506,14 @@ test('image mode UI aliases preserve legacy controls and map provider contracts'
     assert.deepEqual(buildImageControlParams('tt-image-2.5',{mode,quality}),{version:mode==='high'?'sunburst':'flare',quality});
   }
   assert.deepEqual(buildImageControlParams('tt-image-2.5-sunburst',{}),{version:'sunburst',quality:'auto'});
+  assert.deepEqual(buildImageControlParams('tt-image-2.5',{complexity:'high',outputFormat:'gif',frameCount:'16',frameDurationMs:'1000'}),{version:'flare',quality:'auto'});
   for(const model of ['tt-image-2.5-token','tt-image-2.5-flare-token','tt-image-2.5-sunburst-token']) {
     assert.equal(buildImageControlParams(model,{mode:'high',quality:'max'}).version,'sunburst');
   }
   assert.deepEqual(buildImageControlParams('tt-image-2.6',{}),{version:'flare',quality:'auto',complexity:'medium',output_format:'png'});
   assert.deepEqual(buildImageControlParams('tt-image-2.6',{mode:'high',quality:'max',complexity:'低',outputFormat:'svg'}),{version:'sunburst',quality:'max',complexity:'low',output_format:'svg'});
+  assert.deepEqual(buildImageControlParams('tt-image-2.6',{outputFormat:'.SVG'}),{version:'flare',quality:'auto',complexity:'medium',output_format:'svg'});
+  assert.deepEqual(buildImageControlParams('tt-image-2.6',{outputFormat:'.GIF'}),{version:'flare',quality:'auto',complexity:'medium',output_format:'gif',frame_count:9,frame_duration_ms:200});
   assert.deepEqual(buildImageControlParams('tt-image-2.6',{complexity:'中',outputFormat:'gif',frameCount:'12',frameDurationMs:'300'}),{version:'flare',quality:'auto',complexity:'medium',output_format:'gif',frame_count:12,frame_duration_ms:300});
   assert.deepEqual(buildImageControlParams('tt-image-2.6',{complexity:'高'}).complexity,'high');
   assert.throws(()=>buildImageControlParams('tt-image-2.6',{complexity:'底'}),/复杂度/);

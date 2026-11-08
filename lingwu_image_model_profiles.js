@@ -59,7 +59,7 @@ export function normalizeTT26ImageControls(params = {}, model = 'tt-image-2.6') 
   const complexity = TT26_COMPLEXITY_ALIASES[complexityRaw];
   if (!complexity) throw new Error('图片复杂度须为 low（低）、medium/mid（中）或 high（高）');
 
-  const outputRaw = String(params.outputFormat || params.output_format || 'png').trim().toLowerCase();
+  const outputRaw = String(params.outputFormat || params.output_format || 'png').trim().toLowerCase().replace(/^\.+/, '');
   const outputFormat = TT26_FORMAT_ALIASES[outputRaw];
   if (!outputFormat || !capabilities.outputFormats.includes(outputFormat)) {
     throw new Error(`${model} 不支持输出格式 ${outputRaw || '空值'}；支持 ${capabilities.outputFormats.join(' / ')}`);

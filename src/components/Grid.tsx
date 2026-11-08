@@ -2303,8 +2303,37 @@ export const resolveTemplateString = (templateStr: string, fields: Field[], reco
   return str;
 };
 
+const hasFieldReference = (value: unknown) => /\{[^{}]+\}/.test(String(value || ''));
+
+const QWEN_CONSISTENCY_LORA_MODELS = new Set([
+  'qwen-image-2.1',
+  'qwen-image-2.1-local',
+  'qwen-image-2.1-transparent-local',
+  'qwen-image-2.1-consistency-local'
+]);
+
+const supportsQwenConsistencyLora = (model: unknown) => (
+  QWEN_CONSISTENCY_LORA_MODELS.has(String(model || '').trim().toLowerCase())
+);
+
 const resolveLoraProfilesForRecord = (profiles: readonly string[] | undefined, fields: Field[], record: any) => (
   parseResolvedLoraProfiles((profiles || []).map(profile => resolveTemplateString(profile, fields, record)))
+);
+
+const resolveImageLoraProfilesForRecord = (
+  config: Field['aiImageConfig'] | undefined,
+  resolvedModel: string,
+  fields: Field[],
+  record: any
+) => {
+  if (hasFieldReference(config?.modelTemplate)) {
+    return supportsQwenConsistencyLora(resolvedModel) ? ['consistency'] : [];
+  }
+  return resolveLoraProfilesForRecord(config?.loraProfiles, fields, record);
+};
+
+const useDefaultGifControls = (config: Field['aiImageConfig'] | undefined) => (
+  hasFieldReference(config?.modelTemplate) || hasFieldReference(config?.outputFormat)
 );
 
 const resolveFilenameAndFolder = (filenameTemplate: string, folderPathTpl: string, fields: Field[], record: any) => {
@@ -4288,13 +4317,14 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         if (field.type === 'aiImage') {
           const cfg = field.aiImageConfig || {};
           const count = cfg.count || 1;
+          const defaultGifControls = useDefaultGifControls(cfg);
           const rawImageControls = {
             mode: resolveTemplateString(cfg.mode || 'standard', data.fields, record),
             quality: resolveTemplateString(cfg.quality || '', data.fields, record),
             complexity: resolveTemplateString(cfg.complexity || 'medium', data.fields, record),
             outputFormat: resolveTemplateString(cfg.outputFormat || 'png', data.fields, record),
-            frameCount: resolveTemplateString(cfg.frameCount || '9', data.fields, record),
-            frameDurationMs: resolveTemplateString(cfg.frameDurationMs || '200', data.fields, record)
+            frameCount: defaultGifControls ? '9' : resolveTemplateString(cfg.frameCount || '9', data.fields, record),
+            frameDurationMs: defaultGifControls ? '200' : resolveTemplateString(cfg.frameDurationMs || '200', data.fields, record)
           };
           if (!cfg.mode) rawImageControls.mode = '';
           const imageControls = normalizeImageControls(rawImageControls);
@@ -4399,7 +4429,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
             
             const normalizedModelName = String(resolvedModel || '').trim().toLowerCase();
             const isQwenComfyModel = imgSet.provider === 'comfyui' && ['qwen-image-2.1', 'qwen-image-2.1-local', 'qwen-image-2.1-transparent-local', 'qwen-image-2.1-face', 'qwen-image-2.1-face-local', 'qwen-image-2.1-consistency-local'].includes(normalizedModelName);
-            const supportsQwenLoraProfiles = imgSet.provider === 'comfyui' && ['qwen-image-2.1', 'qwen-image-2.1-local', 'qwen-image-2.1-transparent-local', 'qwen-image-2.1-consistency-local'].includes(normalizedModelName);
+            const supportsQwenLoraProfiles = imgSet.provider === 'comfyui' && supportsQwenConsistencyLora(normalizedModelName);
             // Retouch source ratio has priority over ANY user's ratio setting.
             // Normal Qwen I2I still uses the native first-image latent on auto/unset.
             const providerImages = isQwenComfyModel && cfg.isRetouchMode
@@ -4420,7 +4450,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 imageSize: String(resolution || '1K').toUpperCase(),
                 ...(requestedAspectRatio ? { aspectRatio: requestedAspectRatio } : {}),
                 loraProfiles: supportsQwenLoraProfiles
-                  ? resolveLoraProfilesForRecord(cfg.loraProfiles, data.fields, record)
+                  ? resolveImageLoraProfilesForRecord(cfg, resolvedModel, data.fields, record)
                   : undefined,
                 images: providerImages.length > 0 ? providerImages : undefined
             };
@@ -5193,7 +5223,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         workflowValidation.workflow,
         providerInfo.resolvedModel,
         field.type === 'aiImage'
-          ? resolveLoraProfilesForRecord(cfg.loraProfiles, data.fields, record)
+          ? resolveImageLoraProfilesForRecord(cfg, providerInfo.resolvedModel, data.fields, record)
           : []
       );
       loraValidation.blockingReasons.forEach(reason => addReason(reason.code, reason.message, reason.details));
@@ -5247,13 +5277,14 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         const ratio = cropRatio || (cfg.isRetouchMode && getFirstRetouchSourceItem(cfg, data.fields, record)
           ? '首张原始图片比例（生成时读取）' : configuredRatio);
         const output = resolveFilenameAndFolder(cfg.filenameTemplate || 'image', cfg.folderPath || '', data.fields, record);
+        const defaultGifControls = useDefaultGifControls(cfg);
         const rawImageControls = {
           mode: resolveTemplateString(cfg.mode || 'standard', data.fields, record),
           quality: resolveTemplateString(cfg.quality || 'auto', data.fields, record),
           complexity: resolveTemplateString(cfg.complexity || 'medium', data.fields, record),
           outputFormat: resolveTemplateString(cfg.outputFormat || 'png', data.fields, record),
-          frameCount: resolveTemplateString(cfg.frameCount || '9', data.fields, record),
-          frameDurationMs: resolveTemplateString(cfg.frameDurationMs || '200', data.fields, record)
+          frameCount: defaultGifControls ? '9' : resolveTemplateString(cfg.frameCount || '9', data.fields, record),
+          frameDurationMs: defaultGifControls ? '200' : resolveTemplateString(cfg.frameDurationMs || '200', data.fields, record)
         };
         let providerImageParams: any = {};
         try {
@@ -6731,10 +6762,11 @@ function HeaderCell({
   const [draftAiImageConfig, setDraftAiImageConfig] = useState(field.aiImageConfig || { count: 1, size: '1024x1024' });
   const [registeredComfyUIWorkflows, setRegisteredComfyUIWorkflows] = useState<any[]>([]);
   const configuredImageModel = draftAiImageConfig.modelTemplate || parseProviderDisplayModels(getEnabledProviders(modelSettings?.image)[0])[0] || '';
+  const isReferencedImageModel = hasFieldReference(draftAiImageConfig.modelTemplate);
   const isLegacyConsistencyModel = /^qwen-image-2\.1-consistency-local$/i.test(configuredImageModel);
   const isQwenFaceConfig = /^qwen-image-2\.1-face(?:-local)?$/i.test(configuredImageModel);
   const isQwenImageConfig = /^qwen-image-2\.1(?:-local|-transparent-local|-consistency-local|-face(?:-local)?)?$/i.test(configuredImageModel);
-  const supportsQwenLoraProfiles = isQwenImageConfig && !isQwenFaceConfig;
+  const supportsQwenLoraProfiles = !isReferencedImageModel && isQwenImageConfig && !isQwenFaceConfig;
   const isConsistencyEnabled = isLegacyConsistencyModel || (draftAiImageConfig.loraProfiles || []).includes('consistency');
   const registeredImageWorkflow = registeredComfyUIWorkflows.find(workflow => (
     [workflow.id, ...(workflow.aliases || [])]
@@ -6745,11 +6777,12 @@ function HeaderCell({
     .map((profile: any) => ({ id: profile.id, label: profile.name || profile.id }));
   const selectedFunctionalLora = (draftAiImageConfig.loraProfiles || [])
     .find(profile => profile !== 'consistency') || '';
-  const hasTT26Settings = ['complexity', 'outputFormat', 'frameCount', 'frameDurationMs'].some(key => String((draftAiImageConfig as any)[key] || '').trim());
-  const isTT26ImageConfig = isTT26ImageModel(configuredImageModel) || hasTT26Settings;
+  const isTT26ImageConfig = isTT26ImageModel(configuredImageModel);
+  const showExtendedImageControls = isReferencedImageModel || isTT26ImageConfig;
   const tt26Capabilities = getTTImageModelCapabilities(isTT26ImageModel(configuredImageModel) ? configuredImageModel : 'tt-image-2.6');
   const selectedOutputFormat = String(draftAiImageConfig.outputFormat || 'png').toLowerCase();
-  const isGifOutput = isTT26ImageConfig && selectedOutputFormat === 'gif';
+  const isReferencedOutputFormat = hasFieldReference(draftAiImageConfig.outputFormat);
+  const isGifOutput = isTT26ImageConfig && !isReferencedImageModel && !isReferencedOutputFormat && selectedOutputFormat === 'gif';
   const imageResolutionOptions = isQwenImageConfig ? ['0.5k', '1k', '1.5k', '2k'] : ['1k', '2k', '4k'];
   const [draftAiVideoConfig, setDraftAiVideoConfig] = useState(field.aiVideoConfig || { duration: '10', resolution: '1080P', ratio: '16:9', sound: 'false', mode: 'fast' });
   const [draftAiTextConfig, setDraftAiTextConfig] = useState(field.aiTextConfig || {});
@@ -7355,11 +7388,11 @@ function HeaderCell({
                            />
                          </div>
                        </div>
-                       <div className={cn('grid gap-2', isTT26ImageConfig ? 'grid-cols-3' : 'grid-cols-2')}>
+                       <div className={cn('grid gap-2', showExtendedImageControls ? 'grid-cols-3' : 'grid-cols-2')}>
                          {([
                            { key: 'mode', label: '生成模式', fallback: 'standard', options: [['standard', 'auto'], ['enhanced', 'high']] },
                            { key: 'quality', label: '画质', fallback: 'auto', options: [['auto', 'auto'], ['high', 'high'], ['max', 'max']] },
-                           ...(isTT26ImageConfig ? [{ key: 'complexity', label: '复杂度', fallback: 'medium', options: [['low', 'low'], ['medium', 'mid'], ['high', 'high']] }] : [])
+                           ...(showExtendedImageControls ? [{ key: 'complexity', label: '复杂度', fallback: 'medium', options: [['low', 'low'], ['medium', 'mid'], ['high', 'high']] }] : [])
                          ] as Array<{ key: 'mode' | 'quality' | 'complexity'; label: string; fallback: string; options: string[][] }>).map(control => (
                            <div key={control.key}>
                              <label className="block text-[10px] text-gray-500 mb-1">{control.label}</label>
@@ -7386,10 +7419,10 @@ function HeaderCell({
                            </div>
                          ))}
                        </div>
-                       {isTT26ImageConfig && (
+                       {showExtendedImageControls && (
                          <div className="rounded border border-gray-200 bg-gray-50/60 px-2 py-1.5 space-y-2">
                            <div className="flex items-center justify-between gap-3">
-                             <span className="text-[10px] text-gray-500 whitespace-nowrap">格式：PNG</span>
+                             <span className="max-w-28 truncate text-[10px] text-gray-500 whitespace-nowrap" title={draftAiImageConfig.outputFormat || 'png'}>格式：{isReferencedOutputFormat ? draftAiImageConfig.outputFormat : selectedOutputFormat.toUpperCase()}</span>
                              <div className="flex items-center gap-2">
                                <label className={cn('flex items-center gap-1 text-[10px]', tt26Capabilities?.outputFormats.includes('svg') ? 'text-gray-600 cursor-pointer' : 'text-gray-300 cursor-not-allowed')} title={tt26Capabilities?.outputFormats.includes('svg') ? '输出 SVG 矢量文件' : '当前官转渠道不支持 SVG'}>
                                  <input type="checkbox" disabled={!tt26Capabilities?.outputFormats.includes('svg')} checked={selectedOutputFormat === 'svg'} onChange={e => setDraftAiImageConfig(prev => ({ ...prev, outputFormat: e.target.checked ? 'svg' : 'png' }))} />
