@@ -1,4 +1,4 @@
-import { normalizeImageControls, buildImageControlParams } from '../../lingwu_image_model_profiles.js';
+import { normalizeImageControls, buildImageControlParams, getTTImageModelCapabilities, isTT26ImageModel, listLingwuImageModelProfiles } from '../../lingwu_image_model_profiles.js';
 import { composeLoraProfilePrompt, composeRegisteredWorkflowPrompt } from '../../comfyui/lora_prompt_policy.js';
 import { getFirstRetouchSourceItem, getRetouchCropAspectRatio, nearestImageAspectRatio, imageRatioRequest, retouchReferenceImages } from '../lib/retouchAspectRatio.js';
 import { reconcileNetworkJobCells } from '../lib/networkJobReconciliation';
@@ -8,7 +8,8 @@ import { Field, BaseRecord, GridData, SelectOption, FieldType, Attachment, Media
 import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
 import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste, Maximize2, RefreshCw } from 'lucide-react';
-import { reviewLocalPath, isReviewImage, intersectsReviewViewport, isThumbnailVisible, refreshReviewImages, loadFreshReviewThumbnail, restoreCropViewport, SYSTEM_THUMBNAIL_SIZE, requestSystemThumbnail } from '../lib/reviewMedia';
+import { reviewLocalPath, isReviewImage, isThumbnailVisible, refreshReviewImages, loadFreshReviewThumbnail, restoreCropViewport, SYSTEM_THUMBNAIL_SIZE, requestSystemThumbnail } from '../lib/reviewMedia';
+import { getMediaFileInfo, isInlinePreviewableProfessionalMedia, isProfessionalMedia, isSupportedAttachmentFile, MEDIA_FILE_ACCEPT } from '../lib/mediaFileTypes';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
 import JSZip from 'jszip';
@@ -394,6 +395,7 @@ const ZoomableImage = ({
   const mediaPath = String(src || '').toLowerCase();
   const isVideo = /\.(mp4|webm|mov|mkv)(\?|$)/.test(mediaPath) || mediaPath.startsWith('data:video');
   const isAudio = /\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/.test(mediaPath) || mediaPath.startsWith('data:audio');
+  const isPdf = /\.pdf(\?|$)/.test(mediaPath) || mediaPath.startsWith('data:application/pdf');
   const refCellsData: any[] = item.refCells || item.refUrls || [];
   // normalize so refCells is always string[][]
   const refCells: string[][] = refCellsData.map(r => Array.isArray(r) ? r : [r]);
@@ -1463,6 +1465,12 @@ const ZoomableImage = ({
                 handleImageClick(e);
              }} 
            />
+        ) : isPdf ? (
+           <iframe
+             src={src}
+             title={item.name || item.url || 'PDF preview'}
+             className="w-[min(1100px,92vw)] h-[min(820px,88vh)] bg-white rounded pointer-events-auto"
+           />
         ) : (
            <img 
              ref={imgRef}
@@ -1936,8 +1944,15 @@ function getGlobalThumbnailObserver() {
 export async function refreshVisibleGridThumbnails(root: HTMLElement) {
   const elements = Array.from(root.querySelectorAll('[data-table-thumbnail]'))
     .filter(element => isThumbnailVisible(element, root));
-  const paths = elements.map(element => element.getAttribute('data-table-thumbnail')!).filter(path => !!reviewLocalPath(path));
-  return refreshReviewImages(paths, async path => {
+  const thumbnailPaths = elements
+    .filter(element => element.getAttribute('data-professional-file') !== 'true')
+    .map(element => element.getAttribute('data-table-thumbnail')!)
+    .filter(path => !!reviewLocalPath(path));
+  const professionalPaths = elements
+    .filter(element => element.getAttribute('data-professional-file') === 'true')
+    .map(element => element.getAttribute('data-table-thumbnail')!)
+    .filter(path => !!reviewLocalPath(path));
+  const thumbnailResult = await refreshReviewImages(thumbnailPaths, async path => {
     const thumbnail = await loadFreshReviewThumbnail(path, (window as any).electronAPI?.getThumbnail);
     thumbnailRevisions.set(path, (thumbnailRevisions.get(path) || 0) + 1);
     thumbnailCache.set(path, thumbnail);
@@ -1947,18 +1962,56 @@ export async function refreshVisibleGridThumbnails(root: HTMLElement) {
     elements.filter(element => element.isConnected && element.getAttribute('data-table-thumbnail') === path)
       .forEach(element => element.dispatchEvent(new CustomEvent('table-thumbnail-refreshed', { detail: thumbnail })));
   });
+  const fileStatusResult = await refreshReviewImages(professionalPaths, async path => {
+    const localPath = reviewLocalPath(path);
+    const getLocalFileStatus = (window as any).electronAPI?.getLocalFileStatus;
+    if (!localPath || !getLocalFileStatus) throw new Error('Local file status requires Electron');
+    const status = await getLocalFileStatus(localPath);
+    if (status?.exists !== true && status?.exists !== false) throw new Error('Local file status unavailable');
+    elements.filter(element => element.isConnected && element.getAttribute('data-table-thumbnail') === path)
+      .forEach(element => element.dispatchEvent(new CustomEvent('table-professional-file-status-refreshed', { detail: status })));
+  });
+  return {
+    succeeded: thumbnailResult.succeeded + fileStatusResult.succeeded,
+    failures: [...thumbnailResult.failures, ...fileStatusResult.failures],
+    thumbnailSucceeded: thumbnailResult.succeeded,
+    fileStatusChecked: fileStatusResult.succeeded
+  };
 }
 
-const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }: { path: string, alt: string, className: string, title?: string, onClick?: (e: React.MouseEvent) => void, refreshKey?: number }) => {
+type ProfessionalFileIconVariant = 'compact' | 'regular' | 'large' | 'review';
+
+const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0, badgePosition = 'bottom-right', fileIconVariant = 'compact' }: { path: string, alt: string, className: string, title?: string, onClick?: (e: React.MouseEvent) => void, refreshKey?: number, badgePosition?: 'bottom-right' | 'top-left', fileIconVariant?: ProfessionalFileIconVariant }) => {
   const [src, setSrc] = useState<string>(thumbnailCache.get(path) || '');
   const [failed, setFailed] = useState(false);
+  const [professionalFileMissing, setProfessionalFileMissing] = useState(false);
   const imgRef = useRef<HTMLImageElement | HTMLSpanElement>(null);
+  const mediaInfo = getMediaFileInfo(path);
+  const usesFileTypeIcon = ['psd', 'psb', 'ai', 'pdf', 'svg'].includes(mediaInfo.extension);
+
+  useEffect(() => {
+    let active = true;
+    setProfessionalFileMissing(false);
+    if (!usesFileTypeIcon) return () => { active = false; };
+    const localPath = reviewLocalPath(path);
+    const getLocalFileStatus = (window as any).electronAPI?.getLocalFileStatus;
+    if (!localPath || !getLocalFileStatus) return () => { active = false; };
+    Promise.resolve(getLocalFileStatus(localPath)).then((status: any) => {
+      if (active) setProfessionalFileMissing(status?.exists === false);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [path, refreshKey, usesFileTypeIcon]);
 
   useEffect(() => {
     const element = imgRef.current;
     const refreshed = (event: Event) => { setSrc((event as CustomEvent<string>).detail); setFailed(false); };
+    const fileStatusRefreshed = (event: Event) => setProfessionalFileMissing((event as CustomEvent<any>).detail?.exists === false);
     element?.addEventListener('table-thumbnail-refreshed', refreshed);
-    return () => element?.removeEventListener('table-thumbnail-refreshed', refreshed);
+    element?.addEventListener('table-professional-file-status-refreshed', fileStatusRefreshed);
+    return () => {
+      element?.removeEventListener('table-thumbnail-refreshed', refreshed);
+      element?.removeEventListener('table-professional-file-status-refreshed', fileStatusRefreshed);
+    };
   }, [path]);
 
   useEffect(() => {
@@ -1967,6 +2020,7 @@ const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }
     
     // Empty job placeholders are not image requests and must never retry.
     if (typeof path !== 'string' || !path.trim()) { setSrc(''); setFailed(true); return; }
+    if (usesFileTypeIcon) { setSrc(''); setFailed(false); return; }
 
     // Check cache for this specific path first
     const cached = thumbnailCache.get(path);
@@ -2014,7 +2068,7 @@ const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }
          observer.unobserve(element);
       }
     };
-  }, [path, refreshKey]);
+  }, [path, refreshKey, usesFileTypeIcon]);
 
   const isAudio = /\.(mp3|wav|flac|m4a|aac|ogg|opus)(\?|$)/.test(path.toLowerCase()) || path.toLowerCase().startsWith('data:audio');
   if (isAudio) {
@@ -2038,10 +2092,88 @@ const ThumbnailImage = ({ path, alt, className, title, onClick, refreshKey = 0 }
     );
   }
 
+  if (usesFileTypeIcon) {
+    const iconSize = fileIconVariant === 'large' || fileIconVariant === 'review' ? 96 : 32;
+    const iconClass = {
+      compact: 'h-7 w-7 max-h-[72%] max-w-[72%]',
+      regular: 'h-9 w-9 max-h-[78%] max-w-[78%]',
+      large: 'h-[72%] w-[72%] max-h-20 max-w-20',
+      review: 'h-28 w-28 max-h-[65%] max-w-[65%]'
+    }[fileIconVariant];
+    return (
+      <span
+        data-table-thumbnail={path}
+        data-professional-file="true"
+        ref={imgRef as React.RefObject<HTMLSpanElement>}
+        className={cn('relative block shrink-0 overflow-hidden bg-gray-50', className)}
+        title={professionalFileMissing ? `${title || path}（文件不存在）` : (title || path)}
+        onClick={onClick}
+      >
+        <span className="absolute inset-0 flex items-center justify-center">
+          <span className={cn('relative block', iconClass)}>
+            <img
+              src={`./filetype-icons/${mediaInfo.extension}-${iconSize}.svg`}
+              alt={`${mediaInfo.badge} file`}
+              className={cn('absolute inset-0 h-full w-full object-contain transition-opacity', professionalFileMissing && 'grayscale opacity-50')}
+              draggable={false}
+            />
+            {professionalFileMissing && (
+              <svg viewBox="0 0 64 64" className="pointer-events-none absolute inset-0 h-full w-full" aria-label="文件不存在">
+                <path d="M34 6 29 22l6 7-7 9 5 7-9 14h6l8-14-5-7 7-9-6-7 5-16Z" fill="#f9fafb" />
+                <path d="M34 6 29 22l6 7-7 9 5 7-9 14" fill="none" stroke="#e5e7eb" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M39 6 34 22l6 7-7 9 5 7-8 14" fill="none" stroke="#e5e7eb" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+          </span>
+        </span>
+      </span>
+    );
+  }
+
+  if (mediaInfo.extension === 'gif') {
+    return (
+      <span
+        data-table-thumbnail={path}
+        ref={imgRef as React.RefObject<HTMLSpanElement>}
+        className={cn('relative block shrink-0 overflow-hidden', className)}
+        title={title || path}
+        onClick={onClick}
+      >
+        {src && !failed ? <img src={src} alt={alt} className="absolute inset-0 h-full w-full object-cover" loading="lazy" decoding="async" /> : <span className="absolute inset-0 bg-gray-100" />}
+        <span className={cn(
+          'pointer-events-none absolute z-20 rounded-[3px] px-1 py-[1px] text-[8px] font-semibold leading-none text-white/90 shadow-sm backdrop-blur-sm',
+          'bg-black/55',
+          badgePosition === 'top-left' ? 'left-1 top-1' : 'bottom-0.5 right-0.5'
+        )}>GIF</span>
+      </span>
+    );
+  }
+
   // An undecodable inline image restores Chromium's native broken-image + alt display,
   // without retrying the full NAS original when the system thumbnail is unavailable.
   return <img data-table-thumbnail={path} ref={imgRef as React.RefObject<HTMLImageElement>} src={failed ? 'data:image/png;base64,AA==' : (src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=')} alt={alt} className={className} title={title || path} onClick={onClick} loading="lazy" decoding="async" />;
 };
+
+async function openMediaInConfiguredApp(path: string): Promise<boolean> {
+  const localPath = reviewLocalPath(path);
+  const api = (window as any).electronAPI;
+  if (!localPath || !api) return false;
+  const mediaInfo = getMediaFileInfo(path);
+  const applicationPath = mediaInfo.appKind === 'vector'
+    ? localStorage.getItem('bitable_vector_app_path')
+    : localStorage.getItem('bitable_ps_path');
+  if (api.openInExternalApp && (await api.openInExternalApp(localPath, applicationPath)) !== false) return true;
+  if (mediaInfo.appKind === 'photoshop' && api.openInPhotoshop) return (await api.openInPhotoshop(localPath, applicationPath)) !== false;
+  return false;
+}
+
+function toLocalPreviewUrl(value: string): string {
+  if (!reviewLocalPath(value) || /^(?:file|local-img):\/\//i.test(value)) return value;
+  const normalized = value.replace(/\\/g, '/');
+  if (/^[a-z]:\//i.test(normalized)) return `file:///${normalized}`;
+  if (normalized.startsWith('//')) return `file:${normalized}`;
+  return `file://${normalized}`;
+}
 
 type LocateCellRequest = {
   requestId: number;
@@ -2195,7 +2327,7 @@ type ExportMediaType = 'all' | 'image' | 'video' | 'audio';
 type DetectedMediaType = Exclude<ExportMediaType, 'all'>;
 
 const MEDIA_EXTENSIONS: Record<DetectedMediaType, Set<string>> = {
-  image: new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'heif', 'tif', 'tiff']),
+  image: new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'heif', 'tif', 'tiff', 'psd', 'psb', 'ai', 'pdf']),
   video: new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'mpg', 'mpeg']),
   audio: new Set(['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma'])
 };
@@ -2207,6 +2339,9 @@ const MIME_EXTENSIONS: Record<string, string> = {
   'image/webp': 'webp',
   'image/bmp': 'bmp',
   'image/svg+xml': 'svg',
+  'image/vnd.adobe.photoshop': 'psd',
+  'application/pdf': 'pdf',
+  'application/postscript': 'ai',
   'image/avif': 'avif',
   'video/mp4': 'mp4',
   'video/webm': 'webm',
@@ -2898,7 +3033,6 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
     const refreshingRef = useRef(false);
     const mountedRef = useRef(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [refreshVersion, setRefreshVersion] = useState(0);
     const [reviewNotice, setReviewNotice] = useState('');
     useEffect(() => {
         mountedRef.current = true;
@@ -2908,30 +3042,21 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
     const refreshVisibleImages = async () => {
         const viewport = reviewViewportRef.current;
         if (!viewport || refreshingRef.current) return;
-        const bounds = viewport.getBoundingClientRect();
-        const visibleBounds = { top: Math.max(bounds.top, 0), bottom: Math.min(bounds.bottom, window.innerHeight), left: Math.max(bounds.left, 0), right: Math.min(bounds.right, window.innerWidth) };
-        const paths = Array.from(viewport.querySelectorAll('[data-review-image]'))
-            .filter((element: Element) => intersectsReviewViewport(element.getBoundingClientRect(), visibleBounds))
-            .map((element: Element) => element.getAttribute('data-review-image')!)
-            .filter(Boolean);
         refreshingRef.current = true;
         setRefreshing(true);
         setReviewNotice('');
         try {
-            const result = await refreshReviewImages(paths, async path => {
-                // Refresh through the same native thumbnail service as the initial load.
-                const thumbnail = await loadFreshReviewThumbnail(path, (window as any).electronAPI?.getThumbnail);
-                const oldBlob = fullImageBlobCache.get(path);
-                thumbnailRevisions.set(path, (thumbnailRevisions.get(path) || 0) + 1);
-                thumbnailCache.set(path, thumbnail);
-                fullImageBlobCache.delete(path);
-                if (oldBlob?.startsWith('blob:')) URL.revokeObjectURL(oldBlob);
-            });
+            const result = await refreshVisibleGridThumbnails(viewport);
             if (mountedRef.current) {
-                setRefreshVersion(version => version + 1);
-                setReviewNotice(lang === 'en'
-                    ? `Refreshed ${result.succeeded} visible image(s).${result.failures.length ? ` ${result.failures.length} failed; requires local images and desktop system thumbnail support. Previous thumbnails kept.` : ''}`
-                    : `已刷新 ${result.succeeded} 张可视图片${result.failures.length ? `；${result.failures.length} 张失败，仅支持桌面版本地图片的系统缩略图，请检查文件及格式，失败项保留原缩略图` : ''}`);
+                const updated = lang === 'en'
+                    ? [result.thumbnailSucceeded ? `${result.thumbnailSucceeded} thumbnail(s)` : '', result.fileStatusChecked ? `${result.fileStatusChecked} file status check(s)` : ''].filter(Boolean).join(', ')
+                    : [result.thumbnailSucceeded ? `${result.thumbnailSucceeded} 张缩略图` : '', result.fileStatusChecked ? `${result.fileStatusChecked} 个文件状态` : ''].filter(Boolean).join('、');
+                const failed = result.failures.length
+                    ? (lang === 'en' ? `; ${result.failures.length} item(s) kept unchanged` : `；${result.failures.length} 项未更新，已保留原状态`)
+                    : '';
+                setReviewNotice(updated
+                    ? `${lang === 'en' ? 'Updated ' : '已更新 '}${updated}${failed}`
+                    : (lang === 'en' ? 'No visible local media to refresh' : '可视范围内没有可刷新的本地媒体'));
             }
         } finally {
             refreshingRef.current = false;
@@ -2939,22 +3064,12 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
         }
     };
 
-    const openReviewImageInPhotoshop = async (path: string) => {
-        const localPath = reviewLocalPath(path);
-        const psPath = localStorage.getItem('bitable_ps_path');
-        if (!localPath || !(window as any).electronAPI?.openInPhotoshop) {
-            setReviewNotice(lang === 'en' ? 'Photoshop requires a local image in the desktop app.' : '请在桌面版中打开已保存到本地的图片。');
-            return;
-        }
-        if (!psPath) {
-            setReviewNotice(lang === 'en' ? 'Set the Photoshop path in API and model settings first.' : '请先在“API 和模型配置”中设置 Photoshop 路径。');
-            return;
-        }
+    const openReviewMedia = async (path: string) => {
         try {
-            const opened = await (window as any).electronAPI.openInPhotoshop(localPath, psPath);
-            if (opened === false) console.warn('[Photoshop] Open command reported failure:', localPath);
+            const opened = await openMediaInConfiguredApp(path);
+            if (!opened) console.warn('[External App] Open command reported failure:', path);
         } catch (error) {
-            console.warn('[Photoshop] Open command failed:', error);
+            console.warn('[External App] Open command failed:', error);
         }
     };
     const defaultSettings = gallerySettings || gallerySettingsCache.get(tableId) || {
@@ -3039,7 +3154,9 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
     const renderImageCard = (img: any, idx: number | string) => {
         const path = img.url;
         const image = isReviewImage(path, img.item.type);
-        const canOpenInPs = !!reviewLocalPath(path) && !!(window as any).electronAPI?.openInPhotoshop;
+        const mediaInfo = getMediaFileInfo(path, img.item.type);
+        const professionalMedia = isProfessionalMedia(path, img.item.type);
+        const canOpenInApp = !!reviewLocalPath(path) && !!((window as any).electronAPI?.openInExternalApp || (window as any).electronAPI?.openInPhotoshop);
         const infoTexts = displayFieldIds.map(id => {
             const f = data.fields.find((f: any) => f.id === id);
             const val = img.record[id];
@@ -3054,6 +3171,10 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
         const hasInfo = showRating || infoTexts.length > 0;
         return (
             <div key={path} className="relative group w-[200px] h-auto flex flex-col bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex-shrink-0 cursor-pointer hover:shadow-md transition-shadow" onClick={() => {
+                if (professionalMedia && !isInlinePreviewableProfessionalMedia(path, img.item.type)) {
+                    void openReviewMedia(path);
+                    return;
+                }
                 const fileItemsForPreview = displayImages.map(d => {
                     const refCells: string[][] = [];
                     refFieldIds.forEach(id => {
@@ -3081,16 +3202,16 @@ function ImageReviewView({ tableId = 'default', data, lang, onPreviewImage, gall
                 onPreviewImage(path, fileItemsForPreview);
             }}>
                 <div data-review-image={image ? path : undefined} className="group/review-image w-full h-[180px] shrink-0 relative border-b border-gray-100">
-                    <ThumbnailImage path={path} alt={path} refreshKey={refreshVersion} className="w-full h-full object-cover" />
+                    <ThumbnailImage path={path} alt={path} badgePosition="top-left" fileIconVariant="review" className="w-full h-full object-cover" />
                     {image && (
                         <button
                             type="button"
-                            aria-label={lang === 'en' ? 'Open in Photoshop' : '在 Photoshop 中打开'}
-                            title={canOpenInPs ? (lang === 'en' ? 'Open local original in Photoshop; save, then refresh' : '在 Photoshop 中打开本地原图；保存后点击刷新') : (lang === 'en' ? 'Requires a local image in the desktop app' : '仅支持桌面版中的本地图片')}
-                            disabled={!canOpenInPs}
-                            onClick={e => { e.stopPropagation(); void openReviewImageInPhotoshop(path); }}
+                            aria-label={mediaInfo.appKind === 'vector' ? (lang === 'en' ? 'Open in vector app' : '在矢量图应用中打开') : (lang === 'en' ? 'Open in Photoshop' : '在 Photoshop 中打开')}
+                            title={canOpenInApp ? (mediaInfo.appKind === 'vector' ? (lang === 'en' ? 'Open in the configured vector app' : '在已配置的矢量图应用中打开') : (lang === 'en' ? 'Open local original in Photoshop; save, then refresh' : '在 Photoshop 中打开本地原图；保存后点击刷新')) : (lang === 'en' ? 'Requires a local file in the desktop app' : '仅支持桌面版中的本地文件')}
+                            disabled={!canOpenInApp}
+                            onClick={e => { e.stopPropagation(); void openReviewMedia(path); }}
                             className="absolute bottom-0.5 right-0.5 bg-white/80 text-gray-700 rounded p-0.5 opacity-0 group-hover/review-image:opacity-100 focus-visible:opacity-100 pointer-events-none group-hover/review-image:pointer-events-auto focus-visible:pointer-events-auto flex items-center shadow-sm z-10 transition-opacity focus-visible:outline focus-visible:outline-indigo-500 disabled:cursor-not-allowed"
-                        ><Palette className="w-3.5 h-3.5 hover:text-indigo-500 text-gray-500" /></button>
+                        ><Palette className={cn('w-3.5 h-3.5 text-gray-500', mediaInfo.appKind === 'vector' ? 'hover:text-orange-500' : 'hover:text-indigo-500')} /></button>
                     )}
                     {img.status !== 'unannotated' && (
                         <div className={`absolute top-1 right-1 px-1.5 py-0.5 rounded text-[10px] text-white font-bold shadow-sm ${img.status === 'pending' ? 'bg-red-500' : img.status === 'resolved' ? 'bg-yellow-500' : 'bg-green-500'}`}>
@@ -3557,7 +3678,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
           const sourceItem = typeof raw === 'string' ? { url: raw } : raw;
           const baseItem = stripPreviewOnlyProps(sourceItem);
           const itemUrl = baseItem.url;
-          const mappedUrl = fullImageBlobCache.get(itemUrl) || ((itemUrl.startsWith('/') || itemUrl.match(/^[a-zA-Z]:[\\\\/]/) || itemUrl.startsWith('\\\\')) ? `file://${itemUrl}` : itemUrl);
+          const mappedUrl = fullImageBlobCache.get(itemUrl) || toLocalPreviewUrl(itemUrl);
           
           let rec = currentRecord;
           if (!rec) {
@@ -3590,7 +3711,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                        if (items.length > 0) {
                            const urlsObj = items.map(it => {
                                const u = it.url;
-                               if (u) return fullImageBlobCache.get(u) || (u.startsWith('/') || u.match(/^[a-zA-Z]:[\\\\/]/) || u.startsWith('\\\\') ? `file://${u}` : u);
+                               if (u) return fullImageBlobCache.get(u) || toLocalPreviewUrl(u);
                                return '';
                            }).filter(Boolean);
                            if (urlsObj.length > 0) {
@@ -4169,7 +4290,11 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
           const count = cfg.count || 1;
           const rawImageControls = {
             mode: resolveTemplateString(cfg.mode || 'standard', data.fields, record),
-            quality: resolveTemplateString(cfg.quality || '', data.fields, record)
+            quality: resolveTemplateString(cfg.quality || '', data.fields, record),
+            complexity: resolveTemplateString(cfg.complexity || 'medium', data.fields, record),
+            outputFormat: resolveTemplateString(cfg.outputFormat || 'png', data.fields, record),
+            frameCount: resolveTemplateString(cfg.frameCount || '9', data.fields, record),
+            frameDurationMs: resolveTemplateString(cfg.frameDurationMs || '200', data.fields, record)
           };
           if (!cfg.mode) rawImageControls.mode = '';
           const imageControls = normalizeImageControls(rawImageControls);
@@ -4355,6 +4480,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                         downloadConfig: {
                             filename: finalFilename,
                             folderPath: finalFolderPath,
+                            ...(isTT26ImageModel(resolvedModel) ? { requestedFormat: rawImageControls.outputFormat || 'png' } : {}),
                             ...(imageResize ? { imageResize } : {})
                         }
                     });
@@ -4943,6 +5069,7 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
     image: normalizeProviderList(modelSettings?.image).map(sanitizeAgentProvider),
     video: normalizeProviderList(modelSettings?.video).map(sanitizeAgentProvider),
     comfyuiWorkflows: await getRegisteredComfyUIWorkflows(),
+    lingwuImageProfiles: listLingwuImageModelProfiles(),
     safety: {
       secretsExposed: false,
       enabledOnlyForRun: true
@@ -5120,12 +5247,31 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         const ratio = cropRatio || (cfg.isRetouchMode && getFirstRetouchSourceItem(cfg, data.fields, record)
           ? '首张原始图片比例（生成时读取）' : configuredRatio);
         const output = resolveFilenameAndFolder(cfg.filenameTemplate || 'image', cfg.folderPath || '', data.fields, record);
+        const rawImageControls = {
+          mode: resolveTemplateString(cfg.mode || 'standard', data.fields, record),
+          quality: resolveTemplateString(cfg.quality || 'auto', data.fields, record),
+          complexity: resolveTemplateString(cfg.complexity || 'medium', data.fields, record),
+          outputFormat: resolveTemplateString(cfg.outputFormat || 'png', data.fields, record),
+          frameCount: resolveTemplateString(cfg.frameCount || '9', data.fields, record),
+          frameDurationMs: resolveTemplateString(cfg.frameDurationMs || '200', data.fields, record)
+        };
+        let providerImageParams: any = {};
+        try {
+          providerImageParams = buildImageControlParams(providerInfo.resolvedModel, rawImageControls);
+        } catch (error: any) {
+          addReason('IMAGE_PARAMETER_INVALID', error?.message || String(error));
+        }
+        const gifOutput = providerImageParams.output_format === 'gif';
         resolvedConfig = {
           ...resolvedConfig,
           count: Number(cfg.count) || 1,
-          resolution,
-          ratio,
-          ...normalizeImageControls({ mode: resolveTemplateString(cfg.mode || 'standard', data.fields, record), quality: resolveTemplateString(cfg.quality || 'auto', data.fields, record) }),
+          resolution: gifOutput ? null : resolution,
+          ratio: gifOutput ? null : ratio,
+          ...normalizeImageControls(rawImageControls),
+          ...(providerImageParams.complexity ? { complexity: providerImageParams.complexity } : {}),
+          ...(providerImageParams.output_format ? { outputFormat: providerImageParams.output_format } : {}),
+          ...(providerImageParams.frame_count ? { frameCount: providerImageParams.frame_count } : {}),
+          ...(providerImageParams.frame_duration_ms ? { frameDurationMs: providerImageParams.frame_duration_ms } : {}),
           size: cfg.size || null,
           retouch: cfg.isRetouchMode === true,
            loraProfiles: loraValidation.appliedProfiles,
@@ -6599,6 +6745,11 @@ function HeaderCell({
     .map((profile: any) => ({ id: profile.id, label: profile.name || profile.id }));
   const selectedFunctionalLora = (draftAiImageConfig.loraProfiles || [])
     .find(profile => profile !== 'consistency') || '';
+  const hasTT26Settings = ['complexity', 'outputFormat', 'frameCount', 'frameDurationMs'].some(key => String((draftAiImageConfig as any)[key] || '').trim());
+  const isTT26ImageConfig = isTT26ImageModel(configuredImageModel) || hasTT26Settings;
+  const tt26Capabilities = getTTImageModelCapabilities(isTT26ImageModel(configuredImageModel) ? configuredImageModel : 'tt-image-2.6');
+  const selectedOutputFormat = String(draftAiImageConfig.outputFormat || 'png').toLowerCase();
+  const isGifOutput = isTT26ImageConfig && selectedOutputFormat === 'gif';
   const imageResolutionOptions = isQwenImageConfig ? ['0.5k', '1k', '1.5k', '2k'] : ['1k', '2k', '4k'];
   const [draftAiVideoConfig, setDraftAiVideoConfig] = useState(field.aiVideoConfig || { duration: '10', resolution: '1080P', ratio: '16:9', sound: 'false', mode: 'fast' });
   const [draftAiTextConfig, setDraftAiTextConfig] = useState(field.aiTextConfig || {});
@@ -7108,11 +7259,12 @@ function HeaderCell({
                          )}
                        </div>
                        <div className="grid grid-cols-3 gap-2">
-                         <div className="flex flex-col">
+                         <div className={cn('flex flex-col', isGifOutput && 'opacity-45')} title={isGifOutput ? 'GIF 尺寸由模型决定' : undefined}>
                            <label className="block text-[10px] text-gray-500 mb-1">分辨率</label>
                            <div className="flex items-stretch border border-gray-300 bg-white rounded">
                              <div className="relative flex-1 w-0">
                                <select 
+                                  disabled={isGifOutput}
                                   className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
                                   value={draftAiImageConfig.resolution || '1k'}
                                   onChange={e => setDraftAiImageConfig(prev => ({ ...prev, resolution: e.target.value }))}
@@ -7129,6 +7281,7 @@ function HeaderCell({
                              <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
                                <Plus className="w-3 h-3 text-gray-500" />
                                <select 
+                                  disabled={isGifOutput}
                                   className="absolute inset-0 opacity-0 cursor-pointer text-[10px]"
                                   title="引用字段"
                                   value=""
@@ -7145,11 +7298,12 @@ function HeaderCell({
                              </div>
                            </div>
                          </div>
-                         <div className="flex flex-col">
+                         <div className={cn('flex flex-col', isGifOutput && 'opacity-45')} title={isGifOutput ? 'GIF 比例由模型决定' : undefined}>
                            <label className="block text-[10px] text-gray-500 mb-1">比例</label>
                            <div className="flex items-stretch border border-gray-300 bg-white rounded">
                              <div className="relative flex-1 w-0">
                                <select 
+                                  disabled={isGifOutput}
                                   className="w-full h-full text-xs text-gray-700 p-1 pr-4 outline-none bg-transparent appearance-none"
                                   value={draftAiImageConfig.ratio || (isQwenImageConfig ? '' : '1:1')}
                                   onChange={e => setDraftAiImageConfig(prev => ({ ...prev, ratio: e.target.value }))}
@@ -7171,6 +7325,7 @@ function HeaderCell({
                              <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 shrink-0">
                                <Plus className="w-3 h-3 text-gray-500" />
                                <select 
+                                  disabled={isGifOutput}
                                   className="absolute inset-0 opacity-0 cursor-pointer text-[10px]"
                                   title="引用字段"
                                   value=""
@@ -7200,9 +7355,12 @@ function HeaderCell({
                            />
                          </div>
                        </div>
-                       <div className="grid grid-cols-2 gap-2">
-                         {([{ key: 'mode', label: '生成模式', fallback: 'standard', options: [['standard', 'auto'], ['enhanced', 'high']] },
-                           { key: 'quality', label: '画质', fallback: 'auto', options: [['auto', 'auto'], ['high', 'high'], ['max', 'max']] }] as const).map(control => (
+                       <div className={cn('grid gap-2', isTT26ImageConfig ? 'grid-cols-3' : 'grid-cols-2')}>
+                         {([
+                           { key: 'mode', label: '生成模式', fallback: 'standard', options: [['standard', 'auto'], ['enhanced', 'high']] },
+                           { key: 'quality', label: '画质', fallback: 'auto', options: [['auto', 'auto'], ['high', 'high'], ['max', 'max']] },
+                           ...(isTT26ImageConfig ? [{ key: 'complexity', label: '复杂度', fallback: 'medium', options: [['low', 'low'], ['medium', 'mid'], ['high', 'high']] }] : [])
+                         ] as Array<{ key: 'mode' | 'quality' | 'complexity'; label: string; fallback: string; options: string[][] }>).map(control => (
                            <div key={control.key}>
                              <label className="block text-[10px] text-gray-500 mb-1">{control.label}</label>
                              <div className="flex items-stretch border border-gray-300 bg-white rounded">
@@ -7228,6 +7386,55 @@ function HeaderCell({
                            </div>
                          ))}
                        </div>
+                       {isTT26ImageConfig && (
+                         <div className="rounded border border-gray-200 bg-gray-50/60 px-2 py-1.5 space-y-2">
+                           <div className="flex items-center justify-between gap-3">
+                             <span className="text-[10px] text-gray-500 whitespace-nowrap">格式：PNG</span>
+                             <div className="flex items-center gap-2">
+                               <label className={cn('flex items-center gap-1 text-[10px]', tt26Capabilities?.outputFormats.includes('svg') ? 'text-gray-600 cursor-pointer' : 'text-gray-300 cursor-not-allowed')} title={tt26Capabilities?.outputFormats.includes('svg') ? '输出 SVG 矢量文件' : '当前官转渠道不支持 SVG'}>
+                                 <input type="checkbox" disabled={!tt26Capabilities?.outputFormats.includes('svg')} checked={selectedOutputFormat === 'svg'} onChange={e => setDraftAiImageConfig(prev => ({ ...prev, outputFormat: e.target.checked ? 'svg' : 'png' }))} />
+                                 SVG
+                               </label>
+                               <label className="flex items-center gap-1 text-[10px] text-gray-600 cursor-pointer">
+                                 <input type="checkbox" checked={selectedOutputFormat === 'gif'} onChange={e => setDraftAiImageConfig(prev => ({ ...prev, outputFormat: e.target.checked ? 'gif' : 'png' }))} />
+                                 GIF
+                               </label>
+                               <div className="relative h-5 w-6 flex items-center justify-center rounded border border-gray-200 bg-white hover:bg-gray-50">
+                                 <Plus className="w-3 h-3 text-gray-500" />
+                                 <select aria-label="输出格式引用字段" title="引用字段" className="absolute inset-0 opacity-0 cursor-pointer" value="" onChange={e => { if (e.target.value) setDraftAiImageConfig(prev => ({ ...prev, outputFormat: `{${e.target.value}}` })); }}>
+                                   <option value="">+ 引用</option>
+                                   {allFields.filter(f => f.id !== field.id).map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                                 </select>
+                               </div>
+                             </div>
+                           </div>
+                           {isGifOutput && (
+                             <div className="grid grid-cols-2 gap-2">
+                               {([
+                                 { key: 'frameCount', label: 'GIF 帧数', fallback: '9', options: ['4', '6', '9', '12', '16'] },
+                                 { key: 'frameDurationMs', label: '单帧时长', fallback: '200', options: ['100', '200', '300', '500', '1000'] }
+                               ] as const).map(control => (
+                                 <div key={control.key}>
+                                   <label className="block text-[10px] text-gray-500 mb-1">{control.label}{control.key === 'frameDurationMs' ? '（ms）' : ''}</label>
+                                   <div className="flex items-stretch rounded border border-gray-300 bg-white">
+                                     <select className="min-w-0 flex-1 bg-transparent p-1 text-xs outline-none" value={draftAiImageConfig[control.key] || control.fallback} onChange={e => setDraftAiImageConfig(prev => ({ ...prev, [control.key]: e.target.value }))}>
+                                       {!control.options.some(value => value === (draftAiImageConfig[control.key] || control.fallback)) && <option value={draftAiImageConfig[control.key]}>{draftAiImageConfig[control.key]}</option>}
+                                       {control.options.map(value => <option key={value} value={value}>{value}</option>)}
+                                     </select>
+                                     <div className="relative w-6 flex items-center justify-center border-l border-gray-200 hover:bg-gray-50">
+                                       <Plus className="w-3 h-3 text-gray-500" />
+                                       <select aria-label={`${control.label}引用字段`} title="引用字段" className="absolute inset-0 opacity-0 cursor-pointer" value="" onChange={e => { if (e.target.value) setDraftAiImageConfig(prev => ({ ...prev, [control.key]: `{${e.target.value}}` })); }}>
+                                         <option value="">+ 引用</option>
+                                         {allFields.filter(f => f.id !== field.id).map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                                       </select>
+                                     </div>
+                                   </div>
+                                 </div>
+                               ))}
+                             </div>
+                           )}
+                         </div>
+                       )}
                        {isQwenImageConfig && <p className="text-[10px] text-gray-500">
                          {isQwenFaceConfig
                            ? 'Qwen Face：0.5–2K，固定 2 张参考图；图 1 为基图，图 2 为身份参考，默认跟随首图比例。'
@@ -8501,7 +8708,7 @@ const LargeTextEditorModal = ({
                     "border-pink-200 group-hover:ring-pink-700/30"
                   )}>
                     <div className="relative w-full h-full">
-                      <ThumbnailImage path={media.url} alt={media.label} className="w-full h-full object-cover rounded" />
+                      <ThumbnailImage path={media.url} alt={media.label} fileIconVariant="large" className="w-full h-full object-cover rounded" />
                       {media.mediaType === 'video' && (
                         <span className="absolute inset-0 flex items-center justify-center bg-black/20 rounded pointer-events-none">
                           <Play className="w-5 h-5 text-white/80 fill-white/70 drop-shadow" />
@@ -9104,11 +9311,13 @@ function Cell({ tableId, record, field, isActive, forceEdit, isGeneratingCol, se
                         <ThumbnailImage 
                           path={path}
                           alt={path.split('/').pop()?.split('\\').pop() || 'image'} 
+                          fileIconVariant={heightClass === 'h-[80px]' || heightClass === 'h-[120px]' ? 'large' : heightClass === 'h-[56px]' ? 'regular' : 'compact'}
                           className={`${imgSizeClass} object-cover rounded border border-gray-200 bg-gray-100 cursor-pointer`} 
                           title={path}
                           onClick={(e) => { 
-                            e.stopPropagation(); 
-                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id, i); 
+                            e.stopPropagation();
+                            if (isProfessionalMedia(path, item.type) && !isInlinePreviewableProfessionalMedia(path, item.type)) void openMediaInConfiguredApp(path);
+                            else onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id, i);
                           }}
                         />
                         {item.cropData && (
@@ -9143,12 +9352,9 @@ function Cell({ tableId, record, field, isActive, forceEdit, isGeneratingCol, se
                           {isElectron && (
                              <button onClick={(e) => {
                                e.stopPropagation();
-                               const psPath = localStorage.getItem('bitable_ps_path');
-                               const localPath = path.startsWith('file://') ? decodeURIComponent(path.replace('file://', '')) :
-                                                path.startsWith('local-img://') ? decodeURIComponent(path.replace('local-img://', '')) : path;
-                               (window as any).electronAPI?.openInPhotoshop?.(localPath, psPath);
-                             }} title="Edit in Photoshop">
-                                <Palette className="w-3.5 h-3.5 hover:text-indigo-500 text-gray-500" />
+                               void openMediaInConfiguredApp(path);
+                             }} title={getMediaFileInfo(path, item.type).appKind === 'vector' ? 'Open in vector app' : 'Edit in Photoshop'}>
+                                <Palette className={cn('w-3.5 h-3.5 text-gray-500', getMediaFileInfo(path, item.type).appKind === 'vector' ? 'hover:text-orange-500' : 'hover:text-indigo-500')} />
                              </button>
                           )}
                           <button onClick={(e) => { e.stopPropagation(); void copyMediaToClipboardMagic(item); }} title="Copy">
@@ -9231,11 +9437,13 @@ function Cell({ tableId, record, field, isActive, forceEdit, isGeneratingCol, se
                         <ThumbnailImage 
                           path={path}
                           alt="ai-generated" 
+                          fileIconVariant={heightClass === 'h-[80px]' || heightClass === 'h-[120px]' ? 'large' : heightClass === 'h-[56px]' ? 'regular' : 'compact'}
                           className={`${imgSizeClass} object-cover rounded border border-gray-200 bg-gray-100 cursor-pointer`} 
                           title={path}
                           onClick={(e) => { 
-                            e.stopPropagation(); 
-                            onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id, i); 
+                            e.stopPropagation();
+                            if (isProfessionalMedia(path, item.type) && !isInlinePreviewableProfessionalMedia(path, item.type)) void openMediaInConfiguredApp(path);
+                            else onPreviewImage(fullUrl, fileItems, (newItems) => onChange(newItems), record.id, i);
                           }}
                         />
                         {item.cropData && (
@@ -9270,12 +9478,9 @@ function Cell({ tableId, record, field, isActive, forceEdit, isGeneratingCol, se
                           {isElectron && (
                              <button onClick={(e) => {
                                e.stopPropagation();
-                               const psPath = localStorage.getItem('bitable_ps_path');
-                               const localPath = path.startsWith('file://') ? decodeURIComponent(path.replace('file://', '')) :
-                                                path.startsWith('local-img://') ? decodeURIComponent(path.replace('local-img://', '')) : path;
-                               (window as any).electronAPI?.openInPhotoshop?.(localPath, psPath);
-                             }} title="Edit in Photoshop">
-                                <Palette className="w-3.5 h-3.5 hover:text-indigo-500 text-gray-500" />
+                               void openMediaInConfiguredApp(path);
+                             }} title={getMediaFileInfo(path, item.type).appKind === 'vector' ? 'Open in vector app' : 'Edit in Photoshop'}>
+                                <Palette className={cn('w-3.5 h-3.5 text-gray-500', getMediaFileInfo(path, item.type).appKind === 'vector' ? 'hover:text-orange-500' : 'hover:text-indigo-500')} />
                              </button>
                           )}
                           <button onClick={(e) => { e.stopPropagation(); void copyMediaToClipboardMagic(item); }} title="Copy">
@@ -9556,7 +9761,7 @@ function Cell({ tableId, record, field, isActive, forceEdit, isGeneratingCol, se
            e.preventDefault();
            e.stopPropagation();
            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-             const files = Array.from(e.dataTransfer.files).filter((f: any) => f.type.startsWith('image/') || f.type.startsWith('video/') || f.type.startsWith('audio/'));
+             const files = Array.from(e.dataTransfer.files).filter((file: any) => isSupportedAttachmentFile(file));
              if (files.length > 0) {
                let existingItems: any[] = [];
                if (Array.isArray(value)) {
@@ -9573,7 +9778,7 @@ function Cell({ tableId, record, field, isActive, forceEdit, isGeneratingCol, se
                  if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:[\\/]/) && !pathStr.startsWith('\\\\')) {
                    fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
                  }
-                 return { url: pathStr };
+                 return { url: pathStr, name: file.name, type: file.type || undefined, format: getMediaFileInfo(file.name, file.type).extension || undefined };
                });
 
                const newValue = [...existingItems, ...fileObjects];
@@ -9961,14 +10166,14 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const files = Array.from(e.target.files as FileList);
+      const files = Array.from(e.target.files as FileList).filter(file => isSupportedAttachmentFile(file));
       const newItems = files.map((file: any) => {
         const pathStr = (window as any).electronAPI?.getPathForFile?.(file) || (window as any).electron?.getPathForFile?.(file) || file.path || file.name;
         getOrGenerateThumbnail(pathStr, file);
         if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:[\\/]/) && !pathStr.startsWith('\\\\')) {
           fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
         }
-        return { url: pathStr };
+        return { url: pathStr, name: file.name, type: file.type || undefined, format: getMediaFileInfo(file.name, file.type).extension || undefined };
       });
       onChange([...fileItems, ...newItems]);
     }
@@ -10002,7 +10207,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
     }
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const files = Array.from(e.dataTransfer.files).filter((f: any) => f.type.startsWith('image/') || f.type.startsWith('video/') || f.type.startsWith('audio/'));
+      const files = Array.from(e.dataTransfer.files).filter((file: any) => isSupportedAttachmentFile(file));
       if (files.length > 0) {
         const newItems = files.map((file: any) => {
           // Add support for window.electronAPI.getPathForFile if exposed in preload
@@ -10011,7 +10216,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
           if (!pathStr.startsWith('/') && !pathStr.match(/^[a-zA-Z]:[\\/]/) && !pathStr.startsWith('\\\\')) {
             fullImageBlobCache.set(pathStr, URL.createObjectURL(file));
           }
-          return { url: pathStr };
+          return { url: pathStr, name: file.name, type: file.type || undefined, format: getMediaFileInfo(file.name, file.type).extension || undefined };
         });
         onChange([...fileItems, ...newItems]);
         setDragOverImgIndex(null);
@@ -10073,12 +10278,18 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
                }}
                onDrop={(e) => handleDrop(e, index)}
                onDragEnd={() => { setDraggedImgIndex(null); setDragOverImgIndex(null); }}
-               onClick={() => onPreview(fullUrl, fileItems.map(p => {
-                 const mappedUrl = fullImageBlobCache.get(p.url) || (p.url.startsWith('/') || p.url.match(/^[a-zA-Z]:[\\/]/) || p.url.startsWith('\\\\') ? `file://${p.url}` : p.url);
-                 return { ...p, mappedUrl };
-               }), (newItems) => onChange(newItems), index)}
+               onClick={() => {
+                 if (isProfessionalMedia(path, item.type) && !isInlinePreviewableProfessionalMedia(path, item.type)) {
+                   void openMediaInConfiguredApp(path);
+                   return;
+                 }
+                 onPreview(fullUrl, fileItems.map(p => {
+                   const mappedUrl = fullImageBlobCache.get(p.url) || (p.url.startsWith('/') || p.url.match(/^[a-zA-Z]:[\\/]/) || p.url.startsWith('\\\\') ? `file://${p.url}` : p.url);
+                   return { ...p, mappedUrl };
+                 }), (newItems) => onChange(newItems), index);
+               }}
              >
-               <ThumbnailImage path={path} className="w-full h-full object-cover cursor-pointer rounded" alt="attachment" />
+               <ThumbnailImage path={path} fileIconVariant="large" className="w-full h-full object-cover cursor-pointer rounded" alt="attachment" />
                 {(pendingCount > 0 || resolvedCount > 0 || approvedCount > 0) && (
                   <div className="absolute -top-1 -right-1 flex gap-0.5 z-20 pointer-events-none drop-shadow-md">
                      {pendingCount > 0 && <span className="bg-red-500 rounded-full w-2 h-2 shadow-sm border border-white"></span>}
@@ -10135,7 +10346,7 @@ function AttachmentCellEditor({ value, onChange, onClose, onPreview, globalAttac
       <input 
         type="file" 
         multiple 
-        accept="image/*,video/*,audio/*" 
+        accept={MEDIA_FILE_ACCEPT}
         className="hidden" 
         ref={fileInputRef} 
         onChange={handleFileChange} 

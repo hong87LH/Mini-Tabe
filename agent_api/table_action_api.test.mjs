@@ -93,7 +93,7 @@ test('read capabilities and tables', () => {
   assert.equal(caps.ok, true);
   assert.equal(caps.data.phase, 'phase4.7');
   assert.equal(caps.data.appVersion, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
-  assert.equal(caps.data.actionDefinitionVersion, '1.3');
+  assert.equal(caps.data.actionDefinitionVersion, '1.4');
   assert.equal(caps.data.detail, 'summary');
   assert.deepEqual(Object.keys(caps.data.implementedActions[0]), ['name']);
   assert.equal(caps.data.features.actionDefinitions, true);
@@ -757,12 +757,16 @@ test('image mode, quality and LoRA profiles persist through safe AI configuratio
   const created = await workspace.execute(request('table.create', {name:'Image controls',tableId:'image_controls'}, {confirmed:true}));
   assert.equal(created.ok,true);
   await workspace.execute(request('field.create',{tableId:'image_controls',fieldId:'image',name:'Image',type:'aiImage'},{confirmed:true}));
-  const configured = await workspace.execute(request('field.configure_ai',{tableId:'image_controls',fieldId:'image',config:{mode:'{模式}',quality:'{画质}',loraProfiles:['consistency','{功能LoRA}','consistency']}},{confirmed:true}));
+  const configured = await workspace.execute(request('field.configure_ai',{tableId:'image_controls',fieldId:'image',config:{mode:'{模式}',quality:'{画质}',complexity:'{复杂度}',outputFormat:'{格式}',frameCount:'{帧数}',frameDurationMs:'{帧时长}',loraProfiles:['consistency','{功能LoRA}','consistency']}},{confirmed:true}));
   assert.equal(configured.ok,true);
   const schema=await workspace.execute(request('table.get_schema',{tableId:'image_controls'}));
   const field=schema.data.fields.find(f=>f.id==='image');
   assert.equal(field.aiImageConfig.mode,'{模式}');
   assert.equal(field.aiImageConfig.quality,'{画质}');
+  assert.equal(field.aiImageConfig.complexity,'{复杂度}');
+  assert.equal(field.aiImageConfig.outputFormat,'{格式}');
+  assert.equal(field.aiImageConfig.frameCount,'{帧数}');
+  assert.equal(field.aiImageConfig.frameDurationMs,'{帧时长}');
   assert.deepEqual(field.aiImageConfig.loraProfiles,['consistency','{功能LoRA}']);
   const invalid = await workspace.execute(request('field.configure_ai',{tableId:'image_controls',fieldId:'image',config:{loraProfiles:'consistency'}},{confirmed:true}));
   assert.equal(invalid.ok,false);

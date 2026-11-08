@@ -253,7 +253,7 @@ node scripts/table_action_client.mjs <action> --help
 
 ## 项目文件夹 Action（2026-10-13，Action Definition 1.3）
 
-项目文件夹与工程文件本身不同，是工程内对子表的一层收纳目录。产品版本为 2.7.7，API 协议仍为 0.1。
+项目文件夹与工程文件本身不同，是工程内对子表的一层收纳目录。产品版本为 2.7.8，API 协议仍为 0.1；当前 Action Definition 为 1.4。
 
 - project.list：读取项目清单及各项目有序tableIds。
 - project.create：{name, projectId?}，创建空项目，返回projectId。

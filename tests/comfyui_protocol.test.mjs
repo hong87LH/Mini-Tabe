@@ -506,6 +506,16 @@ test('image mode UI aliases preserve legacy controls and map provider contracts'
     assert.deepEqual(buildImageControlParams('tt-image-2.5',{mode,quality}),{version:mode==='high'?'sunburst':'flare',quality});
   }
   assert.deepEqual(buildImageControlParams('tt-image-2.5-sunburst',{}),{version:'sunburst',quality:'auto'});
+  for(const model of ['tt-image-2.5-token','tt-image-2.5-flare-token','tt-image-2.5-sunburst-token']) {
+    assert.equal(buildImageControlParams(model,{mode:'high',quality:'max'}).version,'sunburst');
+  }
+  assert.deepEqual(buildImageControlParams('tt-image-2.6',{}),{version:'flare',quality:'auto',complexity:'medium',output_format:'png'});
+  assert.deepEqual(buildImageControlParams('tt-image-2.6',{mode:'high',quality:'max',complexity:'低',outputFormat:'svg'}),{version:'sunburst',quality:'max',complexity:'low',output_format:'svg'});
+  assert.deepEqual(buildImageControlParams('tt-image-2.6',{complexity:'中',outputFormat:'gif',frameCount:'12',frameDurationMs:'300'}),{version:'flare',quality:'auto',complexity:'medium',output_format:'gif',frame_count:12,frame_duration_ms:300});
+  assert.deepEqual(buildImageControlParams('tt-image-2.6',{complexity:'高'}).complexity,'high');
+  assert.throws(()=>buildImageControlParams('tt-image-2.6',{complexity:'底'}),/复杂度/);
+  assert.throws(()=>buildImageControlParams('tt-image-2.6-guan',{outputFormat:'svg'}),/不支持输出格式/);
+  assert.deepEqual(buildLingwuImageParams({model:'tt-image-2.6',params:{imageSize:'2K',aspectRatio:'16:9',outputFormat:'gif',frameCount:9,frameDurationMs:200}}),{version:'flare',quality:'auto',complexity:'medium',output_format:'gif',frame_count:9,frame_duration_ms:200});
   for(const model of ['gpt-image-2','gpt-image-2-guan','unknown-model']) {
     const old={imageSize:'1K',aspectRatio:'4:3',images:['a.png']};
     assert.deepEqual(buildLingwuImageParams({model,params:old}),buildLegacyLingwuParams(old));
@@ -532,7 +542,7 @@ test('image adapters submit exact model and controls to local mock transport, in
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try {
     const client=new LingwuClient('mock-only',`http://127.0.0.1:${server.address().port}`);
-    for(const model of ['tt-image-2.5','banana-2.1','gemini-3.1-flash-image-preview','banana-pro','gpt-image-2','gpt-image-2-guan','doubao-seedream-5-0-260128']) {
+    for(const model of ['tt-image-2.5','tt-image-2.6','tt-image-2.6-guan','banana-2.1','gemini-3.1-flash-image-preview','banana-pro','gpt-image-2','gpt-image-2-guan','doubao-seedream-5-0-260128']) {
       for(const images of [[],['https://example.invalid/reference.png']]) {
         const params=buildLingwuImageParams({model,params:{imageSize:'1K',aspectRatio:'1:1',mode:'high',quality:'max',images}});
         await client.createTask(model,'test',params,1);
@@ -548,9 +558,12 @@ test('image adapters submit exact model and controls to local mock transport, in
           assert.equal(sent.body.params.size,'1024x1024');assert.equal(sent.body.params.version,'sunburst');assert.equal(sent.body.params.quality,'max');
           assert.ok(!('resolution' in sent.body.params));assert.ok(!('aspect_ratio' in sent.body.params));
         }
+        if(model.startsWith('tt-image-2.6')) {
+          assert.equal(sent.body.params.version,'sunburst');assert.equal(sent.body.params.quality,'max');assert.equal(sent.body.params.complexity,'medium');assert.equal(sent.body.params.output_format,'png');
+        }
       }
     }
-    assert.equal(captured.length,14);
+    assert.equal(captured.length,18);
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
 

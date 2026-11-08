@@ -2,6 +2,8 @@
 
 本工作流属于**图片生成**，不属于 MiniMax 视频生成。一个 API 模板按实际引用数量路由：0 张文生图，1–5 张图生图；空引用跳过、不补齐、不复制参考图。5 张是本工程依据本机报告设置的运行上限，不代表模型理论上限。
 
+v2.7.7 起，默认 Qwen Manifest 额外登记可选 `consistency` LoRA Profile；双图换脸是独立的 `qwen-image-2.1-face` workflow。统一说明见 [`readme/03_ComfyUI/ComfyUI_Qwen_Image_2.1_参数与LoRA.md`](../../../readme/03_ComfyUI/ComfyUI_Qwen_Image_2.1_参数与LoRA.md)。
+
 ## 安装与版本
 
 - 已验证 ComfyUI **0.37.0**，前端 1.52.7，workflow templates 0.11.66。使用此版本或兼容更新版本；这些是验证版本，不声称是最低版本。
@@ -84,5 +86,12 @@
 完整交接报告：[v2.7.2 完整升级与工程交接报告](../../../readme/v2.7.2_Qwen图片接入与统一参数.md)。上方初次接入测试数字为阶段记录；最终协议回归21项、Action API59项、预览8项通过，原有TS2347仍存在。
 
 `standard` 是 auto 的内部兼容值；当前 high/enhanced 不切换权重。manifest 的 fast/quality 是通用模板槽位，两者都指向同一 image_api.json，不代表 Qwen 独立加速版本。
+
+## v2.7.7 维护与 Agent 同步
+
+- `manifest.json.modelRequirements` 结构化登记三个基础模型和可选 Consistency LoRA 的目录、来源、加载节点与输入名。
+- `generation.get_capabilities` 可读取模型要求、Profile 和兼容别名映射。
+- `generation.preview` 回显实际启用的 `loraProfiles`，并阻止未登记或与所选 workflow 不匹配的 Profile。
+- 当前协议回归基线为 31 项；本节是当前维护状态，上方 17/21 项数字保留为历史接入记录。
 
 用户同一2048×2048参考图、25步对照：系数1输出1024×1024，截图耗时57.61秒；系数2输出2048×2048，截图耗时426.27秒，约7.40倍。已核验原PNG尺寸和内嵌参数，两次参考内容标识相同，seed不同。这是单次实际观察，不能当固定性能倍率或同seed画质实验。当前图生图与多参图生图默认适合保留构图的编辑；若明确指定比例，则会覆盖画布比例。这不是模型理论能力的完整边界。

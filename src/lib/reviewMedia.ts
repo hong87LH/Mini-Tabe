@@ -25,7 +25,7 @@ export function reviewLocalPath(value: string): string | null {
 export function isReviewImage(path: string, type?: string): boolean {
   if (type === 'video' || type === 'audio' || /^(video|audio)\//i.test(type || '')) return false;
   if (/\.(mp4|webm|mov|mkv|mp3|wav|flac|m4a|aac|ogg|opus)([?#]|$)/i.test(path)) return false;
-  return type === 'image' || /^image\//i.test(type || '') || /\.(png|jpe?g|webp|gif|bmp|tiff?|avif|heic|psd)([?#]|$)/i.test(path) || /^(data:image\/|https?:\/\/|blob:|local-img:\/\/)/i.test(path);
+  return type === 'image' || /^image\//i.test(type || '') || /\.(png|jpe?g|webp|gif|bmp|tiff?|avif|heic|psd|psb|svg|ai|pdf)([?#]|$)/i.test(path) || /^(data:image\/|https?:\/\/|blob:|local-img:\/\/)/i.test(path);
 }
 
 export function restoreCropViewport(

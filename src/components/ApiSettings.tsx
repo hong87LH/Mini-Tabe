@@ -61,6 +61,7 @@ const hasModelOverlap = (firstProvider: any, secondProvider: any): boolean => {
 export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const [psPath, setPsPath] = useState(localStorage.getItem('bitable_ps_path') || '');
+  const [vectorAppPath, setVectorAppPath] = useState(localStorage.getItem('bitable_vector_app_path') || '');
   const [comfyuiBatPath, setComfyuiBatPath] = useState(localStorage.getItem('bitable_comfyui_bat_path') || '');
   const [comfyuiEndpoint, setComfyuiEndpoint] = useState(() => {
     const providers = [...(modelSettings.image || []), ...(modelSettings.video || [])].filter(p => p.provider === 'comfyui');
@@ -1242,6 +1243,18 @@ export function ApiSettings({ modelSettings, setModelSettings, lang }: any) {
               } else {
                  localStorage.removeItem('bitable_ps_path');
               }
+            }}
+          />
+          <input
+            type="text"
+            placeholder={lang === 'en' ? 'Vector app path for AI / SVG / PDF (e.g. Illustrator.exe)' : '矢量图应用路径，用于 AI / SVG / PDF（例如 Illustrator.exe）'}
+            className="w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-400 font-mono text-gray-600"
+            value={vectorAppPath}
+            onChange={(e) => {
+              const val = e.target.value;
+              setVectorAppPath(val);
+              if (val) localStorage.setItem('bitable_vector_app_path', val);
+              else localStorage.removeItem('bitable_vector_app_path');
             }}
           />
           <div>

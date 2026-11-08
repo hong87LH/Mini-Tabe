@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 抓取极速本地系统级缩略图
   getThumbnail: (path, size, options) => ipcRenderer.invoke('get-thumbnail', path, size, options),
   getThumbnailLoadStats: () => ipcRenderer.invoke('thumbnail-load-stats'),
+  getLocalFileStatus: (path) => ipcRenderer.invoke('get-local-file-status', path),
   readLocalFile: (filePath, options) => ipcRenderer.invoke('read-local-file', filePath, options),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   selectComfyUIBat: () => ipcRenderer.invoke('select-comfyui-bat'),
@@ -36,6 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   inspectNetworkJobStale: (localJobId, options) => ipcRenderer.invoke('inspect-network-job-stale', localJobId, options),
   retryDownloadJob: (localJobId) => ipcRenderer.invoke('retry-download-job', localJobId),
   openLocalFile: (localPath) => ipcRenderer.invoke('open-local-file', localPath),
+  openInExternalApp: (filePath, applicationPath) => ipcRenderer.invoke('open-in-external-app', filePath, applicationPath),
   openInPhotoshop: (filePath, psPath) => ipcRenderer.invoke('open-in-photoshop', filePath, psPath),
   deleteNetworkJob: (localJobId) => ipcRenderer.invoke('delete-network-job', localJobId),
   continueNetworkJobPolling: (localJobId) => ipcRenderer.invoke('continue-network-job-polling', localJobId),

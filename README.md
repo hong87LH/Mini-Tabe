@@ -87,6 +87,7 @@ v2.7.4  banana-2.1 参数映射 / 审阅列筛选漏图修复 / 审阅裁切改�
 v2.7.5  banana-pro 模型更名 / banana-2 映射兼容 / 模型候选列表修复
 v2.7.6  项目文件夹管理 / 折叠导航与标题路径 / JSON 兼容 / Action API 项目操作
 v2.7.7  Qwen Face 双图工作流 / Consistency 保真增强 / LoRA Profile、提示词策略与 Action 能力同步
+v2.7.8  TT Image 2.6 / PNG·SVG·GIF 输出 / 专业媒体附件、丢失状态与双应用打开
 ```
 
 ### v2.4.x → v2.5.x
@@ -109,3 +110,5 @@ v2.5.7   图片、视频、音频附件分类导出
 - v2.7.6：项目文件夹与导航升级，详见 [更新说明](readme/v2.7.6_项目文件夹与导航升级.md)。
 
 - v2.7.7：新增 Qwen Image 2.1 Face 双图工作流、默认流程 Consistency 保真增强与可登记 LoRA 叠加；支持字段引用、Workflow 默认提示词自动抽取、LoRA 触发词／默认词／无自动词策略，并同步 Generation Preview 与 Action 能力发现。详见 [更新说明](readme/90_版本记录/v2.7.7_ComfyUI工作流维护与Action同步.md)。
+
+- v2.7.8：新增 TT Image 2.6 平级模型路由、复杂度与 PNG/SVG/GIF 输出；补充专业媒体格式、Photoshop/Illustrator 分流、文件丢失状态和可视区域刷新，并同步 Action API 新参数与能力发现。详见 [更新说明](readme/90_版本记录/v2.7.8_TT_Image_2.6与专业媒体格式升级.md)。

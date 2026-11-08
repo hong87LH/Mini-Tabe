@@ -3,6 +3,7 @@ import path from 'path';
 import { once } from 'events';
 import { app } from 'electron';
 import { NetworkStageError } from './network_utils.js';
+import { imageFormatMeta, inspectMediaFile, normalizeRequestedImageFormat } from './media_output_inspector.js';
 
 const reservedDownloadPaths = new Set();
 const activeDownloadJobIds = new Set();
@@ -155,8 +156,9 @@ function parseContentRange(value) {
     return null;
 }
 
-function getValidImageResize(job) {
+function getValidImageResize(job, actualFormat = null) {
     if (job?.mediaType !== 'image') return null;
+  if (actualFormat === 'gif' || actualFormat === 'svg') return null;
 
     const config = job?.downloadConfig?.imageResize;
     const width = Math.round(Number(config?.width));
@@ -174,10 +176,16 @@ async function loadSharp() {
     return sharpModule.default || sharpModule;
 }
 
-async function validateImageFile(filePath, expectedSize = null) {
+async function validateImageFile(filePath, expectedSize = null, actualFormat = null) {
     try {
+    const inspected = actualFormat ? imageFormatMeta(actualFormat) : await inspectMediaFile(filePath);
+    if (!inspected) throw new Error('Unsupported or unrecognized image format');
+    if (inspected.format === 'svg') {
+      if (expectedSize) throw new Error('SVG cannot be raster-resized by the image postprocessor');
+      return { format: 'svg', mime: inspected.mimeType };
+    }
         const sharp = await loadSharp();
-        const metadata = await sharp(filePath, { failOn: 'error', sequentialRead: true }).metadata();
+    const metadata = await sharp(filePath, { failOn: 'error', sequentialRead: true, animated: inspected.format === 'gif' }).metadata();
 
         if (!metadata?.width || !metadata?.height) {
             throw new Error('Image metadata is incomplete');
@@ -236,7 +244,7 @@ async function recoverLegacyFinalAsPart(finalPath, partPath) {
     }
 }
 
-async function resizePartToFinal(partPath, finalPath, resizeConfig) {
+async function resizePartToFinal(partPath, finalPath, resizeConfig, actualFormat = null) {
     const { width, height } = resizeConfig;
     const finalExt = path.extname(finalPath).toLowerCase() || '.png';
     const directory = path.dirname(finalPath);
@@ -246,7 +254,7 @@ async function resizePartToFinal(partPath, finalPath, resizeConfig) {
     let finalCreated = false;
 
     try {
-        await validateImageFile(partPath);
+        await validateImageFile(partPath, null, actualFormat);
 
         const sharp = await loadSharp();
         let pipeline = sharp(partPath, { failOn: 'error', sequentialRead: true })
@@ -316,9 +324,9 @@ async function resizePartToFinal(partPath, finalPath, resizeConfig) {
     }
 }
 
-async function finalizePartWithoutResize(job, partPath, finalPath) {
+async function finalizePartWithoutResize(job, partPath, finalPath, actualFormat = null) {
     if (job?.mediaType === 'image') {
-        await validateImageFile(partPath);
+        await validateImageFile(partPath, null, actualFormat);
     }
 
     if (await fileExists(finalPath)) {
@@ -432,8 +440,10 @@ export class ResumableDownloader {
                         ? resultUrl.searchParams.get('filename') || resultUrl.pathname
                         : resultUrl.pathname;
                     const candidateExt = path.extname(urlPath).toLowerCase();
+                    const requestedFormat = normalizeRequestedImageFormat(job.downloadConfig?.requestedFormat);
+                    const requestedMeta = imageFormatMeta(requestedFormat);
                     const ext = /^\.[a-z0-9]{1,8}$/.test(candidateExt)
-                        ? candidateExt : (job.mediaType === 'video' ? '.mp4' : '.jpg');
+                        ? candidateExt : (job.mediaType === 'video' ? '.mp4' : requestedMeta?.extension || '.jpg');
 
                     if (job.downloadConfig) {
                         if (job.downloadConfig.folderPath) {
@@ -494,11 +504,36 @@ export class ResumableDownloader {
                     return;
                 }
 
-                const imageResize = getValidImageResize(job);
+                let actualFormat = null;
+                let actualMimeType = null;
+                if (job.mediaType === 'image') {
+                    const inspected = await inspectMediaFile(partPath, downloadResult.contentType || '');
+                    if (!inspected) {
+                        throw new NetworkStageError('Downloaded image format is unsupported or unrecognized', {
+                            stage: 'postprocess',
+                            code: 'IMAGE_FORMAT_UNRECOGNIZED',
+                            retryable: false,
+                            details: { partPath, contentType: downloadResult.contentType || null }
+                        });
+                    }
+                    actualFormat = inspected.format;
+                    actualMimeType = inspected.mimeType;
+                    if (path.extname(finalPath).toLowerCase() !== inspected.extension) {
+                        const correctedBase = path.basename(finalPath, path.extname(finalPath));
+                        const correctedPath = path.join(path.dirname(finalPath), `${correctedBase}${inspected.extension}`);
+                        releaseReservedPath(finalPath);
+                        finalPath = reserveUniqueFilePath(correctedPath);
+                        lastKnownFinalPath = finalPath;
+                        await this.jobStore.patch(localJobId, { finalPath, actualFormat, actualMimeType });
+                        await this._notify(localJobId);
+                    }
+                }
+
+                const imageResize = getValidImageResize(job, actualFormat);
                 if (imageResize) {
-                    await resizePartToFinal(partPath, finalPath, imageResize);
+                    await resizePartToFinal(partPath, finalPath, imageResize, actualFormat);
                 } else {
-                    await finalizePartWithoutResize(job, partPath, finalPath);
+                    await finalizePartWithoutResize(job, partPath, finalPath, actualFormat);
                 }
 
                 const cancelledBeforeComplete = await this.jobStore.getJob(localJobId);
@@ -513,6 +548,7 @@ export class ResumableDownloader {
                     partPath: null,
                     downloadVerified: true,
                     downloadTotalBytes: downloadResult.totalBytes || downloadResult.size,
+                    ...(actualFormat ? { actualFormat, actualMimeType } : {}),
                     lastError: null
                 });
                 releaseReservedPath(finalPath);
@@ -727,7 +763,8 @@ export class ResumableDownloader {
 
         return {
             size: actualSize,
-            totalBytes: expectedTotal || actualSize
+            totalBytes: expectedTotal || actualSize,
+            contentType
         };
     }
 }

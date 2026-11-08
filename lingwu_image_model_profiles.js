@@ -10,7 +10,80 @@ export function normalizeImageControls(params = {}) {
 }
 
 export const isNano2ImageModel = model => ['gemini-3.1-flash-image-preview', 'gemini-3.1-flash-image', 'banana-2', 'banana-2.1'].includes(normalizeLingwuModelName(model));
-export const isTT25ImageModel = model => /^tt-image-2\.5(?:-flare|-sunburst)?$/.test(normalizeLingwuModelName(model));
+export const isTT25ImageModel = model => /^tt-image-2\.5(?:-(?:flare|sunburst))?(?:-token)?$/.test(normalizeLingwuModelName(model));
+export const isTT26ImageModel = model => /^tt-image-2\.6(?:-guan)?$/.test(normalizeLingwuModelName(model));
+
+const TT26_COMPLEXITY_ALIASES = {
+  low: 'low', '低': 'low',
+  medium: 'medium', mid: 'medium', '中': 'medium',
+  high: 'high', '高': 'high'
+};
+const TT26_FORMAT_ALIASES = {
+  png: 'png', '位图': 'png',
+  jpeg: 'jpeg', jpg: 'jpeg',
+  webp: 'webp',
+  svg: 'svg', '矢量': 'svg', '矢量图': 'svg',
+  gif: 'gif', '动图': 'gif'
+};
+const TT26_FRAME_COUNTS = new Set([4, 6, 9, 12, 16]);
+const TT26_FRAME_DURATIONS = new Set([100, 200, 300, 500, 1000]);
+
+export function getTTImageModelCapabilities(model) {
+  const normalized = normalizeLingwuModelName(model);
+  if (isTT25ImageModel(normalized)) {
+    return {
+      family: 'tt-image-2.5',
+      outputFormats: ['png', 'jpeg', 'webp'],
+      supportsComplexity: false,
+      supportsGifControls: false,
+      billing: normalized.endsWith('-token') ? 'token' : 'per_call'
+    };
+  }
+  if (isTT26ImageModel(normalized)) {
+    return {
+      family: 'tt-image-2.6',
+      outputFormats: normalized.endsWith('-guan') ? ['png', 'jpeg', 'webp', 'gif'] : ['png', 'jpeg', 'webp', 'svg', 'gif'],
+      supportsComplexity: true,
+      supportsGifControls: true,
+      billing: normalized.endsWith('-guan') ? 'token' : 'per_call'
+    };
+  }
+  return null;
+}
+
+export function normalizeTT26ImageControls(params = {}, model = 'tt-image-2.6') {
+  const capabilities = getTTImageModelCapabilities(model);
+  if (!capabilities || capabilities.family !== 'tt-image-2.6') return {};
+
+  const complexityRaw = String(params.complexity || 'medium').trim().toLowerCase();
+  const complexity = TT26_COMPLEXITY_ALIASES[complexityRaw];
+  if (!complexity) throw new Error('图片复杂度须为 low（低）、medium/mid（中）或 high（高）');
+
+  const outputRaw = String(params.outputFormat || params.output_format || 'png').trim().toLowerCase();
+  const outputFormat = TT26_FORMAT_ALIASES[outputRaw];
+  if (!outputFormat || !capabilities.outputFormats.includes(outputFormat)) {
+    throw new Error(`${model} 不支持输出格式 ${outputRaw || '空值'}；支持 ${capabilities.outputFormats.join(' / ')}`);
+  }
+
+  const out = { complexity, output_format: outputFormat };
+  if (outputFormat === 'gif') {
+    const frameCount = Number(params.frameCount ?? params.frame_count ?? 9);
+    const frameDurationMs = Number(params.frameDurationMs ?? params.frame_duration_ms ?? 200);
+    if (!TT26_FRAME_COUNTS.has(frameCount)) throw new Error('GIF 帧数须为 4、6、9、12 或 16');
+    if (!TT26_FRAME_DURATIONS.has(frameDurationMs)) throw new Error('GIF 单帧时长须为 100、200、300、500 或 1000ms');
+    out.frame_count = frameCount;
+    out.frame_duration_ms = frameDurationMs;
+  }
+  return out;
+}
+
+export function listLingwuImageModelProfiles() {
+  return [
+    { family: 'tt-image-2.5', models: ['tt-image-2.5', 'tt-image-2.5-flare', 'tt-image-2.5-sunburst', 'tt-image-2.5-token', 'tt-image-2.5-flare-token', 'tt-image-2.5-sunburst-token'], outputFormats: ['png', 'jpeg', 'webp'], controls: ['version', 'quality'] },
+    { family: 'tt-image-2.6', models: ['tt-image-2.6'], outputFormats: ['png', 'jpeg', 'webp', 'svg', 'gif'], controls: ['version', 'quality', 'complexity', 'output_format', 'frame_count', 'frame_duration_ms'] },
+    { family: 'tt-image-2.6', models: ['tt-image-2.6-guan'], outputFormats: ['png', 'jpeg', 'webp', 'gif'], controls: ['version', 'quality', 'complexity', 'output_format', 'frame_count', 'frame_duration_ms'] }
+  ];
+}
 
 export function buildImageControlParams(model, params = {}, protocol = 'media') {
   const controls = normalizeImageControls(params);
@@ -21,8 +94,12 @@ export function buildImageControlParams(model, params = {}, protocol = 'media') 
   if (isTT25ImageModel(model)) {
     // An explicitly selected variant remains the default until the user selects a mode.
     const version = params.mode ? (controls.mode === 'enhanced' ? 'sunburst' : 'flare')
-      : normalizeLingwuModelName(model).endsWith('-sunburst') ? 'sunburst' : 'flare';
+      : /(?:^|-)sunburst(?:-|$)/.test(normalizeLingwuModelName(model)) ? 'sunburst' : 'flare';
     return { version, quality: controls.quality };
+  }
+  if (isTT26ImageModel(model)) {
+    const version = controls.mode === 'enhanced' ? 'sunburst' : 'flare';
+    return { version, quality: controls.quality, ...normalizeTT26ImageControls(params, model) };
   }
   // Unknown models keep explicit values; legacy tables do not gain new request keys.
   return { ...(params.mode ? { mode: controls.mode === 'enhanced' ? 'high' : 'auto' } : {}), ...(params.quality ? { quality: controls.quality } : {}) };
@@ -89,6 +166,18 @@ export function normalizeLingwuModelName(model) {
 }
 
 export function getLingwuImageModelProfile(model) {
+  if (isTT25ImageModel(model)) return {
+    id: 'lingwu-tt-image-2.5',
+    requestMode: 'tt-media',
+    referenceProfileId: 'legacy-webp-q90-v1',
+    capabilities: getTTImageModelCapabilities(model)
+  };
+  if (isTT26ImageModel(model)) return {
+    id: 'lingwu-tt-image-2.6',
+    requestMode: 'tt-media',
+    referenceProfileId: 'legacy-webp-q90-v1',
+    capabilities: getTTImageModelCapabilities(model)
+  };
   if (normalizeLingwuModelName(model) === 'banana-2.1') return {
     ...LINGWU_IMAGE_MODEL_PROFILES['gemini-3.1-flash-image-preview'],
     id: 'lingwu-banana-2.1',
@@ -196,6 +285,10 @@ export function buildLingwuImageParams({ model, params }) {
   const controlParams = buildImageControlParams(model, input);
   delete input.mode;
   delete input.quality;
+  delete input.complexity;
+  delete input.outputFormat;
+  delete input.frameCount;
+  delete input.frameDurationMs;
   Object.assign(input, controlParams);
 
 
@@ -211,6 +304,15 @@ export function buildLingwuImageParams({ model, params }) {
 
   if (profile.requestMode === 'jimeng') {
     return convert_to_jimeng(input);
+  }
+
+  if (profile.requestMode === 'tt-media' && input.output_format === 'gif') {
+    delete input.imageSize;
+    delete input.aspectRatio;
+    delete input.size;
+    delete input.aspect_ratio;
+    delete input.resolution;
+    return input;
   }
 
   return buildLegacyLingwuParams(input);

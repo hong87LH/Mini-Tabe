@@ -1,11 +1,11 @@
-// AI Table Studio v2.7.5 / Table Action API Phase 4.7
+// AI Table Studio v2.7.8 / Table Action API Phase 4.7
 // Single source of truth for action metadata, parameter schemas, CLI help and
 // the generated HTTP JSON Schema artifact.
 
 export const TABLE_ACTION_API_VERSION = '0.1';
 export const TABLE_ACTION_API_PHASE = 'phase4.7';
-export const TABLE_ACTION_APP_VERSION = '2.7.7';
-export const ACTION_DEFINITION_VERSION = '1.3';
+export const TABLE_ACTION_APP_VERSION = '2.7.8';
+export const ACTION_DEFINITION_VERSION = '1.4';
 
 const id = { type: 'string', minLength: 1 };
 const text = { type: 'string' };
@@ -182,11 +182,15 @@ export const ACTION_DEFINITIONS = {
       sound: { type: ['boolean', 'string'] },
       mode: text,
       quality: text,
+      complexity: text,
+      outputFormat: text,
+      frameCount: text,
+      frameDurationMs: text,
       enhancePrompt: { type: ['boolean', 'string'] },
       offPeak: { type: ['boolean', 'string'] }
     }, [], { minProperties: 1 })
   }, ['tableId', 'fieldId', 'config']), {
-    notes: ['loraProfiles 可写已登记 Profile ID，也可写 {字段名}；字段值按行解析，多个 ID 使用逗号、分号或换行分隔。']
+    notes: ['loraProfiles 可写已登记 Profile ID，也可写 {字段名}；字段值按行解析，多个 ID 使用逗号、分号或换行分隔。', 'TT Image 2.6 支持 complexity、outputFormat、frameCount、frameDurationMs，均可写固定值或 {字段名}。']
   }),
   'field.delete': destructive('删除字段并清理记录值、引用与 Cell Link', object({ tableId: id, fieldId: id }, ['tableId', 'fieldId'])),
   'field.convert.preview': read('预览字段类型转换影响，不修改数据', object({ tableId: id, fieldId: id, targetType: nonEmptyText }, ['tableId', 'fieldId', 'targetType'])),
@@ -266,7 +270,7 @@ export const ACTION_DEFINITIONS = {
 
   'generation.get_capabilities': read('列出当前已配置的生成 Provider、Model、ComfyUI Workflow、模板默认提示词与 LoRA 提示词策略', empty, {
     runtime: true,
-    notes: ['ComfyUI Workflow 返回 promptDefaults；LoRA Profile 返回 promptPolicy，mode 支持 none / prepend / append。']
+    notes: ['ComfyUI Workflow 返回 promptDefaults；LoRA Profile 返回 promptPolicy，mode 支持 none / prepend / append。', 'lingwuImageProfiles 返回 TT Image 2.5/2.6 的模型别名、输出格式与参数能力。']
   }),
   'generation.preview': read('解析最终 Prompt、媒体、模型、参数与输出路径，并按已登记 Workflow 能力预检输入和分辨率，不产生费用', object({ tableId: id, fieldId: id, rowIds: ids(), mode: { type: 'string', enum: ['missing_only', 'force'] } }, ['tableId', 'fieldId', 'rowIds']), {
     runtime: true,

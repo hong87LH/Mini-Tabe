@@ -19,6 +19,8 @@ test('actual ThumbnailImage waits for intersection and cancels offscreen queued 
     exports: {}, Map, console, React: { createElement: () => ({}) },
     useState: () => ['', () => {}], useRef: () => ({ current: element }), useEffect: fn => { effect = fn; },
     thumbnailCache: new Map(),
+    getMediaFileInfo: () => ({ extension: 'png', badge: '', kind: 'raster' }),
+    reviewLocalPath: path => path,
     IntersectionObserver: class { constructor(cb) { callback = cb; } observe() {} unobserve() {} },
     getOrGenerateThumbnail: (path, file, wanted) => { requested++; return queue.request(path, async () => { native++; return 'data:image/png;base64,a'; }, wanted); }
   };
@@ -49,6 +51,8 @@ test('missing system thumbnail restores native img alt and refresh can recover',
     useState: initial => { const i = index++; if (!(i in state)) state[i] = initial; return [state[i], value => { state[i] = value; }]; },
     useRef: () => ({ current: element }), useEffect: fn => { effect = fn; },
     thumbnailCache: new Map(),
+    getMediaFileInfo: () => ({ extension: 'jpg', badge: '', kind: 'raster' }),
+    reviewLocalPath: path => path,
     IntersectionObserver: class { constructor(cb) { callback = cb; } observe() {} unobserve() {} },
     getOrGenerateThumbnail: async (path, file, wanted) => { calls++; wanted(); return result; }
   };
@@ -74,6 +78,49 @@ test('missing system thumbnail restores native img alt and refresh can recover',
   assert.equal(render().props.src, result);
   assert.equal(calls, 2);
   cleanupRefresh();
+});
+
+test('professional file icon distinguishes a missing local file from an unavailable thumbnail', async () => {
+  const source = fs.readFileSync(new URL('../src/components/Grid.tsx', import.meta.url), 'utf8');
+  const block = source.slice(source.indexOf('const thumbnailObservers ='), source.indexOf('type LocateCellRequest ='));
+  let index = 0;
+  const state = [];
+  const effects = [];
+  const element = { addEventListener() {}, removeEventListener() {} };
+  const statusCalls = [];
+  const context = {
+    exports: {}, Map, console,
+    React: { createElement: (tag, props, ...children) => ({ tag, props: props || {}, children }) },
+    useState: initial => { const i = index++; if (!(i in state)) state[i] = initial; return [state[i], value => { state[i] = value; }]; },
+    useRef: () => ({ current: element }), useEffect: fn => { effects.push(fn); },
+    thumbnailCache: new Map(),
+    getMediaFileInfo: () => ({ extension: 'psd', badge: 'PSD', kind: 'photoshop' }),
+    reviewLocalPath: path => path,
+    window: { electronAPI: { getLocalFileStatus: async path => { statusCalls.push(path); return { exists: false, isFile: false }; } } },
+    cn: (...values) => values.filter(Boolean).join(' '),
+    IntersectionObserver: class { observe() {} unobserve() {} }
+  };
+  vm.createContext(context);
+  vm.runInContext(ts.transpile(block + '\nglobalThis.Component = ThumbnailImage;', { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 }), context);
+  const props = { path: 'F:/missing/design.psd', alt: 'design.psd', className: 'w-full h-full', fileIconVariant: 'large' };
+  index = 0;
+  context.Component(props);
+  const cleanups = effects.splice(0).map(run => run()).filter(Boolean);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  index = 0;
+  const rendered = context.Component(props);
+  assert.deepEqual(statusCalls, [props.path]);
+  assert.match(rendered.props.title, /文件不存在/);
+  assert.doesNotMatch(rendered.props.className, /bg-red/);
+  const iconFrame = rendered.children[0].children[0];
+  const brokenIcon = iconFrame.children[1];
+  assert.match(iconFrame.children[0].props.className, /grayscale/);
+  assert.equal(brokenIcon.props['aria-label'], '文件不存在');
+  assert.equal(brokenIcon.props.className, 'pointer-events-none absolute inset-0 h-full w-full');
+  assert.equal(brokenIcon.children[0].props.fill, '#f9fafb');
+  assert.equal(brokenIcon.children[1].props.stroke, '#e5e7eb');
+  assert.equal(brokenIcon.children[2].props.stroke, '#e5e7eb');
+  cleanups.forEach(cleanup => cleanup());
 });
 
 test('native thumbnail concurrency is bounded and duplicate paths share work', async () => {
@@ -135,20 +182,40 @@ test('visible thumbnail selection respects horizontal and vertical clipping', ()
 test('toolbar refresh deduplicates local visible paths and updates only matching mounted cells', async () => {
   const source = fs.readFileSync(new URL('../src/components/Grid.tsx', import.meta.url), 'utf8');
   const block = source.slice(source.indexOf('export async function refreshVisibleGridThumbnails'), source.indexOf('const ThumbnailImage ='));
-  const calls = [], events = [];
-  const node = (path, visible = true) => ({ path, visible, isConnected: true, getAttribute: () => path, dispatchEvent: event => events.push([path,event.detail]) });
-  const nodes = [node('C:/a.png'),node('C:/a.png'),node('C:/b.mp4'),node('C:/hidden.png',false),node('https://remote/x.png')];
+  const calls = [], statusCalls = [], events = [];
+  const node = (path, visible = true, professional = false) => ({
+    path, visible, isConnected: true,
+    getAttribute: name => name === 'data-table-thumbnail' ? path : name === 'data-professional-file' && professional ? 'true' : null,
+    dispatchEvent: event => events.push([path, event.type, event.detail])
+  });
+  const nodes = [
+    node('C:/a.png'), node('C:/a.png'), node('C:/b.mp4'),
+    node('C:/design.psd', true, true), node('C:/design.psd', true, true),
+    node('C:/hidden.png', false), node('https://remote/x.png')
+  ];
   const context = {
-    exports: {}, window: { electronAPI: {} }, URL, CustomEvent: class { constructor(name, options) { this.detail = options.detail; } },
+    exports: {}, window: { electronAPI: { getLocalFileStatus: async path => { statusCalls.push(path); return { exists: false }; } } }, URL,
+    CustomEvent: class { constructor(name, options) { this.type = name; this.detail = options.detail; } },
     isThumbnailVisible: element => element.visible, reviewLocalPath: path => path.startsWith('C:') ? path : null,
-    refreshReviewImages: async (paths, fn) => { for (const path of new Set(paths)) await fn(path); },
+    refreshReviewImages: async (paths, fn) => {
+      let succeeded = 0;
+      const failures = [];
+      for (const path of new Set(paths)) {
+        try { await fn(path); succeeded++; } catch { failures.push(path); }
+      }
+      return { succeeded, failures };
+    },
     loadFreshReviewThumbnail: async path => { calls.push(path); return 'thumb:' + path; },
     thumbnailRevisions: new Map(), thumbnailCache: new Map(), fullImageBlobCache: new Map()
   };
   vm.createContext(context);
   vm.runInContext(ts.transpile(block, { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }), context);
-  await context.exports.refreshVisibleGridThumbnails({ querySelectorAll: () => nodes });
+  const result = await context.exports.refreshVisibleGridThumbnails({ querySelectorAll: () => nodes });
   assert.deepEqual(calls, ['C:/a.png','C:/b.mp4']);
-  assert.equal(events.length, 3);
+  assert.deepEqual(statusCalls, ['C:/design.psd']);
+  assert.equal(events.length, 5);
+  assert.equal(events.filter(([, type]) => type === 'table-professional-file-status-refreshed').length, 2);
+  assert.equal(result.thumbnailSucceeded, 2);
+  assert.equal(result.fileStatusChecked, 1);
   assert.equal(context.thumbnailRevisions.get('C:/a.png'), 1);
 });

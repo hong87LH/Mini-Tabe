@@ -40,6 +40,10 @@ export interface Field {
   aiImageConfig?: {
     mode?: string;
     quality?: string;
+    complexity?: string;
+    outputFormat?: string;
+    frameCount?: string;
+    frameDurationMs?: string;
     count?: number;
     size?: string;
     folderPath?: string;

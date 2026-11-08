@@ -9,7 +9,7 @@ import path from 'path';
 import isDev from 'electron-is-dev';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { LingwuClient } from './lingwu_client.js';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
@@ -61,6 +61,38 @@ function safeFileURLToPath(urlStr) {
      }
      return urlStr;
   }
+}
+
+async function openWithConfiguredApp(filePath, applicationPath) {
+  const targetPath = safeFileURLToPath(String(filePath || '').trim().replace(/^"|"$/g, ''));
+  const configuredApp = String(applicationPath || '').trim().replace(/^"|"$/g, '');
+  if (!targetPath || !fs.existsSync(targetPath)) return false;
+  if (!configuredApp || !fs.existsSync(configuredApp)) {
+    return (await shell.openPath(targetPath)) === '';
+  }
+  const executable = process.platform === 'darwin' ? 'open' : configuredApp;
+  const args = process.platform === 'darwin' ? ['-a', configuredApp, targetPath] : [targetPath];
+  return await new Promise(resolve => {
+    let settled = false;
+    const child = execFile(executable, args, { windowsHide: false }, error => {
+      if (error && !settled) {
+        settled = true;
+        console.error('Error opening with configured app:', error);
+        resolve(false);
+      }
+    });
+    child.once('error', error => {
+      if (settled) return;
+      settled = true;
+      console.error('Error opening with configured app:', error);
+      resolve(false);
+    });
+    child.once('spawn', () => {
+      if (settled) return;
+      settled = true;
+      resolve(true);
+    });
+  });
 }
 
 function readSynchsafeInt(buffer, offset) {
@@ -190,6 +222,7 @@ function createWindow() {
       nodeIntegration: false,     // 前端保持安全关闭
       contextIsolation: true,     // 前端环境隔离
       webSecurity: false,         // 允许跨域及本地协议
+      plugins: true,              // 启用 Chromium PDF 预览
       preload: path.join(__dirname, 'preload.js') 
     }
   });
@@ -426,6 +459,18 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('thumbnail-load-stats', () => nativeThumbnailScheduler.stats());
+  ipcMain.handle('get-local-file-status', async (event, filePath) => {
+    try {
+      const sourcePath = normalizeThumbnailPath(filePath);
+      const stat = await fs.promises.stat(sourcePath);
+      return { exists: true, isFile: stat.isFile() };
+    } catch (error) {
+      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+        return { exists: false, isFile: false };
+      }
+      return { exists: null, isFile: false };
+    }
+  });
   ipcMain.handle('get-thumbnail', async (event, filePath, size = { width: 150, height: 150 }, options = {}) => nativeThumbnailScheduler.request(options.fresh === true ? `refresh:${++thumbnailRefreshSequence}` : thumbnailKey(filePath, size), async () => {
     try {
       const sourcePath = normalizeThumbnailPath(filePath);
@@ -523,40 +568,19 @@ app.whenReady().then(async () => {
   });
   // ▲▲▲ ▲▲▲
 
+  ipcMain.handle('open-in-external-app', async (event, filePath, applicationPath) => {
+    try {
+      return await openWithConfiguredApp(filePath, applicationPath);
+    } catch (e) {
+      console.error('Failed to open in external app:', e);
+      return false;
+    }
+  });
+
+  // Backward-compatible renderer bridge used by existing tables and old builds.
   ipcMain.handle('open-in-photoshop', async (event, filePath, psPath) => {
     try {
-      if (!fs.existsSync(filePath)) return false;
-      let command = '';
-      if (process.platform === 'darwin') {
-         if (psPath && fs.existsSync(psPath)) {
-            command = `open -a "${psPath}" "${filePath}"`;
-         } else {
-             await shell.openPath(filePath);
-             return true;
-         }
-      } else if (process.platform === 'win32') {
-         if (psPath && fs.existsSync(psPath)) {
-            command = `"${psPath}" "${filePath}"`;
-         } else {
-             // Let the shell open it or somehow find PS. Let's just open without specific app if not provided
-            await shell.openPath(filePath);
-            return true;
-         }
-      } else {
-         await shell.openPath(filePath);
-         return true;
-      }
-      
-      return new Promise((resolve, reject) => {
-         exec(command, (error) => {
-             if (error) {
-                 console.error('Error opening with specified app:', error);
-                 resolve(false);
-             } else {
-                 resolve(true);
-             }
-         });
-      });
+      return await openWithConfiguredApp(filePath, psPath);
     } catch (e) {
       console.error('Failed to open in Photoshop:', e);
       return false;

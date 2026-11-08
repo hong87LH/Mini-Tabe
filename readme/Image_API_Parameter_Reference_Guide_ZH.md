@@ -9,7 +9,7 @@
 
 ## 前台与请求链路
 
-第一行：分辨率、比例、生成数量；第二行：生成模式 `auto / high`、画质 `auto / high / max`，均可通过右侧 `+` 引用字段。
+第一行：分辨率、比例、生成数量；第二行：生成模式 `auto / high`、画质 `auto / high / max`。TT Image 2.6 同行增加复杂度 `low / mid / high`，中文引用兼容“低 / 中 / 高”。格式默认为 PNG，可选 SVG 或 GIF；GIF 展开帧数与单帧时长，且不传分辨率和比例。上述参数均可通过右侧 `+` 引用字段。
 
 `Grid.tsx` 解析字段引用 → `generate-lingwu-image` IPC → `MediaJobRunner.createImageJob` → 上传参考图 → `buildLingwuImageParams` 按准确模型名映射 → `LingwuClient.createTask` → `POST /v1/media/generate`。
 
@@ -20,6 +20,7 @@
 | 模型 | 尺寸与比例（现有路径） | mode auto / high | quality auto / high / max | 参考图配置 |
 | --- | --- | --- | --- | --- |
 | `tt-image-2.5` | 沿用 `imageSize + aspectRatio → size` 原有精确/近似换算，不改成新尺寸协议 | `version: flare / sunburst` | `quality` 原值 | 普通 WebP q90 |
+| `tt-image-2.6` | PNG/SVG 沿用尺寸与比例；GIF 不发送尺寸与比例 | `version: flare / sunburst` | `quality` + `complexity` + `output_format`；GIF 另传帧数/时长 | 普通 WebP q90 |
 | `gemini-3.1-flash-image-preview`（Nano 2） | `imageSize` 0.5K/1K/2K/4K，`aspectRatio` 原值 | `thinkingLevel: minimal / high` | 不发送，API 无独立画质映射 | Gemini JPEG q95，Profile 上限14张 |
 | `gemini-3-pro-image-preview` | `imageSize` 1K/2K/4K，`aspectRatio` 原值 | 明确配置时透传 `mode: auto/high` | 明确配置时透传 `quality` | Gemini JPEG q95，Profile 上限14张 |
 | `doubao-seedream-5-0-260128` | `size: 2K/3K`，`aspect_ratio`；0.5/1/2K→2K，3/4K→3K | 明确配置时透传 | 明确配置时透传 | 普通 WebP q90 |
@@ -28,6 +29,8 @@
 未明确配置新参数的旧表：TT 默认 flare/auto，Nano 2 默认 minimal；其他模型保持原请求字段，不额外注入 mode/quality。透传不代表平台承诺支持这些字段，基础测试表用于人工验证渠道实际响应。参考图压缩质量 q90/q95 与生成 quality 是两个独立概念。
 
 TT 的 `-flare/-sunburst` 后缀别名也识别；缺省模式保留显式后缀版本。Nano 2 保留用户指定的 `gemini-3.1-flash-image-preview`，不替换为文档示例别名 `banana-2`。
+
+TT 2.5 兼容 `tt-image-2.5-token`、`tt-image-2.5-flare-token`、`tt-image-2.5-sunburst-token`。TT 2.6 兼容 `tt-image-2.6` 与官转渠道 `tt-image-2.6-guan`；后者能力表不含 SVG，因此只允许 PNG/JPEG/WebP/GIF。下载完成后以文件签名字节为准识别 PNG/JPEG/WebP/GIF/SVG，并按实际格式修正扩展名，不因请求格式和回传格式不一致拒绝结果。
 
 ### 最终请求示例（high 模式、max 画质）
 

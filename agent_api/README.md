@@ -1,8 +1,10 @@
-# AI Table Studio v2.7.6 · Table Action API v0.1 · Phase 4.7
+# AI Table Studio v2.7.8 · Table Action API v0.1 · Phase 4.7
 
 这是从 v2.6.3 分出的 Agent API 探索分支。v2.6.5 / Phase 4.7 在既有协作、完整编辑和长任务能力之上，继续降低 Agent 的调用成本，并补齐“远端已经失联、UI 仍显示处理中”的 Job 专项清理能力。
 
-当前主工程产品版本为 **v2.7.6**，Action Definition 为 **1.3**，协议 v0.1 / phase4.7 保持不变。当前包含 91 个 Action（含项目文件夹管理扩展），以本地 action_definitions.js 为准。保存工程并重启 Electron 后加载新主进程和 preload。已发布版本说明见 [v2.7.6 升级报告](../readme/v2.7.6_项目文件夹与导航升级.md)。
+当前主工程产品版本为 **v2.7.8**，Action Definition 为 **1.4**，协议 v0.1 / phase4.7 保持不变。当前包含 91 个 Action（含项目文件夹管理扩展），以本地 action_definitions.js 为准。保存工程并重启 Electron 后加载新主进程和 preload。最新版本说明见 [v2.7.8 升级报告](../readme/90_版本记录/v2.7.8_TT_Image_2.6与专业媒体格式升级.md)。
+
+TT Image 2.6 可通过 `field.configure_ai` 配置 `complexity`、`outputFormat`、`frameCount`、`frameDurationMs`，四项均支持固定值或 `{字段名}`。生成前调用 `generation.preview`；`generation.get_capabilities` 的 `lingwuImageProfiles` 是模型别名、可用格式及参数能力的当前准确信息。`tt-image-2.6-guan` 不支持 SVG，预检会明确拒绝该组合。
 
 ## v2.6.7 列显示与冻结
 
@@ -197,10 +199,12 @@ toIndex        移到指定 0-based 列序号
 - `row.query` 新增 `scope=current_view`、`logic=or`、`sort`、`rowIds` 和 `includeComputed`；`current_view` 会遵循当前筛选、排序、分组与折叠可见状态。
 - `field.duplicate` 可安全复制字段配置，并可选择复制 Cell 值与 Cell Link。
 - `field.options.*` 管理单选/多选 Option；删除仍被引用的 Option 时默认阻止，需显式 `clearValues=true`。
-- `field.configure_ai` 成为 AI Text / AI Image / AI Video 的安全配置入口；`field.update` 不再允许直接 patch `aiTextConfig / aiImageConfig / aiVideoConfig`。
+- `field.configure_ai` 成为 AI Text / AI Image / AI Video 的安全配置入口；`field.update` 不再允许直接 patch `aiTextConfig / aiImageConfig / aiVideoConfig`。图片字段的 `loraProfiles` 支持已登记 Profile ID 或 `{字段名}`，引用值可用逗号、分号或换行提供多个 ID。
 - `cell.get_meta / cell.link / cell.unlink` 让 Agent 能在写入前识别并管理 Cell Link。
-- `generation.get_capabilities` 只返回已配置 Provider / Model 的非敏感信息，不返回 Key。
-- `generation.preview` 返回最终模型、Provider、凭据可用性、Prompt、媒体 Crop/Trim、视频参数、输出文件名/目录、费用可能性与阻塞原因。
+- `generation.get_capabilities` 只返回已配置 Provider / Model 的非敏感信息，不返回 Key；ComfyUI workflow 还返回 `modelRequirements / loraProfiles / aliasLoraProfiles / promptDefaults / promptPolicy`。`promptDefaults` 从实际工作流模板绑定节点自动提取；每个 LoRA Profile 的 `promptPolicy` 标明无自动词、前置触发词/默认词或后置词。
+- `generation.preview` 返回最终模型、Provider、凭据可用性、Prompt、媒体 Crop/Trim、视频参数、实际 LoRA Profile、输出文件名/目录、费用可能性与阻塞原因。Profile 未登记或与所选 workflow 不匹配时返回 `WORKFLOW_LORA_PROFILE_UNSUPPORTED`；分辨率不符合 Manifest 能力时返回 `WORKFLOW_RESOLUTION_UNSUPPORTED`。
+
+Qwen v2.7.7 示例：默认图片工作流启用保真层时，使用 `field.configure_ai` 写入 `model=qwen-image-2.1-local` 与 `loraProfiles=["consistency"]`；双图换脸使用 `model=qwen-image-2.1-face-local`，且必须提供恰好两张有效图片。两者共用 `0.5K / 1K / 1.5K / 2K` 分辨率范围。不要把本地 LoRA 文件名直接作为 Profile 传入。
 
 ## Phase 2 设计边界
 

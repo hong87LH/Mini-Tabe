@@ -17,6 +17,7 @@ import { parseSelectText, selectValueToText } from './lib/selectFieldConversion.
 import { executeTableActionRequest, getActionMetadata, getProjectFolders, preserveProjectFolders, appendProjectTables } from '../agent_api/table_action_api.js';
 import { removeNetworkJobPlaceholders } from '../network_job_cleanup.js';
 import { getFilterInsertDefaults, getGroupInsertDefaults, insertRecordsAtAnchor, matchesViewFilters } from './lib/filteredRowInsertion';
+import { isSupportedAttachmentDescriptor } from './lib/mediaFileTypes';
 
 const computeFormulaValue = (field: any, record: any, fields: any[]) => {
   if (!field.prompt) return '';
@@ -2582,7 +2583,7 @@ export default function App() {
 
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
       const type = e.dataTransfer.items[0].type;
-      if (type.startsWith('image/') || type.startsWith('video/') || type.startsWith('audio/')) {
+      if (isSupportedAttachmentDescriptor('', type)) {
         return; // do not show global overlay for media files
       }
     }
