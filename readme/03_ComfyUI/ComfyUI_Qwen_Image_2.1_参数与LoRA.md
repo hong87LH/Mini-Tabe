@@ -1,7 +1,7 @@
 # ComfyUI Qwen Image 2.1 参数、Face 与 LoRA
 
 适用工程：AI Table Studio v2.7.7 及兼容后续版本
-最后核对：2026-11-07
+最后核对：2026-11-15
 
 ## 1. 当前入口
 
@@ -47,6 +47,15 @@
 
 功能 LoRA 即使暂时没有注册项，也保留“+ 引用”入口。字段配置保存为现有 `loraProfiles` 数组中的 `{字段名}`；生成和 `generation.preview` 会按当前行解析字段值。一个字段可填写单个 Profile ID，也可用逗号、分号或换行分隔多个 ID。解析出的名称仍必须存在于当前 Workflow Manifest，未登记时返回 `WORKFLOW_LORA_PROFILE_UNSUPPORTED`，不会静默加载任意本地文件。
 
+当前人物 Profile：
+
+| Profile ID（字段值） | 界面显示名 | LoRA 文件 | 默认提示词 |
+|---|---|---|---|
+| `xiaoxue-a` | Xiaoxue A · High Bun | `Xiaoxue-A-high-bun-512-2250.safetensors` | 完整 Xiaoxue 身份、高盘发及保持结构提示词前置 |
+| `mumu-v02` | Mumu v02 | `Mumu-v02-step-2000.safetensors` | 完整 Mumu 身份及保持结构提示词前置 |
+
+字段引用识别的是 **Profile ID**，不是界面显示名，也不是 `.safetensors` 文件名。模型设置页标有“字段值”的复制按钮复制的就是可直接填写的 ID，例如 `xiaoxue-a`。ID 按 Manifest 精确匹配，建议保持小写和连字符不变。
+
 模型设置页的 ComfyUI Provider 会只读展示当前 Manifest 已登记的 LoRA：可配置 Profile 提供可复制的字段值，Face 等随工作流固定加载的 LoRA 标为“内置”并提供文件名复制。该清单不另建存储，避免与 Manifest 产生双份配置。
 
 ### LoRA 提示词模式
@@ -65,11 +74,24 @@ LoRA Profile 可独立声明提示词策略，工作流级默认提示词继续�
 ```
 
 - `prepend + trigger`：把短触发词放在用户提示词前面。
-- `prepend + default`：把 LoRA 建议的大段默认提示词放在用户提示词前面。
+- `prepend + default-prefix`：把 LoRA 建议的大段默认提示词放在用户提示词前面。
 - `append`：少数需要后置词的 LoRA 可放在用户提示词后面。
 - `none` 或不填写：完全不注入词汇，只使用用户提示词和字段引用。
 
 最终顺序为：工作流模板默认词 → LoRA 前置词/触发词 → 用户提示词 → LoRA 后置词。Face 的 `head_swap` 仍属于工作流模板默认词；注册表会从实际 Prompt 绑定节点自动抽取并在模型设置页显示，无需在 Manifest 重抄大段文字。只有 Workflow `promptPolicy.mode=append` 时该模板文字才标记为实际默认词；普通 Qwen 模板中的示例占位词不会误显示为生效提示词。
+
+### 后续功能 LoRA 的最小注册流程
+
+沿用默认 Qwen 2.1 基础模型且使用 `LoraLoaderModelOnly` 的 LoRA，不需要修改 Grid、Client、Action 或 `image_api.json`。正常只维护以下位置：
+
+1. 将权重登记到 `F:\01_AIGC\20_models`，并按现有规范建立/核验消费者 HardLink；权重不进入 Git。
+2. 编辑唯一注册源 `comfyui/workflows/qwen-image-2.1/manifest.json`：
+   - 在 `modelRequirements` 增加文件、目录、Hash、加载节点和 Profile 关联；
+   - 在 `loraProfiles` 增加稳定的 Profile ID、显示名、文件、默认强度和 `promptPolicy`。
+3. 在本文件“当前人物 Profile”或未来对应类别表中增加一行；单工作流安装路径有变化时再同步 workflow README，不另建重复注册说明。
+4. 同步 `F:\01_AIGC\20_models` 的模型链接登记表和维护指南，并运行 `npm run test:comfyui`、`npm run test:action-api`。
+
+只有以下情况才需要新增独立 workflow 包或修改模板 JSON：LoRA 使用不同加载节点/模型拓扑、固定多图语义、专属 conditioning 链，或不能安全插入默认 Qwen 模型管线。单纯更换 LoRA 文件、默认提示词、触发词或强度不属于这些情况。
 
 ## 4. Face 双图工作流
 

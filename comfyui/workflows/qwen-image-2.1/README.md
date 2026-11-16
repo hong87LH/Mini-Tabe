@@ -2,7 +2,7 @@
 
 本工作流属于**图片生成**，不属于 MiniMax 视频生成。一个 API 模板按实际引用数量路由：0 张文生图，1–5 张图生图；空引用跳过、不补齐、不复制参考图。5 张是本工程依据本机报告设置的运行上限，不代表模型理论上限。
 
-v2.7.7 起，默认 Qwen Manifest 额外登记可选 `consistency` LoRA Profile；双图换脸是独立的 `qwen-image-2.1-face` workflow。统一说明见 [`readme/03_ComfyUI/ComfyUI_Qwen_Image_2.1_参数与LoRA.md`](../../../readme/03_ComfyUI/ComfyUI_Qwen_Image_2.1_参数与LoRA.md)。
+v2.7.7 起，默认 Qwen Manifest 额外登记可选 `consistency` LoRA Profile；当前另登记 `xiaoxue-a`、`mumu-v02` 两个人物功能 Profile。双图换脸仍是独立的 `qwen-image-2.1-face` workflow。统一说明见 [`readme/03_ComfyUI/ComfyUI_Qwen_Image_2.1_参数与LoRA.md`](../../../readme/03_ComfyUI/ComfyUI_Qwen_Image_2.1_参数与LoRA.md)。
 
 ## 安装与版本
 
@@ -16,6 +16,9 @@ v2.7.7 起，默认 Qwen Manifest 额外登记可选 `consistency` LoRA Profile�
 | models/diffusion_models | qwen_image_2.1_int8_convrot.safetensors |
 | models/text_encoders | qwen3vl_8b_int8_convrot.safetensors |
 | models/vae | qwen_image_2.1_vae_bf16.safetensors |
+| models/loras（可选） | qwen-image-2.1-consistency.safetensors |
+| models/loras（可选） | Xiaoxue-A-high-bun-512-2250.safetensors |
+| models/loras（可选） | Mumu-v02-step-2000.safetensors |
 
 模型放子目录时须同步修改 `image_api.json` 对应文件名。更新后重启 ComfyUI。采用本机报告的 Python 3.13.14 / PyTorch 2.13.0+cu130 / RTX 4060 Laptop 8GB 组合验证，不要求其他安装者照搬所有版本。
 
@@ -28,6 +31,7 @@ v2.7.7 起，默认 Qwen Manifest 额外登记可选 `consistency` LoRA Profile�
 3. 无图片引用即文生图；在“原始图片”引用 `{商品图} {风格图}` 可图生图。明确提示词里第一张、第二张图片的作用；单元格里多张图片按传入顺序成为独立参考。
 4. 分辨率选 0.5K / 1K / 1.5K / 2K，或引用字段（例如 `{分辨率}`），单元格写 `0.5`、`1.5`、`2` 或带 K 写法。数值是 K 系数：resolution = 系数 × 1024，32 对齐，范围 0.5–2；不采用 H3 的裸 MP 单位。超出范围会报错，不静默升到 4K。
 5. 文生图使用比例字段；图生图若明确填写比例字段，则用 EmptyLatentImage 覆盖采样画布并按该比例生成；未填写比例字段时，继续按第一张参考图原始比例生成。
+6. 功能 LoRA 可固定选择或引用字段。`xiaoxue-a`、`mumu-v02` 会先注入各自完整默认提示词，再追加表格输入、智能文本或分析 Skill 输出；其中 Xiaoxue 保留自带高盘发基底，不执行发型文本剔除路由。
 
 2K 表示约 2048² 像素的面积等级，不是长边限制。方图 0.5/1/1.5/2K 分别为 512/1024/1536/2048；其他比例宽高按面积计算并 32 对齐。参考图在进入编码器前按同一等级等比缩放，始终不使用 resolution=0 的原尺寸路径。
 
@@ -93,5 +97,7 @@ v2.7.7 起，默认 Qwen Manifest 额外登记可选 `consistency` LoRA Profile�
 - `generation.get_capabilities` 可读取模型要求、Profile 和兼容别名映射。
 - `generation.preview` 回显实际启用的 `loraProfiles`，并阻止未登记或与所选 workflow 不匹配的 Profile。
 - 当前协议回归基线为 31 项；本节是当前维护状态，上方 17/21 项数字保留为历史接入记录。
+
+2026-11-15 补充：Manifest 已登记 Xiaoxue 与 Mumu 人物 Profile。字段值、提示词顺序及后续最小注册流程统一维护在上方链接的“参数、Face 与 LoRA”文档，不在本 README 重复展开。
 
 用户同一2048×2048参考图、25步对照：系数1输出1024×1024，截图耗时57.61秒；系数2输出2048×2048，截图耗时426.27秒，约7.40倍。已核验原PNG尺寸和内嵌参数，两次参考内容标识相同，seed不同。这是单次实际观察，不能当固定性能倍率或同seed画质实验。当前图生图与多参图生图默认适合保留构图的编辑；若明确指定比例，则会覆盖画布比例。这不是模型理论能力的完整边界。

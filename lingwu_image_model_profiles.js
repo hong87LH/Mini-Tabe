@@ -1,6 +1,6 @@
 // Shared by the image UI and provider adapters. Missing settings preserve legacy defaults.
 export function normalizeImageControls(params = {}) {
-  const modeAliases = { auto: 'standard', high: 'enhanced', standard: 'standard', '标准': 'standard', enhanced: 'enhanced', '增强': 'enhanced' };
+  const modeAliases = { auto: 'standard', high: 'enhanced', standard: 'standard', '标准': 'standard', enhanced: 'enhanced', '增强': 'enhanced', highspeed: 'enhanced', '极速': 'enhanced' };
   const qualityAliases = { auto: 'auto', '自动': 'auto', high: 'high', '高': 'high', max: 'max', '极致': 'max' };
   const mode = modeAliases[String(params.mode || 'standard').trim().toLowerCase()];
   const quality = qualityAliases[String(params.quality || 'auto').trim().toLowerCase()];
@@ -12,6 +12,8 @@ export function normalizeImageControls(params = {}) {
 export const isNano2ImageModel = model => ['gemini-3.1-flash-image-preview', 'gemini-3.1-flash-image', 'banana-2', 'banana-2.1'].includes(normalizeLingwuModelName(model));
 export const isTT25ImageModel = model => /^tt-image-2\.5(?:-(?:flare|sunburst))?(?:-token)?$/.test(normalizeLingwuModelName(model));
 export const isTT26ImageModel = model => /^tt-image-2\.6(?:-guan)?$/.test(normalizeLingwuModelName(model));
+export const isSeedream55ImageModel = model => normalizeLingwuModelName(model) === 'doubao-seedream-5-5-261028';
+export const isMinimaxH3ImageModel = model => normalizeLingwuModelName(model) === 'minimax-h3-image';
 
 const TT26_COMPLEXITY_ALIASES = {
   low: 'low', '低': 'low',
@@ -79,6 +81,8 @@ export function normalizeTT26ImageControls(params = {}, model = 'tt-image-2.6') 
 
 export function listLingwuImageModelProfiles() {
   return [
+    { family: 'seedream-5.5', models: ['doubao-seedream-5-5-261028'], outputFormats: ['png'], controls: ['size', 'aspect_ratio'], maxReferenceImages: 10 },
+    { family: 'minimax-h3-image', models: ['minimax-h3-image'], outputFormats: ['png'], controls: ['version', 'aspect_ratio', 'resolution'], maxReferenceImages: 16 },
     { family: 'tt-image-2.5', models: ['tt-image-2.5', 'tt-image-2.5-flare', 'tt-image-2.5-sunburst', 'tt-image-2.5-token', 'tt-image-2.5-flare-token', 'tt-image-2.5-sunburst-token'], outputFormats: ['png', 'jpeg', 'webp'], controls: ['version', 'quality'] },
     { family: 'tt-image-2.6', models: ['tt-image-2.6'], outputFormats: ['png', 'jpeg', 'webp', 'svg', 'gif'], controls: ['version', 'quality', 'complexity', 'output_format', 'frame_count', 'frame_duration_ms'] },
     { family: 'tt-image-2.6', models: ['tt-image-2.6-guan'], outputFormats: ['png', 'jpeg', 'webp', 'gif'], controls: ['version', 'quality', 'complexity', 'output_format', 'frame_count', 'frame_duration_ms'] }
@@ -87,6 +91,13 @@ export function listLingwuImageModelProfiles() {
 
 export function buildImageControlParams(model, params = {}, protocol = 'media') {
   const controls = normalizeImageControls(params);
+  if (isSeedream55ImageModel(model)) return { output_format: 'png' };
+  if (isMinimaxH3ImageModel(model)) {
+    return {
+      version: controls.mode === 'enhanced' ? 'highspeed' : 'standard',
+      output_format: 'png'
+    };
+  }
   if (isNano2ImageModel(model)) {
     const thinkingLevel = controls.mode === 'enhanced' ? 'high' : 'minimal';
     return protocol === 'gemini' ? { thinkingConfig: { thinkingLevel } } : { thinkingLevel };
@@ -112,6 +123,24 @@ export const LEGACY_LINGWU_PROFILE = {
 };
 
 export const LINGWU_IMAGE_MODEL_PROFILES = {
+  'doubao-seedream-5-5-261028': {
+    id: 'lingwu-doubao-seedream-5.5',
+    requestMode: 'seedream-5.5-media',
+    referenceProfileId: 'legacy-webp-q90-v1',
+    allowedImageSizes: ['1K', '1.5K', '2K'],
+    allowedAspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'],
+    outputFormats: ['png'],
+    maxReferenceImages: 10
+  },
+  'minimax-h3-image': {
+    id: 'lingwu-minimax-h3-image',
+    requestMode: 'minimax-h3-image-media',
+    referenceProfileId: 'legacy-webp-q90-v1',
+    allowedImageSizes: ['1K', '2K', '4K'],
+    allowedAspectRatios: ['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:1', '1:3'],
+    outputFormats: ['png'],
+    maxReferenceImages: 16
+  },
   'doubao-seedream-5-0-260128': {
     id: 'lingwu-doubao-seedream-5',
     requestMode: 'jimeng',
@@ -278,6 +307,42 @@ export function convert_to_jimeng(input) {
   return params;
 }
 
+function normalizeProfileEnum(value, allowed, fallback) {
+  const normalized = String(value || '').trim();
+  return allowed.includes(normalized) ? normalized : fallback;
+}
+
+function assertReferenceImageLimit(params, profile) {
+  if (Array.isArray(params.images) && params.images.length > profile.maxReferenceImages) {
+    throw new Error(`${profile.id} 最多支持 ${profile.maxReferenceImages} 张参考图`);
+  }
+}
+
+export function buildSeedream55Params(input, profile = LINGWU_IMAGE_MODEL_PROFILES['doubao-seedream-5-5-261028']) {
+  const params = { ...input };
+  assertReferenceImageLimit(params, profile);
+  params.size = normalizeProfileEnum(String(params.size || params.imageSize || '').toUpperCase(), profile.allowedImageSizes, '2K');
+  params.aspect_ratio = normalizeProfileEnum(params.aspect_ratio || params.aspectRatio, profile.allowedAspectRatios, '1:1');
+  params.output_format = 'png';
+  delete params.imageSize;
+  delete params.aspectRatio;
+  delete params.outputFormat;
+  return params;
+}
+
+export function buildMinimaxH3ImageParams(input, profile = LINGWU_IMAGE_MODEL_PROFILES['minimax-h3-image']) {
+  const params = { ...input };
+  assertReferenceImageLimit(params, profile);
+  params.resolution = normalizeProfileEnum(String(params.resolution || params.imageSize || '').toUpperCase(), profile.allowedImageSizes, '4K');
+  params.aspect_ratio = normalizeProfileEnum(params.aspect_ratio || params.aspectRatio, profile.allowedAspectRatios, 'auto');
+  params.output_format = 'png';
+  params.version = params.version === 'highspeed' ? 'highspeed' : 'standard';
+  delete params.imageSize;
+  delete params.aspectRatio;
+  delete params.outputFormat;
+  return params;
+}
+
 export function buildLingwuImageParams({ model, params }) {
   const profile = getLingwuImageModelProfile(model);
   const input = { ...(params || {}) };
@@ -304,6 +369,14 @@ export function buildLingwuImageParams({ model, params }) {
 
   if (profile.requestMode === 'jimeng') {
     return convert_to_jimeng(input);
+  }
+
+  if (profile.requestMode === 'seedream-5.5-media') {
+    return buildSeedream55Params(input, profile);
+  }
+
+  if (profile.requestMode === 'minimax-h3-image-media') {
+    return buildMinimaxH3ImageParams(input, profile);
   }
 
   if (profile.requestMode === 'tt-media' && input.output_format === 'gif') {

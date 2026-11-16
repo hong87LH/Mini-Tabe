@@ -1,4 +1,4 @@
-import { normalizeImageControls, buildImageControlParams, getTTImageModelCapabilities, isTT26ImageModel, listLingwuImageModelProfiles } from '../../lingwu_image_model_profiles.js';
+import { normalizeImageControls, buildImageControlParams, getLingwuImageModelProfile, getTTImageModelCapabilities, isMinimaxH3ImageModel, isSeedream55ImageModel, isTT26ImageModel, listLingwuImageModelProfiles } from '../../lingwu_image_model_profiles.js';
 import { composeLoraProfilePrompt, composeRegisteredWorkflowPrompt } from '../../comfyui/lora_prompt_policy.js';
 import { getFirstRetouchSourceItem, getRetouchCropAspectRatio, nearestImageAspectRatio, imageRatioRequest, retouchReferenceImages } from '../lib/retouchAspectRatio.js';
 import { reconcileNetworkJobCells } from '../lib/networkJobReconciliation';
@@ -6778,12 +6778,27 @@ function HeaderCell({
   const selectedFunctionalLora = (draftAiImageConfig.loraProfiles || [])
     .find(profile => profile !== 'consistency') || '';
   const isTT26ImageConfig = isTT26ImageModel(configuredImageModel);
+  const isSeedream55ImageConfig = isSeedream55ImageModel(configuredImageModel);
+  const isMinimaxH3ImageConfig = isMinimaxH3ImageModel(configuredImageModel);
   const showExtendedImageControls = isReferencedImageModel || isTT26ImageConfig;
   const tt26Capabilities = getTTImageModelCapabilities(isTT26ImageModel(configuredImageModel) ? configuredImageModel : 'tt-image-2.6');
   const selectedOutputFormat = String(draftAiImageConfig.outputFormat || 'png').toLowerCase();
   const isReferencedOutputFormat = hasFieldReference(draftAiImageConfig.outputFormat);
   const isGifOutput = isTT26ImageConfig && !isReferencedImageModel && !isReferencedOutputFormat && selectedOutputFormat === 'gif';
-  const imageResolutionOptions = isQwenImageConfig ? ['0.5k', '1k', '1.5k', '2k'] : ['1k', '2k', '4k'];
+  const lingwuImageModelProfile = getLingwuImageModelProfile(configuredImageModel);
+  const imageResolutionOptions = isQwenImageConfig
+    ? ['0.5k', '1k', '1.5k', '2k']
+    : (lingwuImageModelProfile.allowedImageSizes || ['1K', '2K', '4K']).map((value: string) => value.toLowerCase());
+  const imageAspectRatioOptions = lingwuImageModelProfile.allowedAspectRatios || ['1:1', '16:9', '9:16', '4:3', '3:4'];
+  const imageModelControls: Array<{ key: 'mode' | 'quality' | 'complexity'; label: string; fallback: string; options: string[][] }> = isSeedream55ImageConfig
+    ? []
+    : isMinimaxH3ImageConfig
+      ? [{ key: 'mode', label: '模型版本', fallback: 'standard', options: [['standard', 'standard'], ['highspeed', 'highspeed']] }]
+      : [
+          { key: 'mode', label: '生成模式', fallback: 'standard', options: [['standard', 'auto'], ['enhanced', 'high']] },
+          { key: 'quality', label: '画质', fallback: 'auto', options: [['auto', 'auto'], ['high', 'high'], ['max', 'max']] },
+          ...(showExtendedImageControls ? [{ key: 'complexity' as const, label: '复杂度', fallback: 'medium', options: [['low', 'low'], ['medium', 'mid'], ['high', 'high']] }] : [])
+        ];
   const [draftAiVideoConfig, setDraftAiVideoConfig] = useState(field.aiVideoConfig || { duration: '10', resolution: '1080P', ratio: '16:9', sound: 'false', mode: 'fast' });
   const [draftAiTextConfig, setDraftAiTextConfig] = useState(field.aiTextConfig || {});
   const [availableSkills, setAvailableSkills] = useState<any[]>([]);
@@ -7342,14 +7357,10 @@ function HeaderCell({
                                   onChange={e => setDraftAiImageConfig(prev => ({ ...prev, ratio: e.target.value }))}
                                >
                                   {isQwenImageConfig && <option value="">自动（图生图跟随首图）</option>}
-                                  {!['1:1', '16:9', '9:16', '4:3', '3:4', ''].includes(draftAiImageConfig.ratio || (isQwenImageConfig ? '' : '1:1')) && (
+                                  {!imageAspectRatioOptions.includes(draftAiImageConfig.ratio || (isQwenImageConfig ? '' : '1:1')) && (
                                      <option value={draftAiImageConfig.ratio}>{draftAiImageConfig.ratio}</option>
                                   )}
-                                  <option value="1:1">1:1</option>
-                                  <option value="16:9">16:9</option>
-                                  <option value="9:16">9:16</option>
-                                  <option value="4:3">4:3</option>
-                                  <option value="3:4">3:4</option>
+                                  {imageAspectRatioOptions.map((value: string) => <option key={value} value={value}>{value === 'auto' ? '自动' : value}</option>)}
                                </select>
                                <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none">
                                  <ChevronDown className="w-3 h-3 text-gray-500" />
@@ -7388,12 +7399,8 @@ function HeaderCell({
                            />
                          </div>
                        </div>
-                       <div className={cn('grid gap-2', showExtendedImageControls ? 'grid-cols-3' : 'grid-cols-2')}>
-                         {([
-                           { key: 'mode', label: '生成模式', fallback: 'standard', options: [['standard', 'auto'], ['enhanced', 'high']] },
-                           { key: 'quality', label: '画质', fallback: 'auto', options: [['auto', 'auto'], ['high', 'high'], ['max', 'max']] },
-                           ...(showExtendedImageControls ? [{ key: 'complexity', label: '复杂度', fallback: 'medium', options: [['low', 'low'], ['medium', 'mid'], ['high', 'high']] }] : [])
-                         ] as Array<{ key: 'mode' | 'quality' | 'complexity'; label: string; fallback: string; options: string[][] }>).map(control => (
+                       {imageModelControls.length > 0 && <div className={cn('grid gap-2', imageModelControls.length >= 3 ? 'grid-cols-3' : imageModelControls.length === 2 ? 'grid-cols-2' : 'grid-cols-1')}>
+                         {imageModelControls.map(control => (
                            <div key={control.key}>
                              <label className="block text-[10px] text-gray-500 mb-1">{control.label}</label>
                              <div className="flex items-stretch border border-gray-300 bg-white rounded">
@@ -7418,7 +7425,7 @@ function HeaderCell({
                              </div>
                            </div>
                          ))}
-                       </div>
+                       </div>}
                        {showExtendedImageControls && (
                          <div className="rounded border border-gray-200 bg-gray-50/60 px-2 py-1.5 space-y-2">
                            <div className="flex items-center justify-between gap-3">

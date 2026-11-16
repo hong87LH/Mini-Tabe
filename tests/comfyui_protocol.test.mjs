@@ -63,6 +63,24 @@ test('workflow registry extracts template prompts for user guidance and preview'
   assert.equal(qwen.loraProfiles.find(profile => profile.id === 'consistency').promptPolicy.mode, 'none');
 });
 
+test('Qwen character LoRA profiles prepend complete defaults and keep table text last', () => {
+  const qwen = listComfyUIWorkflows().find(item => item.id === 'qwen-image-2.1');
+  const xiaoxue = qwen.loraProfiles.find(profile => profile.id === 'xiaoxue-a');
+  const mumu = qwen.loraProfiles.find(profile => profile.id === 'mumu-v02');
+  assert.equal(xiaoxue.file, 'Xiaoxue-A-high-bun-512-2250.safetensors');
+  assert.equal(mumu.file, 'Mumu-v02-step-2000.safetensors');
+  assert.match(xiaoxue.promptPolicy.text, /high bun/);
+  assert.doesNotMatch(mumu.promptPolicy.text, /hair|bun/i);
+  assert.equal(
+    composeLoraProfilePrompt(loadComfyUIWorkflow('qwen-image-2.1-local').manifest, ['xiaoxue-a'], 'Use soft peach makeup.'),
+    `${xiaoxue.promptPolicy.text} Use soft peach makeup.`
+  );
+  assert.equal(
+    composeLoraProfilePrompt(loadComfyUIWorkflow('qwen-image-2.1-local').manifest, ['mumu-v02'], 'Add pearl earrings.'),
+    `${mumu.promptPolicy.text} Add pearl earrings.`
+  );
+});
+
 test('reference router rejects empty inputs without changing the selected workflow', async () => {
   const client = new ComfyUIClient('', 'http://127.0.0.1:1');
   await assert.rejects(() => client.createTask('minimax-h3-Ref-local', 'reference text only', {
@@ -490,6 +508,7 @@ test('image controls default to standard/auto and accept field display labels', 
   const {normalizeImageControls}=await import('../lingwu_image_model_profiles.js');
   assert.deepEqual(normalizeImageControls(),{mode:'standard',quality:'auto'});
   assert.deepEqual(normalizeImageControls({mode:'增强',quality:'极致'}),{mode:'enhanced',quality:'max'});
+  assert.deepEqual(normalizeImageControls({mode:'highspeed'}),{mode:'enhanced',quality:'auto'});
   assert.throws(()=>normalizeImageControls({mode:'{missing}'}),/模式/);
 });
 
@@ -533,6 +552,35 @@ test('image mode UI aliases preserve legacy controls and map provider contracts'
   assert.equal(buildLingwuImageParams({model:nano,params:{imageSize:'0.5K',quality:'max'}}).imageSize,'0.5K');
 });
 
+test('Seedream 5.5 and MiniMax H3 image use their media parameter contracts', async () => {
+  const {buildLingwuImageParams,getLingwuImageModelProfile,listLingwuImageModelProfiles}=await import('../lingwu_image_model_profiles.js');
+  const seedream='doubao-seedream-5-5-261028';
+  const h3='minimax-h3-image';
+  assert.equal(getLingwuImageModelProfile(seedream).maxReferenceImages,10);
+  assert.equal(getLingwuImageModelProfile(h3).maxReferenceImages,16);
+  assert.deepEqual(
+    buildLingwuImageParams({model:seedream,params:{imageSize:'1.5K',aspectRatio:'21:9',outputFormat:'jpeg',images:['ref.png'],mode:'high',quality:'max'}}),
+    {images:['ref.png'],size:'1.5K',aspect_ratio:'21:9',output_format:'png'}
+  );
+  assert.deepEqual(
+    buildLingwuImageParams({model:h3,params:{imageSize:'4K',aspectRatio:'3:1',outputFormat:'webp',images:['ref.png'],mode:'high',quality:'max'}}),
+    {images:['ref.png'],version:'highspeed',output_format:'png',resolution:'4K',aspect_ratio:'3:1'}
+  );
+  assert.deepEqual(buildLingwuImageParams({model:h3,params:{}}),{version:'standard',output_format:'png',resolution:'4K',aspect_ratio:'auto'});
+  assert.equal(buildLingwuImageParams({model:seedream,params:{outputFormat:'webp'}}).output_format,'png');
+  assert.equal(buildLingwuImageParams({model:h3,params:{outputFormat:'jpeg'}}).output_format,'png');
+  assert.throws(()=>buildLingwuImageParams({model:seedream,params:{images:Array(11).fill('ref.png')}}),/最多支持 10 张/);
+  assert.throws(()=>buildLingwuImageParams({model:h3,params:{images:Array(17).fill('ref.png')}}),/最多支持 16 张/);
+  const seedreamCapabilities=listLingwuImageModelProfiles().find(profile=>profile.models.includes(seedream));
+  const h3Capabilities=listLingwuImageModelProfiles().find(profile=>profile.models.includes(h3));
+  assert.deepEqual(seedreamCapabilities.outputFormats,['png']);
+  assert.deepEqual(seedreamCapabilities.controls,['size','aspect_ratio']);
+  assert.equal(seedreamCapabilities.maxReferenceImages,10);
+  assert.deepEqual(h3Capabilities.outputFormats,['png']);
+  assert.deepEqual(h3Capabilities.controls,['version','aspect_ratio','resolution']);
+  assert.equal(h3Capabilities.maxReferenceImages,16);
+});
+
 test('image adapters submit exact model and controls to local mock transport, including references', async () => {
   const {LingwuClient}=await import('../lingwu_client.js');
   const {buildLingwuImageParams}=await import('../lingwu_image_model_profiles.js');
@@ -545,7 +593,7 @@ test('image adapters submit exact model and controls to local mock transport, in
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try {
     const client=new LingwuClient('mock-only',`http://127.0.0.1:${server.address().port}`);
-    for(const model of ['tt-image-2.5','tt-image-2.6','tt-image-2.6-guan','banana-2.1','gemini-3.1-flash-image-preview','banana-pro','gpt-image-2','gpt-image-2-guan','doubao-seedream-5-0-260128']) {
+    for(const model of ['tt-image-2.5','tt-image-2.6','tt-image-2.6-guan','banana-2.1','gemini-3.1-flash-image-preview','banana-pro','gpt-image-2','gpt-image-2-guan','doubao-seedream-5-0-260128','doubao-seedream-5-5-261028','minimax-h3-image']) {
       for(const images of [[],['https://example.invalid/reference.png']]) {
         const params=buildLingwuImageParams({model,params:{imageSize:'1K',aspectRatio:'1:1',mode:'high',quality:'max',images}});
         await client.createTask(model,'test',params,1);
@@ -566,7 +614,7 @@ test('image adapters submit exact model and controls to local mock transport, in
         }
       }
     }
-    assert.equal(captured.length,18);
+    assert.equal(captured.length,22);
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
 
@@ -736,6 +784,29 @@ test('Qwen consistency profile reuses the default 0-5 image route and keeps the 
     images: ['base.png'],
     loraProfiles: ['unregistered-lora']
   }), /未登记 LoRA Profile/);
+});
+
+test('Qwen character profiles inject the registered LoRA and submit composed prompts', async () => {
+  const client = new ComfyUIClient('', 'http://127.0.0.1:1');
+  client.uploadImage = async image => image;
+  const submitted = [];
+  client.request = async (_url, options) => {
+    submitted.push(JSON.parse(options.body).prompt);
+    return { json: async () => ({ prompt_id: 'qwen-character-lora-mock', node_errors: {} }) };
+  };
+  await client.createTask('qwen-image-2.1-local', 'Use soft peach makeup.', {
+    images: ['base.png'], loraProfiles: ['xiaoxue-a']
+  });
+  await client.createTask('qwen-image-2.1-local', 'Add pearl earrings.', {
+    images: ['base.png'], loraProfiles: ['mumu-v02']
+  });
+  assert.equal(submitted[0]['2000'].inputs.lora_name, 'Xiaoxue-A-high-bun-512-2250.safetensors');
+  assert.match(submitted[0]['7'].inputs.prompt, /^Change the person's facial identity to Xiaoxue.*high bun\./);
+  assert.match(submitted[0]['7'].inputs.prompt, /background\. Use soft peach makeup\.$/);
+  assert.deepEqual(submitted[0]['2'].inputs.model, ['2000', 0]);
+  assert.equal(submitted[1]['2000'].inputs.lora_name, 'Mumu-v02-step-2000.safetensors');
+  assert.match(submitted[1]['7'].inputs.prompt, /^Change the person's facial identity to Mumu\./);
+  assert.match(submitted[1]['7'].inputs.prompt, /background\. Add pearl earrings\.$/);
 });
 
 test('workflow registry exposes machine-readable model and LoRA maintenance requirements', () => {

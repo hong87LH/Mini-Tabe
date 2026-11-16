@@ -105,6 +105,30 @@
       "inputName": "lora_name",
       "required": false,
       "profile": "consistency"
+    },
+    {
+      "id": "qwen21-xiaoxue-a",
+      "kind": "lora",
+      "directory": "models/loras",
+      "file": "Xiaoxue-A-high-bun-512-2250.safetensors",
+      "source": "local://F:/01_AIGC/20_models/qwen image 2.1/trans_lora/Xiaoxue-A-high-bun-512-2250.safetensors",
+      "sha256": "e00ddb918b9b6eaae4ab3e104b4c6c84fb78ea8ecf393ae2b446507ebe7cdbb9",
+      "loaderNodeType": "LoraLoaderModelOnly",
+      "inputName": "lora_name",
+      "required": false,
+      "profile": "xiaoxue-a"
+    },
+    {
+      "id": "qwen21-mumu-v02",
+      "kind": "lora",
+      "directory": "models/loras",
+      "file": "Mumu-v02-step-2000.safetensors",
+      "source": "local://F:/01_AIGC/20_models/qwen image 2.1/trans_lora/Mumu-v02-step-2000.safetensors",
+      "sha256": "01374cc03afb8787bef6dadc68e8ded1aeb02cac434a92dcdf47cc306ba405b",
+      "loaderNodeType": "LoraLoaderModelOnly",
+      "inputName": "lora_name",
+      "required": false,
+      "profile": "mumu-v02"
     }
   ],
   "bindings": {
@@ -121,6 +145,30 @@
       "promptPolicy": {
         "mode": "none",
         "kind": "none"
+      }
+    },
+    "xiaoxue-a": {
+      "name": "Xiaoxue A · High Bun",
+      "file": "Xiaoxue-A-high-bun-512-2250.safetensors",
+      "defaultStrength": 1,
+      "modelRequirementId": "qwen21-xiaoxue-a",
+      "promptPolicy": {
+        "mode": "prepend",
+        "kind": "default-prefix",
+        "text": "Change the person's facial identity to Xiaoxue and style the hair into a high bun. Keep the original pose, gaze, expression, clothing, lighting, framing and background.",
+        "separator": " "
+      }
+    },
+    "mumu-v02": {
+      "name": "Mumu v02",
+      "file": "Mumu-v02-step-2000.safetensors",
+      "defaultStrength": 1,
+      "modelRequirementId": "qwen21-mumu-v02",
+      "promptPolicy": {
+        "mode": "prepend",
+        "kind": "default-prefix",
+        "text": "Change the person's facial identity to Mumu. Keep the original pose, gaze, expression, clothing, lighting, framing and background.",
+        "separator": " "
       }
     }
   },

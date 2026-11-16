@@ -1,10 +1,12 @@
-# AI Table Studio v2.7.9 · Table Action API v0.1 · Phase 4.7
+# AI Table Studio v2.8.0 · Table Action API v0.1 · Phase 4.7
 
 这是从 v2.6.3 分出的 Agent API 探索分支。v2.6.5 / Phase 4.7 在既有协作、完整编辑和长任务能力之上，继续降低 Agent 的调用成本，并补齐“远端已经失联、UI 仍显示处理中”的 Job 专项清理能力。
 
-当前主工程产品版本为 **v2.7.9**，Action Definition 为 **1.4**，协议 v0.1 / phase4.7 保持不变。当前包含 91 个 Action（含项目文件夹管理扩展），以本地 action_definitions.js 为准。保存工程并重启 Electron 后加载新主进程和 preload。最新版本说明见 [v2.7.9 升级报告](../readme/90_版本记录/v2.7.9_图片模型引用参数精简.md)。
+当前主工程产品版本为 **v2.8.0**，Action Definition 为 **1.4**，协议 v0.1 / phase4.7 保持不变。当前包含 91 个 Action（含项目文件夹管理扩展），以本地 action_definitions.js 为准。保存工程并重启 Electron 后加载新主进程和 preload。最新版本说明见 [v2.8.0 升级报告](../readme/90_版本记录/v2.8.0_Qwen功能LoRA与图片模型扩展.md)。
 
 TT Image 2.6 可通过 `field.configure_ai` 配置 `complexity`、`outputFormat`、`frameCount`、`frameDurationMs`，四项均支持固定值或 `{字段名}`。生成前调用 `generation.preview`；`generation.get_capabilities` 的 `lingwuImageProfiles` 是模型别名、可用格式及参数能力的当前准确信息。`tt-image-2.6-guan` 不支持 SVG，预检会明确拒绝该组合。
+
+当前 `lingwuImageProfiles` 也登记 `doubao-seedream-5-5-261028`（最多10图、1K/1.5K/2K）与 `minimax-h3-image`（最多16图、standard/highspeed、1K/2K/4K）；两者固定输出 PNG，忽略普通位图格式字段。Qwen 默认工作流登记 `xiaoxue-a`、`mumu-v02` 人物 LoRA Profile；通过 `loraProfiles` 固定配置或字段引用，预览会校验 Profile ID 并回显实际选择。
 
 ## v2.6.7 列显示与冻结
 

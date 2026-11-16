@@ -24,6 +24,8 @@
 | `gemini-3.1-flash-image-preview`（Nano 2） | `imageSize` 0.5K/1K/2K/4K，`aspectRatio` 原值 | `thinkingLevel: minimal / high` | 不发送，API 无独立画质映射 | Gemini JPEG q95，Profile 上限14张 |
 | `gemini-3-pro-image-preview` | `imageSize` 1K/2K/4K，`aspectRatio` 原值 | 明确配置时透传 `mode: auto/high` | 明确配置时透传 `quality` | Gemini JPEG q95，Profile 上限14张 |
 | `doubao-seedream-5-0-260128` | `size: 2K/3K`，`aspect_ratio`；0.5/1/2K→2K，3/4K→3K | 明确配置时透传 | 明确配置时透传 | 普通 WebP q90 |
+| `doubao-seedream-5-5-261028` | `size: 1K/1.5K/2K`，`aspect_ratio` 支持 8 种常用比例 | 不发送 | 固定 `output_format: png`，忽略格式字段 | 普通 WebP q90，最多10张 |
+| `minimax-h3-image` | `resolution: 1K/2K/4K`，`aspect_ratio` 支持 auto、3:1、1:3 等 | `version: standard/highspeed` | 固定 `output_format: png`，不发送 quality | 普通 WebP q90，最多16张 |
 | `gpt-image-2`、`gpt-image-2-guan`、其他未登记专属模型 | 旧 `size` 精确/近似换算 | 明确配置时透传 | 明确配置时透传 | 普通 WebP q90 |
 
 未明确配置新参数的旧表：TT 默认 flare/auto，Nano 2 默认 minimal；其他模型保持原请求字段，不额外注入 mode/quality。透传不代表平台承诺支持这些字段，基础测试表用于人工验证渠道实际响应。参考图压缩质量 q90/q95 与生成 quality 是两个独立概念。
@@ -37,6 +39,8 @@ TT 2.5 兼容 `tt-image-2.5-token`、`tt-image-2.5-flare-token`、`tt-image-2.5-
 TT：`params = { size: "1024x1024", version: "sunburst", quality: "max" }`。
 
 Nano 2：`params = { imageSize: "1K", aspectRatio: "1:1", thinkingLevel: "high" }`。没有 `quality` 是正确行为；没有 `thinkingLevel` 才是模式未传递。
+
+即梦 5.5：`params = { size: "1.5K", aspect_ratio: "21:9", output_format: "png" }`。MiniMax H3 图像：`params = { resolution: "4K", aspect_ratio: "3:1", version: "highspeed", output_format: "png" }`。两条普通位图路线遵循表格统一 PNG 规则，不新增格式选择；TT 2.6 的 SVG/GIF 专属设置保持独立。
 
 本次依据用户提供的灵晤接口文档核对上述新字段。TT 比例分辨率按用户要求保留旧逻辑；不在本次新增其同步编辑协议或改写尺寸路径。
 
