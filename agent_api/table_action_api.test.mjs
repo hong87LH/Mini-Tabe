@@ -93,7 +93,7 @@ test('read capabilities and tables', () => {
   assert.equal(caps.ok, true);
   assert.equal(caps.data.phase, 'phase4.7');
   assert.equal(caps.data.appVersion, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
-  assert.equal(caps.data.actionDefinitionVersion, '1.4');
+  assert.equal(caps.data.actionDefinitionVersion, '1.7');
   assert.equal(caps.data.detail, 'summary');
   assert.deepEqual(Object.keys(caps.data.implementedActions[0]), ['name']);
   assert.equal(caps.data.features.actionDefinitions, true);
@@ -838,4 +838,46 @@ test('project moves support within-folder ordering and failed transactions are a
   const fail=run('transaction.execute',{actions:[{action:'project.delete',params:{projectId}},{action:'table.move_to_project',params:{tableId:'missing',projectId:null}}]});
   assert.equal(fail.ok,false);
   assert.deepEqual(ws.getSnapshot(),before);
+});
+
+test('smart crop actions expose shared presets and runtime-only preview/apply contracts', () => {
+  const ws = createInMemoryWorkspace(base);
+  const before = ws.getSnapshot();
+  const listed = ws.execute(request('media.list_crop_presets'));
+  assert.equal(listed.ok, true);
+  assert.equal(listed.data.runtimeAction, 'media.list_crop_presets');
+  const params = {
+    tableId: 'table_1',
+    presetId: 'face_swap_1_1',
+    overrides: { aspect: '3:4', aspectMode: 'fixed', headshot: { topMargin: 0.18, minTopMargin: 0.06, sideMargin: 0.12, shoulderDepth: 0.6 } },
+    targets: [{ rowId: 'rec_1', fieldId: 'fld_text', index: 0 }]
+  };
+  const preview = ws.execute(request('media.smart_crop_preview', params));
+  assert.equal(preview.ok, true);
+  assert.equal(preview.data.runtimeAction, 'media.smart_crop_preview');
+  assert.deepEqual(preview.data.params.overrides, params.overrides);
+  const confirmation = ws.execute(request('media.smart_crop_apply', params));
+  assert.equal(confirmation.ok, false);
+  assert.equal(confirmation.error.code, 'CONFIRMATION_REQUIRED');
+  const apply = ws.execute(request('media.smart_crop_apply', params, { confirmed: true }));
+  assert.equal(apply.ok, true);
+  assert.equal(apply.data.runtimeAction, 'media.smart_crop_apply');
+  assert.deepEqual(ws.getSnapshot(), before);
+});
+
+test('smart crop HTTP schema accepts safe temporary overrides and rejects internal or unsafe fields', () => {
+  const schema = JSON.parse(fs.readFileSync(new URL('./table_action_api_v0.1.schema.json', import.meta.url), 'utf8'));
+  const validate = new Ajv({ allErrors: true, jsonPointers: true, schemaId: 'auto' }).compile(schema);
+  const baseParams = {
+    tableId: 'table_1',
+    presetId: 'face_swap_1_1',
+    targets: [{ rowId: 'rec_1', fieldId: 'fld_media', index: 0 }]
+  };
+  assert.equal(validate(request('media.smart_crop_preview', {
+    ...baseParams,
+    presetId: 'shorts_skirt_3_4',
+    overrides: { aspect: '3:4', aspectMode: 'approximate', aspectCandidates: ['1:1', '3:4', '4:3'], framing: { start: 'above_waist', end: 'above_knee' } }
+  })), true);
+  assert.equal(validate(request('media.smart_crop_preview', { ...baseParams, overrides: { strategy: 'anatomy' } })), false);
+  assert.equal(validate(request('media.smart_crop_preview', { ...baseParams, overrides: { headshot: { topMargin: 1.5 } } })), false);
 });

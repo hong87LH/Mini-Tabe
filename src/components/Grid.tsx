@@ -9,6 +9,7 @@ import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
 import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste, Maximize2, RefreshCw } from 'lucide-react';
 import { reviewLocalPath, isReviewImage, isThumbnailVisible, refreshReviewImages, loadFreshReviewThumbnail, restoreCropViewport, SYSTEM_THUMBNAIL_SIZE, requestSystemThumbnail } from '../lib/reviewMedia';
+import { buildSmartCropCellUpdates, isSmartCropImageItem, listSmartCropPresets, normalizeSmartCropItems, solveSmartCropTargets, SmartCropPreset, SmartCropTarget } from '../lib/smartCrop';
 import { getMediaFileInfo, isInlinePreviewableProfessionalMedia, isProfessionalMedia, isSupportedAttachmentFile, MEDIA_FILE_ACCEPT } from '../lib/mediaFileTypes';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
@@ -455,7 +456,10 @@ const ZoomableImage = ({
 
   const restoreSavedCropView = React.useCallback((crop: any, image = imgRef.current) => {
     if (!crop || !image || image.clientWidth <= 0 || image.clientHeight <= 0) return;
-    const ratio = Number(crop.ratio) || 1;
+    const ratio = crop.unit === 'ratio'
+      ? (Number(crop.width) * image.naturalWidth) / (Number(crop.height) * image.naturalHeight)
+      : Number(crop.ratio) || 1;
+    if (Number.isFinite(ratio) && ratio > 0) setCropRatio(ratio);
     const maskW = ratio <= 1 ? 845 * ratio : 845;
     const maskH = ratio > 1 ? 845 / ratio : 845;
     const restored = restoreCropViewport(crop, image.clientWidth, image.clientHeight, maskW, maskH);
@@ -844,7 +848,7 @@ const ZoomableImage = ({
     setActiveAnnotationId(null);
     if (sourceViewMode !== 'gallery' && item.cropData) {
         restoreSavedCropView(item.cropData);
-        setCropRatio(item.cropData.ratio || 1);
+        if (item.cropData.ratio) setCropRatio(item.cropData.ratio);
         setIsCropMode(true);
         setIsOutpaintMode(item.cropData.isOutpaint || false);
     } else {
@@ -1317,7 +1321,7 @@ const ZoomableImage = ({
          </button>
          <button onClick={(e) => { e.stopPropagation();
            if (!isCropMode && item.cropData) {
-             setCropRatio(item.cropData.ratio || 1);
+             if (item.cropData.ratio) setCropRatio(item.cropData.ratio);
              setIsOutpaintMode(item.cropData.isOutpaint || false);
              restoreSavedCropView(item.cropData);
            } else if (isCropMode && sourceViewMode === 'gallery') {
@@ -2886,18 +2890,27 @@ const getBase64ImageParts = async (templateStr: string, fields: Field[], record:
                   const cropped = await new Promise<{b64:string, mime:string}>((resolve) => {
                      const img = new Image();
                      img.onload = () => {
-                        if (!crop.imgW || !crop.imgH || !crop.naturalW || !crop.naturalH || !crop.scale || !crop.maskW || !crop.maskH) {
-                           resolve({b64: b64 as string, mime});
-                           return;
+                        let naturalCropX: number;
+                        let naturalCropY: number;
+                        let naturalCropW: number;
+                        let naturalCropH: number;
+                        if (crop.unit === 'ratio') {
+                           naturalCropX = Number(crop.x) * img.naturalWidth;
+                           naturalCropY = Number(crop.y) * img.naturalHeight;
+                           naturalCropW = Number(crop.width) * img.naturalWidth;
+                           naturalCropH = Number(crop.height) * img.naturalHeight;
+                        } else {
+                           if (!crop.imgW || !crop.imgH || !crop.naturalW || !crop.naturalH || !crop.scale || !crop.maskW || !crop.maskH) {
+                              resolve({b64: b64 as string, mime});
+                              return;
+                           }
+                           const cropX = crop.imgW * crop.scale / 2 - crop.x - crop.maskW / 2;
+                           const cropY = crop.imgH * crop.scale / 2 - crop.y - crop.maskH / 2;
+                           naturalCropX = (cropX / crop.scale) * (crop.naturalW / crop.imgW);
+                           naturalCropY = (cropY / crop.scale) * (crop.naturalH / crop.imgH);
+                           naturalCropW = (crop.maskW / crop.scale) * (crop.naturalW / crop.imgW);
+                           naturalCropH = (crop.maskH / crop.scale) * (crop.naturalH / crop.imgH);
                         }
-                        
-                        const cropX = crop.imgW * crop.scale / 2 - crop.x - crop.maskW / 2;
-                        const cropY = crop.imgH * crop.scale / 2 - crop.y - crop.maskH / 2;
-                        
-                        const naturalCropX = (cropX / crop.scale) * (crop.naturalW / crop.imgW);
-                        const naturalCropY = (cropY / crop.scale) * (crop.naturalH / crop.imgH);
-                        const naturalCropW = (crop.maskW / crop.scale) * (crop.naturalW / crop.imgW);
-                        const naturalCropH = (crop.maskH / crop.scale) * (crop.naturalH / crop.imgH);
 
                         const targetW = naturalCropW;
                         const targetH = naturalCropH;
@@ -3780,6 +3793,33 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
   };
 
   const [extraSelectedCells, setExtraSelectedCells] = useState<{ r: number, c: number }[]>([]);
+  const [smartCropPresets, setSmartCropPresets] = useState<SmartCropPreset[]>([]);
+  const [smartCropBusy, setSmartCropBusy] = useState(false);
+  const [smartCropStatus, setSmartCropStatus] = useState<{ kind: 'running' | 'success' | 'error'; message: string } | null>(null);
+  const smartCropStatusTimerRef = useRef<number | null>(null);
+
+  const showSmartCropStatus = (kind: 'running' | 'success' | 'error', message: string, autoClose = false) => {
+    if (smartCropStatusTimerRef.current !== null) window.clearTimeout(smartCropStatusTimerRef.current);
+    setSmartCropStatus({ kind, message });
+    if (autoClose) {
+      smartCropStatusTimerRef.current = window.setTimeout(() => {
+        setSmartCropStatus(null);
+        smartCropStatusTimerRef.current = null;
+      }, kind === 'error' ? 7000 : 4000);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    listSmartCropPresets()
+      .then(value => { if (!cancelled) setSmartCropPresets(value); })
+      .catch(error => console.error('Smart crop presets failed to load:', error));
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => () => {
+    if (smartCropStatusTimerRef.current !== null) window.clearTimeout(smartCropStatusTimerRef.current);
+  }, []);
 
 
   const [selectionStart, setSelectionStart] = useState<{ r: number, c: number } | null>(null);
@@ -3797,6 +3837,125 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
   };
 
   const selectionBox = getSelectionBox();
+
+  const collectSmartCropTargets = (cells: Array<{ r: number; c: number }>): SmartCropTarget[] => {
+    const targets: SmartCropTarget[] = [];
+    const seen = new Set<string>();
+    for (const cell of cells) {
+      const record = data.records[cell.r];
+      const field = visibleFields[cell.c];
+      if (!record || !field || !['attachment', 'aiImage'].includes(field.type)) continue;
+      const items = normalizeSmartCropItems(record[field.id]);
+      items.forEach((item, index) => {
+        const key = `${record.id}\u0000${field.id}\u0000${index}`;
+        if (!seen.has(key) && isSmartCropImageItem(item)) {
+          seen.add(key);
+          targets.push({ rowId: record.id, fieldId: field.id, index, item });
+        }
+      });
+    }
+    return targets;
+  };
+
+  const resolveAgentSmartCropTargets = (params: any): SmartCropTarget[] => {
+    if (params?.tableId && params.tableId !== tableId) throw new Error(`Smart crop runtime is mounted for ${tableId}, not ${params.tableId}`);
+    const requested = Array.isArray(params?.targets) ? params.targets : [];
+    const cells: Array<{ r: number; c: number }> = [];
+    if (requested.length) {
+      for (const target of requested) {
+        const r = data.records.findIndex(record => record.id === target.rowId);
+        const c = visibleFields.findIndex(field => field.id === target.fieldId);
+        if (r >= 0 && c >= 0) cells.push({ r, c });
+      }
+    } else {
+      const rowIds = Array.isArray(params?.rowIds) && params.rowIds.length ? new Set(params.rowIds.map(String)) : null;
+      const fieldIds = Array.isArray(params?.fieldIds) && params.fieldIds.length ? new Set(params.fieldIds.map(String)) : null;
+      data.records.forEach((record, r) => {
+        if (rowIds && !rowIds.has(record.id)) return;
+        visibleFields.forEach((field, c) => {
+          if (!fieldIds || fieldIds.has(field.id)) cells.push({ r, c });
+        });
+      });
+    }
+    let targets = collectSmartCropTargets(cells);
+    if (requested.length) {
+      const allowed = new Set(requested.map((target: any) => `${target.rowId}\u0000${target.fieldId}\u0000${target.index ?? '*'}`));
+      targets = targets.filter(target => allowed.has(`${target.rowId}\u0000${target.fieldId}\u0000*`) || allowed.has(`${target.rowId}\u0000${target.fieldId}\u0000${target.index}`));
+    }
+    return targets;
+  };
+
+  const previewAgentSmartCrop = async (params: any) => {
+    const targets = resolveAgentSmartCropTargets(params);
+    const result = await solveSmartCropTargets(targets, String(params?.presetId || ''), undefined, params?.overrides);
+    return {
+      preset: result.preset,
+      overrides: result.overrides,
+      total: result.total,
+      ready: result.changes.map(change => ({
+        rowId: change.rowId,
+        fieldId: change.fieldId,
+        index: change.index,
+        effectiveAspect: change.cropData?.smartCrop?.effectiveAspect,
+        aspectMode: change.cropData?.smartCrop?.aspectMode,
+        warnings: change.warnings
+      })),
+      failed: result.failures.map(failure => ({ rowId: failure.rowId, fieldId: failure.fieldId, index: failure.index, error: failure.error }))
+    };
+  };
+
+  const applyAgentSmartCrop = async (params: any) => {
+    const targets = resolveAgentSmartCropTargets(params);
+    const result = await solveSmartCropTargets(targets, String(params?.presetId || ''), undefined, params?.overrides);
+    return {
+      preset: result.preset,
+      overrides: result.overrides,
+      total: result.total,
+      applied: result.changes.length,
+      appliedItems: result.changes.map(change => ({
+        rowId: change.rowId,
+        fieldId: change.fieldId,
+        index: change.index,
+        effectiveAspect: change.cropData?.smartCrop?.effectiveAspect,
+        aspectMode: change.cropData?.smartCrop?.aspectMode
+      })),
+      failed: result.failures.map(failure => ({ rowId: failure.rowId, fieldId: failure.fieldId, index: failure.index, error: failure.error })),
+      updates: buildSmartCropCellUpdates(result.changes, data.records)
+    };
+  };
+
+  const applySmartCropToCells = async (cells: Array<{ r: number; c: number }>, presetId: string) => {
+    const targets = collectSmartCropTargets(cells);
+    setCellContextMenuState(null);
+    if (!targets.length) {
+      showSmartCropStatus('error', '所选单元格中没有可裁切的位图附件', true);
+      return;
+    }
+    setSmartCropBusy(true);
+    showSmartCropStatus('running', `正在识别人像并计算裁切… 0/${targets.length}`);
+    try {
+      const result = await solveSmartCropTargets(targets, presetId, progress => {
+        const prefix = progress.status === 'processing' ? '正在识别人像并计算裁切' : '正在写入裁切结果';
+        showSmartCropStatus('running', `${prefix}… ${progress.completed}/${progress.total}`);
+      });
+      const updates = buildSmartCropCellUpdates(result.changes, data.records);
+      if (updates.length && onUpdateRecordsBatch) {
+        onUpdateRecordsBatch(updates);
+      }
+      if (result.changes.length === 0) {
+        const reason = result.failures[0]?.error || '没有生成可用裁切结果';
+        showSmartCropStatus('error', `智能裁切未完成：${reason}`, true);
+      } else if (result.failures.length) {
+        showSmartCropStatus('error', `已裁切 ${result.changes.length}/${result.total}；跳过原因：${result.failures[0].error}`, true);
+      } else {
+        showSmartCropStatus('success', `智能裁切完成：已更新 ${result.changes.length} 张图片`, true);
+      }
+    } catch (error: any) {
+      showSmartCropStatus('error', `智能裁切失败：${error?.message || String(error)}`, true);
+    } finally {
+      setSmartCropBusy(false);
+    }
+  };
 
   const gridStateRef = useRef({ selectionStart, selectionEnd, isSelecting, selectionBox, extraSelectedCells });
   useEffect(() => {
@@ -5438,7 +5597,10 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
       queryRows: queryAgentRows,
       getGenerationCapabilities: getAgentGenerationCapabilities,
       preview: previewAgentGeneration,
-      run: runAgentGeneration
+      run: runAgentGeneration,
+      listCropPresets: async () => ({ presets: await listSmartCropPresets() }),
+      previewSmartCrop: previewAgentSmartCrop,
+      applySmartCrop: applyAgentSmartCrop
     });
     return () => onRegisterAgentGenerationApi(null);
   }, [onRegisterAgentGenerationApi, data, allRecords, modelSettings, tableId, viewMode, activeCell, selectionStart, selectionEnd, extraSelectedCells, visibleFields, visibleRowsInfo]);
@@ -6372,6 +6534,35 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         </>
       )}
 
+      {smartCropStatus && (
+        <div
+          className={cn(
+            "fixed bottom-6 right-6 z-[90] flex max-w-[420px] items-start gap-3 rounded-xl border bg-white px-4 py-3 shadow-xl",
+            smartCropStatus.kind === 'error' ? "border-red-200" : smartCropStatus.kind === 'success' ? "border-emerald-200" : "border-blue-200"
+          )}
+          role="status"
+          aria-live="polite"
+        >
+          {smartCropStatus.kind === 'running' ? (
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-blue-600" />
+          ) : smartCropStatus.kind === 'success' ? (
+            <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+          ) : (
+            <X className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+          )}
+          <div className="min-w-0 text-sm leading-5 text-gray-700">{smartCropStatus.message}</div>
+          {smartCropStatus.kind !== 'running' && (
+            <button
+              className="ml-1 shrink-0 rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              onClick={() => setSmartCropStatus(null)}
+              aria-label={lang === 'en' ? 'Close' : '关闭'}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
       {cellContextMenuState && (() => {
         const isVerticalSelection = selectionBox && selectionBox.maxR > selectionBox.minR && selectionBox.minC === selectionBox.maxC && extraSelectedCells.length === 0;
         
@@ -6400,12 +6591,23 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                 break;
             }
         }
+        const selectedSmartCropTargets = collectSmartCropTargets(allSelectedCellsList);
+        const selectedCropDataCount = selectedSmartCropTargets.filter(target => (
+          target.item && typeof target.item === 'object' && Object.prototype.hasOwnProperty.call(target.item, 'cropData')
+        )).length;
+        const groupedSmartCropPresets = smartCropPresets.reduce<Record<string, SmartCropPreset[]>>((groups, preset) => {
+          (groups[preset.group] ||= []).push(preset);
+          return groups;
+        }, {});
+        const smartCropSubmenuMaxHeight = Math.max(180, Math.min(520, window.innerHeight - 24));
+        const smartCropSubmenuOpensUp = cellContextMenuState.y > window.innerHeight / 2;
+        const smartCropSubmenuOpensLeft = cellContextMenuState.x + 220 + 260 > window.innerWidth - 12;
         
         return (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setCellContextMenuState(null)} onContextMenu={(e) => { e.preventDefault(); setCellContextMenuState(null); }}></div>
           <div 
-             className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg py-1 min-w-[200px] text-sm text-gray-700"
+             className="fixed z-50 w-[220px] bg-white border border-gray-200 rounded-lg shadow-xl py-1 text-sm text-gray-700"
              style={{
                 ...(cellContextMenuState.y + 200 > window.innerHeight ? { bottom: window.innerHeight - cellContextMenuState.y, top: 'auto' } : { top: cellContextMenuState.y }),
                 ...(typeof window !== 'undefined' && cellContextMenuState.x + 220 > window.innerWidth ? { right: Math.max(10, window.innerWidth - cellContextMenuState.x), left: 'auto' } : { left: Math.max(10, cellContextMenuState.x) })
@@ -6502,6 +6704,76 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
                    {lang === 'en' ? 'Batch Export Attachments' : '批量打包/导出附件'}
                 </div>
              </button>
+
+             {selectedSmartCropTargets.length > 0 && (
+               <div className="group/smartcrop">
+                 <button
+                   className="w-full px-4 py-2 hover:bg-blue-50 transition-colors flex items-center justify-between text-gray-700"
+                   disabled={smartCropBusy}
+                 >
+                   <span className="flex min-w-0 items-center">
+                     <Crop className="mr-2 h-4 w-4 shrink-0 text-blue-600" />
+                     <span>{lang === 'en' ? 'Smart crop' : '智能裁切'}</span>
+                     <span className="ml-2 rounded-full bg-gray-100 px-1.5 text-[11px] text-gray-500">{selectedSmartCropTargets.length}</span>
+                   </span>
+                   <ChevronRight className="h-4 w-4 text-gray-400" />
+                 </button>
+                 <div
+                   className={cn(
+                     "absolute z-[60] hidden w-[260px] overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-xl group-hover/smartcrop:block",
+                     smartCropSubmenuOpensUp ? "bottom-0" : "top-0",
+                     smartCropSubmenuOpensLeft ? "right-[calc(100%-1px)]" : "left-[calc(100%-1px)]"
+                   )}
+                   style={{ maxHeight: smartCropSubmenuMaxHeight }}
+                 >
+                   {(Object.entries(groupedSmartCropPresets) as Array<[string, SmartCropPreset[]]>).map(([group, presets]) => (
+                     <div key={group} className="py-1 first:pt-0">
+                       <div className="px-3 py-1 text-[11px] font-medium text-gray-400">{group}</div>
+                       {presets.map(preset => (
+                         <button
+                           key={preset.id}
+                           disabled={smartCropBusy}
+                           className="w-full truncate px-3 py-2 text-left text-gray-700 transition-colors hover:bg-blue-50 disabled:opacity-50"
+                           title={preset.description}
+                           onClick={() => applySmartCropToCells(allSelectedCellsList, preset.id)}
+                         >
+                           {preset.label}
+                         </button>
+                       ))}
+                     </div>
+                   ))}
+                 </div>
+               </div>
+             )}
+
+             {selectedCropDataCount > 0 && (
+               <button
+                 disabled={smartCropBusy}
+                 className="flex w-full items-center px-4 py-2 text-left text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50"
+                 onClick={() => {
+                   const changes = selectedSmartCropTargets.map(target => ({ ...target, cropData: null, warnings: [] }));
+                   const updates = buildSmartCropCellUpdates(changes as any, data.records).map(update => ({
+                     ...update,
+                     value: normalizeSmartCropItems(update.value).map(item => {
+                       if (!item || typeof item !== 'object') return item;
+                       const { cropData, ...rest } = item;
+                       return rest;
+                     })
+                   }));
+                   if (updates.length && onUpdateRecordsBatch) onUpdateRecordsBatch(updates);
+                   setCellContextMenuState(null);
+                   showSmartCropStatus('success', '已清除所选图片的裁切', true);
+                 }}
+               >
+                 <svg className="mr-2 h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                   <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+                   <path d="M2 6h14a2 2 0 0 1 2 2v14" />
+                   <path d="m7 7 10 10" />
+                 </svg>
+                 <span>{lang === 'en' ? 'Clear selected crops' : '清除所选裁切'}</span>
+               </button>
+             )}
+
              <button 
                 className="w-full text-left px-4 py-2 hover:bg-red-50 transition-colors flex items-center justify-between pointer-events-auto text-red-600 hover:text-red-700"
                 onClick={() => {

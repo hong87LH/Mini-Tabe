@@ -1516,7 +1516,12 @@ export default function App() {
            const isDryRun = payload?.request?.dryRun === true;
            if (response?.ok && runtimeAction && !isDryRun) {
               let runtimeData: any = null;
-              if (runtimeAction === 'context.get_current' || runtimeAction === 'row.query' || runtimeAction === 'generation.get_capabilities' || runtimeAction === 'generation.preview' || runtimeAction === 'generation.run') {
+              if (runtimeAction === 'context.get_current' || runtimeAction === 'row.query' || runtimeAction === 'generation.get_capabilities' || runtimeAction === 'generation.preview' || runtimeAction === 'generation.run' || runtimeAction === 'media.list_crop_presets' || runtimeAction === 'media.smart_crop_preview' || runtimeAction === 'media.smart_crop_apply') {
+                 const runtimeParams = response.data.params || {};
+                 if (runtimeAction.startsWith('media.smart_crop_') && runtimeParams.tableId && runtimeParams.tableId !== activeTableIdRef.current) {
+                    setActiveTableId(runtimeParams.tableId);
+                    await waitForAgentRuntimeTable(runtimeParams.tableId);
+                 }
                  const runtime = agentGenerationApiRef.current;
                  if (!runtime) {
                     const err: any = new Error('Interactive Agent runtime is unavailable. Open the target table in AI Table Studio and retry.');
@@ -1532,6 +1537,50 @@ export default function App() {
                     runtimeData = await runtime.getGenerationCapabilities();
                  } else if (runtimeAction === 'generation.preview') {
                     runtimeData = await runtime.preview(response.data.params);
+                 } else if (runtimeAction === 'media.list_crop_presets') {
+                    runtimeData = await runtime.listCropPresets();
+                 } else if (runtimeAction === 'media.smart_crop_preview') {
+                    runtimeData = await runtime.previewSmartCrop(runtimeParams);
+                 } else if (runtimeAction === 'media.smart_crop_apply') {
+                    const result = await runtime.applySmartCrop(runtimeParams);
+                    const updates = Array.isArray(result?.updates) ? result.updates : [];
+                    const currentTables = tablesRef.current;
+                    const tableIndex = currentTables.findIndex((table: any) => table.id === runtimeParams.tableId);
+                    if (tableIndex < 0) {
+                       const err: any = new Error(`Table not found: ${runtimeParams.tableId}`);
+                       err.code = 'TABLE_NOT_FOUND';
+                       throw err;
+                    }
+                    const beforeTables = structuredClone(currentTables);
+                    const nextTables = structuredClone(currentTables);
+                    const targetTable = nextTables[tableIndex];
+                    for (const update of updates) {
+                       const row = targetTable.data.records.find((item: any) => item.id === update.recordId);
+                       if (row) row[update.fieldId] = update.value;
+                    }
+                    if (updates.length) {
+                       const nextRevision = workspaceRevisionRef.current + 1;
+                       await commitTablesFromAgent(nextTables, nextRevision);
+                       const undoToken = `undo_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+                       tableActionUndoRef.current.set(undoToken, {
+                          token: undoToken,
+                          beforeTables,
+                          afterTables: structuredClone(nextTables),
+                          beforeActiveTableId: activeTableIdRef.current,
+                          afterActiveTableId: activeTableIdRef.current,
+                          beforeRevision: nextRevision - 1,
+                          afterRevision: nextRevision,
+                          state: 'applied',
+                          effects: { rowsAffected: new Set(updates.map((item: any) => item.recordId)).size, cellsAffected: updates.length, mediaAffected: result.applied || updates.length }
+                       });
+                       tableActionUndoOrderRef.current = [...tableActionUndoOrderRef.current, undoToken].slice(-100);
+                       tableActionHistoryRevisionRef.current = nextRevision;
+                       response.undoToken = undoToken;
+                       response.workspaceRevision = nextRevision;
+                       runtimeData = { ...result, updates: undefined, workspaceChanged: true, revision: nextRevision, effects: { rowsAffected: new Set(updates.map((item: any) => item.recordId)).size, cellsAffected: updates.length, mediaAffected: result.applied || updates.length } };
+                    } else {
+                       runtimeData = { ...result, updates: undefined, workspaceChanged: false };
+                    }
                  } else {
                     runtimeData = await runtime.run(response.data.params);
                     if (!runtimeData?.idempotentReplay) {

@@ -56,7 +56,7 @@ Hong's AI Table Studio/
 
 ## Version Timeline
 
-### v2.5.x → v2.7.x
+### v2.5.x → v2.8.x
 
 ```text
 v2.5.0  ComfyUI 通用协议
@@ -90,6 +90,7 @@ v2.7.7  Qwen Face 双图工作流 / Consistency 保真增强 / LoRA Profile、�
 v2.7.8  TT Image 2.6 / PNG·SVG·GIF 输出 / 专业媒体附件、丢失状态与双应用打开
 v2.7.9  图片模型字段引用精简 / 按模型过滤参数 / GIF 默认参数 / Qwen 高保真
 v2.8.0  Qwen 人物功能 LoRA / 即梦 5.5 / MiniMax H3 图片模型扩展
+v2.8.2  智能裁切双模型轮廓 / 发顶与服装边缘保护 / 近似比例 / Agent 临时参数
 ```
 
 ### v2.4.x → v2.5.x
@@ -118,3 +119,5 @@ v2.5.7   图片、视频、音频附件分类导出
 - v2.7.9：精简图片模型字段引用界面，按当前行真实模型过滤复杂度与格式参数；引用 GIF 统一采用默认帧参数，动态 Qwen 默认加载高保真 LoRA，并兼容带点扩展名。详见 [更新说明](readme/90_版本记录/v2.7.9_图片模型引用参数精简.md)。
 
 - v2.8.0：正式登记 Xiaoxue、Mumu 人物功能 LoRA，支持默认提示词前置、表格文本追加与 Profile ID 字段引用；新增即梦 5.5、MiniMax H3 图片模型路由，普通位图统一输出 PNG，并同步 Action 能力和工作流维护资料。详见 [更新说明](readme/90_版本记录/v2.8.0_Qwen功能LoRA与图片模型扩展.md)。
+
+- v2.8.2：智能裁切升级为 PoseLandmarker 与独立 ImageSegmenter 双模型轮廓方案；头像保护真实发顶，服装读取语义横向边缘，支持固定/近似比例与 Agent 一次性覆盖参数。模型和 WASM 使用 Chromium HTTP Cache，失败时退回关键点方案。详见 [更新说明](readme/90_版本记录/v2.8.2_智能裁切双模型轮廓版.md)与 [HTML 使用指南](readme/Hongs_AI_Table_Studio_v2.8.2_完整使用指南.html)。

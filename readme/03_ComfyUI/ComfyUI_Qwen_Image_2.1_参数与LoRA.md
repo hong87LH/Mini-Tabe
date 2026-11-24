@@ -49,12 +49,14 @@
 
 当前人物 Profile：
 
-| Profile ID（字段值） | 界面显示名 | LoRA 文件 | 默认提示词 |
-|---|---|---|---|
-| `xiaoxue-a` | Xiaoxue A · High Bun | `Xiaoxue-A-high-bun-512-2250.safetensors` | 完整 Xiaoxue 身份、高盘发及保持结构提示词前置 |
-| `mumu-v02` | Mumu v02 | `Mumu-v02-step-2000.safetensors` | 完整 Mumu 身份及保持结构提示词前置 |
+| Profile ID（字段值） | 界面显示名 | LoRA 文件 | 默认强度 | 默认提示词 |
+|---|---|---|---:|---|
+| `xiaoxue-a` | Xiaoxue A · High Bun | `Xiaoxue-A-high-bun-512-2250.safetensors` | 1.0 | 完整 Xiaoxue 身份、高盘发及保持结构提示词前置 |
+| `mumu-v02` | Mumu v02 | `Mumu-v02-step-2000.safetensors` | 1.0 | 完整 Mumu 身份及保持结构提示词前置 |
+| `youzi-v01` | Youzi v01 · High Bun | `Youzi-v1-bun-40pairs-512-2250.safetensors` | 1.2 | 完整 Youzi 身份、高盘发、碎刘海及保持结构提示词前置 |
+| `mika-v01` | Mika v01 · Short Brown Hair | `Mika-v1-short-brown-512-2250.safetensors` | 1.2 | 完整 Mika 身份、短款深棕发及保持结构提示词前置 |
 
-字段引用识别的是 **Profile ID**，不是界面显示名，也不是 `.safetensors` 文件名。模型设置页标有“字段值”的复制按钮复制的就是可直接填写的 ID，例如 `xiaoxue-a`。ID 按 Manifest 精确匹配，建议保持小写和连字符不变。
+字段引用识别的是 **Profile ID**，不是界面显示名，也不是 `.safetensors` 文件名。模型设置页标有“字段值”的复制按钮复制的就是可直接填写的 ID，例如 `xiaoxue-a`、`youzi-v01`。ID 按 Manifest 精确匹配，建议保持小写和连字符不变。
 
 模型设置页的 ComfyUI Provider 会只读展示当前 Manifest 已登记的 LoRA：可配置 Profile 提供可复制的字段值，Face 等随工作流固定加载的 LoRA 标为“内置”并提供文件名复制。该清单不另建存储，避免与 Manifest 产生双份配置。
 
@@ -88,6 +90,8 @@ LoRA Profile 可独立声明提示词策略，工作流级默认提示词继续�
 2. 编辑唯一注册源 `comfyui/workflows/qwen-image-2.1/manifest.json`：
    - 在 `modelRequirements` 增加文件、目录、Hash、加载节点和 Profile 关联；
    - 在 `loraProfiles` 增加稳定的 Profile ID、显示名、文件、默认强度和 `promptPolicy`。
+
+`defaultStrength` 是每个 Profile 的独立默认模型权重，运行时写入动态 `LoraLoaderModelOnly.strength_model`；未填写时兼容默认值 `1`。它不需要新增表格字段，也不会改变其他 LoRA 的强度。
 3. 在本文件“当前人物 Profile”或未来对应类别表中增加一行；单工作流安装路径有变化时再同步 workflow README，不另建重复注册说明。
 4. 同步 `F:\01_AIGC\20_models` 的模型链接登记表和维护指南，并运行 `npm run test:comfyui`、`npm run test:action-api`。
 

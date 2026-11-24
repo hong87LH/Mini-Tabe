@@ -129,6 +129,30 @@
       "inputName": "lora_name",
       "required": false,
       "profile": "mumu-v02"
+    },
+    {
+      "id": "qwen21-youzi-v01",
+      "kind": "lora",
+      "directory": "models/loras",
+      "file": "Youzi-v1-bun-40pairs-512-2250.safetensors",
+      "source": "local://F:/01_AIGC/20_models/qwen image 2.1/trans_lora/Youzi-v1-bun-40pairs-512-2250.safetensors",
+      "sha256": "e60d2b2744c4f2d66e2728e8c3f89a0b30327e55671b77aabae1685d5a1880e6",
+      "loaderNodeType": "LoraLoaderModelOnly",
+      "inputName": "lora_name",
+      "required": false,
+      "profile": "youzi-v01"
+    },
+    {
+      "id": "qwen21-mika-v01",
+      "kind": "lora",
+      "directory": "models/loras",
+      "file": "Mika-v1-short-brown-512-2250.safetensors",
+      "source": "local://F:/01_AIGC/20_models/qwen image 2.1/trans_lora/Mika-v1-short-brown-512-2250.safetensors",
+      "sha256": "d4601fd24a03e504ab6f3d430d2f3266f007ba3a325a0d54920987aa81632928",
+      "loaderNodeType": "LoraLoaderModelOnly",
+      "inputName": "lora_name",
+      "required": false,
+      "profile": "mika-v01"
     }
   ],
   "bindings": {
@@ -168,6 +192,30 @@
         "mode": "prepend",
         "kind": "default-prefix",
         "text": "Change the person's facial identity to Mumu. Keep the original pose, gaze, expression, clothing, lighting, framing and background.",
+        "separator": " "
+      }
+    },
+    "youzi-v01": {
+      "name": "Youzi v01 · High Bun",
+      "file": "Youzi-v1-bun-40pairs-512-2250.safetensors",
+      "defaultStrength": 1.2,
+      "modelRequirementId": "qwen21-youzi-v01",
+      "promptPolicy": {
+        "mode": "prepend",
+        "kind": "default-prefix",
+        "text": "Change the person's facial identity to Youzi and style the hair into a high bun with wispy bangs. Keep the original pose, gaze, expression, clothing, lighting, framing and background.",
+        "separator": " "
+      }
+    },
+    "mika-v01": {
+      "name": "Mika v01 · Short Brown Hair",
+      "file": "Mika-v1-short-brown-512-2250.safetensors",
+      "defaultStrength": 1.2,
+      "modelRequirementId": "qwen21-mika-v01",
+      "promptPolicy": {
+        "mode": "prepend",
+        "kind": "default-prefix",
+        "text": "Change the person's facial identity to Mika and style the hair into short textured dark brown hair with a wispy side-swept fringe. Keep the original pose, gaze, expression, clothing, lighting, framing and background.",
         "separator": " "
       }
     }

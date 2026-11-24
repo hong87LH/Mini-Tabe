@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hong's AI Table Studio v2.8.2 完整使用指南</title>
+  <style>
+    :root{--bg:#f5f4f0;--paper:#fff;--ink:#263238;--muted:#66737b;--line:#dfe4e2;--brand:#406c62;--soft:#eaf1ee;--warn:#8a6229;--code:#202825}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 "Segoe UI","Microsoft YaHei",sans-serif}.layout{display:grid;grid-template-columns:280px minmax(0,920px);gap:32px;max-width:1260px;margin:auto;padding:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:rgba(255,255,255,.9);border:1px solid var(--line);border-radius:18px;padding:22px}.toc h2{margin:0 0 12px;font-size:17px}.toc a{display:block;padding:5px 8px;color:var(--muted);text-decoration:none;border-radius:8px}.toc a:hover{background:var(--soft);color:var(--brand)}main{background:var(--paper);border:1px solid var(--line);border-radius:22px;padding:48px 58px;box-shadow:0 18px 50px rgba(35,55,48,.07)}h1{font-size:36px;line-height:1.25;margin:0 0 8px}h2{font-size:26px;margin:52px 0 18px;padding-top:8px;border-top:1px solid var(--line)}h3{font-size:19px;margin:30px 0 10px}h4{font-size:16px;margin:24px 0 8px}.meta{color:var(--muted);margin-bottom:30px}.lead{font-size:17px;background:var(--soft);padding:18px 22px;border-radius:14px}.card{border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:14px 0}.note{border-left:4px solid var(--brand);background:#f2f7f5;padding:13px 16px;margin:16px 0}.warn{border-left-color:var(--warn);background:#faf5ea}table{width:100%;border-collapse:collapse;margin:14px 0 24px}th,td{padding:10px 12px;border:1px solid var(--line);vertical-align:top;text-align:left}th{background:#f1f4f2}code{font-family:Consolas,monospace;background:#eef1ef;padding:2px 5px;border-radius:5px}pre{overflow:auto;background:var(--code);color:#edf4f1;padding:16px 18px;border-radius:12px;line-height:1.55}pre code{background:none;padding:0}.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.flow span{background:var(--soft);border-radius:999px;padding:7px 12px}.flow b{color:var(--muted)}.tag{display:inline-block;background:var(--soft);color:var(--brand);border-radius:999px;padding:2px 9px;margin:2px 4px 2px 0;font-size:13px}ul,ol{padding-left:22px}.small{font-size:13px;color:var(--muted)}@media(max-width:900px){.layout{display:block;padding:10px}.toc{position:relative;max-height:none;margin-bottom:12px}main{padding:28px 22px;border-radius:16px}h1{font-size:29px}}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <h2>目录</h2>
+    <a href="#overview">1. 工具与本版重点</a>
+    <a href="#start">2. 安装、升级与启动</a>
+    <a href="#workspace">3. 工程、项目与表格</a>
+    <a href="#fields">4. 字段与 AI 工作流</a>
+    <a href="#media">5. 图片与媒体操作</a>
+    <a href="#crop-use">6. 智能裁切操作</a>
+    <a href="#crop-tech">7. 识别技术与裁切逻辑</a>
+    <a href="#crop-params">8. 裁切参数与手动配置</a>
+    <a href="#agent">9. Agent 临时参数</a>
+    <a href="#cache">10. 模型、缓存与隐私</a>
+    <a href="#trouble">11. 常见问题</a>
+    <a href="#maintain">12. 维护与验证</a>
+  </nav>
+  <main>
+    <h1>Hong's AI Table Studio v2.8.2</h1>
+    <div class="meta">完整使用指南 · 2026-11-24 · Electron 桌面端</div>
+    <p class="lead">本指南按实际使用路径组织，不把 v2.8.2 的智能裁切能力作为孤立更新附在文末。普通用户先看第 2～6 章；需要调整裁切效果的维护者重点看第 7～9、12 章。</p>
+
+    <h2 id="overview">1. 工具与本版重点</h2>
+    <p>AI Table Studio 把多维表格、文本/图片/视频生成、媒体审阅、本地批量保存、ComfyUI 与 Agent Action 放在同一桌面工程中。常见任务是一行代表一个商品、角色或镜头，通过字段引用批量生成和整理结果。</p>
+    <div class="card"><strong>v2.8.2 的核心变化</strong><br>智能裁切由“只看骨骼关键点”升级为 <code>PoseLandmarker</code> 姿态 + <code>ImageSegmenter</code> 人物语义轮廓。头像能保护真实发顶；服装裁切能读取衣物横向轮廓；Agent 可在不修改共享预设的情况下传入一次性参数；短裙预设可在常用比例中选择更合适的近似比例。</div>
+    <div class="flow"><span>选择图片单元格</span><b>→</b><span>本地识别姿态与轮廓</span><b>→</b><span>按预设求解裁切框</span><b>→</b><span>写入 cropData</span><b>→</b><span>预览或人工微调</span></div>
+
+    <h2 id="start">2. 安装、升级与启动</h2>
+    <h3>2.1 首次接收分享文件夹</h3>
+    <ol><li>将文件夹解压到路径较短、可写入的位置。</li><li>安装 Node.js 后在项目目录运行 <code>npm ci</code>；分享包不重复携带 <code>node_modules</code>。</li><li>运行 <code>npm run dev</code> 启动 Vite 与 Electron。</li><li>若使用音视频裁切，把团队统一维护的 FFmpeg 运行库放到 <code>ffmpeg/bin</code>；代码升级包不重复携带 exe。</li></ol>
+    <h3>2.2 从旧版本升级</h3>
+    <p>先保存当前 <code>.aistudio.json</code> 工程，再覆盖代码并重新执行 <code>npm ci</code>。v2.8.2 不要求迁移旧表格；旧的裁切数据仍可继续预览与生成。</p>
+    <div class="note warn">首次使用智能裁切需要联网下载姿态模型、轮廓模型和 MediaPipe WASM。成功后由 Electron/Chromium HTTP Cache 复用；清理应用缓存后会重新下载。</div>
+
+    <h2 id="workspace">3. 工程、项目与表格</h2>
+    <ul><li><strong>工程</strong>：完整的 <code>.aistudio.json</code> 工作文件，可包含多个项目文件夹和子表。</li><li><strong>项目文件夹</strong>：用于整理子表，可创建、重命名、排序、折叠和拖入/拖出；删除项目只解除归属，不删除子表数据。</li><li><strong>子表</strong>：保存字段、记录、AI 配置与媒体数据。CSV 只适合单表交换，完整项目结构请使用 JSON。</li></ul>
+    <p>工程标题会显示“项目名 › 子表名”。建议先建立模板子表，再复制到不同渠道或批次，减少重复配置。</p>
+
+    <h2 id="fields">4. 字段与 AI 工作流</h2>
+    <table><thead><tr><th>字段</th><th>典型用途</th><th>注意事项</th></tr></thead><tbody><tr><td>文本 / 数字 / 标签</td><td>货号、提示词、规格、状态</td><td>字段引用使用 <code>{字段名}</code></td></tr><tr><td>附件 / 图片</td><td>参考图、生成结果、视频和音频</td><td>一格可有多项媒体</td></tr><tr><td>智能文本</td><td>标题、描述、视觉分析</td><td>可引用同一行其他字段</td></tr><tr><td>智能图片</td><td>文生图、图生图、LoRA、局部修图</td><td>模型字段引用时只透传目标模型支持的参数</td></tr><tr><td>智能视频</td><td>首尾帧、参考视频、音频驱动</td><td>不同模型会筛选无效参数</td></tr></tbody></table>
+    <p>批量运行前先测试 1～5 行。Qwen 人物 LoRA 使用注册的 Profile ID；默认提示词由工作流前置，表格文本作为追加内容。普通位图输出统一按 PNG 处理，TT Image 2.6 的 SVG/GIF 属于其专用能力。</p>
+
+    <h2 id="media">5. 图片与媒体操作</h2>
+    <p>图片单元格支持预览、评分、打点批注、Photoshop 打开、复制/剪切、批量打包与裁切。单独复制一个素材时不继承图片 <code>cropData</code>，评分与批注保留；以单元格为单位复制或剪切时保留完整属性。</p>
+    <p>智能裁切写入的是既有 <code>cropData</code>，因此不会制造第二套互不兼容的裁切格式。双击图片仍可在原裁切界面中人工调整，右键“清除所选裁切”仅删除裁切数据，不会清除评分或批注。</p>
+
+    <h2 id="crop-use">6. 智能裁切操作</h2>
+    <ol><li>在图片或 AI 图片列选择一个单元格、连续区域或多个单元格。</li><li>右键，在“批量打包/导出附件”下方进入“智能裁切”二级菜单。</li><li>选择预设，观察右下角识别、计算和写入进度。</li><li>完成后打开图片预览裁切结果；不满意可人工微调或清除所选裁切。</li></ol>
+    <table><thead><tr><th>预设 ID</th><th>菜单用途</th><th>默认比例</th></tr></thead><tbody><tr><td><code>face_swap_1_1</code></td><td>换脸 · 紧凑头肩</td><td>固定 1:1</td></tr><tr><td><code>portrait_long_hair_3_4</code></td><td>长发/胸像 · 头部到胸口</td><td>固定 3:4</td></tr><tr><td><code>upper_body_3_4</code></td><td>上衣修复 · 头部到胯</td><td>固定 3:4</td></tr><tr><td><code>garment_only_3_4</code></td><td>上衣主体 · 肩部到胯</td><td>固定 3:4</td></tr><tr><td><code>pants_3_4</code></td><td>裤子/下装 · 腰上到脚踝</td><td>固定 3:4</td></tr><tr><td><code>shorts_skirt_3_4</code></td><td>短裤/半裙 · 腰上到膝上</td><td>近似比例</td></tr></tbody></table>
+    <div class="note">识别不到人物、缺少目标身体部位或约束冲突时，该图片会被跳过并保留原裁切数据；成功项不会被失败项拖住。</div>
+
+    <h2 id="crop-tech">7. 识别技术与裁切逻辑</h2>
+    <h3>7.1 两个模型各自负责什么</h3>
+    <table><thead><tr><th>技术</th><th>提供的数据</th><th>在裁切中的作用</th></tr></thead><tbody><tr><td>PoseLandmarker Full</td><td>眼、耳、鼻、肩、胯、膝、脚踝等关键点</td><td>确定人物、身体方向与纵向身体区段</td></tr><tr><td>ImageSegmenter</td><td>背景、头发、脸、皮肤、服装和配饰的分类轮廓</td><td>保护真实发顶与服装横向边缘</td></tr></tbody></table>
+    <h3>7.2 头像为什么不再只靠骨骼估算</h3>
+    <p>关键点只知道脸和关节位置，不知道头发最高像素。v2.8.2 先把轮廓匹配到对应人物，再以 <code>hair</code> 的最高、最左、最右像素建立头部硬边界；面部、颈部和肩点只负责位置与下方语境。衣服和手臂不会扩大头部包围盒。</p>
+    <p>求解顺序是：完整头发与面部必须保留 → 尽量满足理想顶部留白 → 保留所需肩部语境。原图空间不足时先缩减肩部，再把顶部留白从理想值收紧到最低安全线，不以裁断头发换取更多身体。</p>
+    <h3>7.3 服装轮廓如何参与</h3>
+    <p>腰、胯、膝等关键点负责限定纵向范围；该范围内的 <code>clothes</code> 语义行区间负责服装最左、最右边界。这样宽摆短裙和蓬松上衣不会被肩宽或胯宽的骨骼走廊截断。轮廓不可用时退回人物轮廓与骨骼方案。</p>
+    <h3>7.4 固定比例与近似比例</h3>
+    <ul><li><strong>fixed</strong>：严格保持指定比例，适合换脸、商品模板和统一渠道规格。</li><li><strong>approximate</strong>：在候选比例中先检查必保区是否完整和是否越界，再比较轮廓形状与首选比例；同一批图片可以得到不同结果比例。</li></ul>
+
+    <h2 id="crop-params">8. 裁切参数与手动配置</h2>
+    <p>右键菜单与 Agent 共用 <code>public/smart_crop/presets.json</code>。常规维护只修改这个文件；预设 ID 一旦用于自动化任务，应保持稳定。</p>
+    <h3>8.1 头像参数</h3>
+    <table><thead><tr><th>参数</th><th>用途</th><th>调大后的效果</th></tr></thead><tbody><tr><td><code>topMargin</code></td><td>理想发顶留白，相对结构头部高度</td><td>头顶更松，画面更有呼吸感</td></tr><tr><td><code>minTopMargin</code></td><td>空间不足时仍保留的最低顶部安全线，相对最终裁切高度</td><td>更不贴发顶，但更容易压缩肩部或无法求解</td></tr><tr><td><code>sideMargin</code></td><td>头发左右留白，相对头部宽度</td><td>左右更宽松</td></tr><tr><td><code>shoulderDepth</code></td><td>颈肩以下希望保留的深度</td><td>保留更多胸肩；过大时头像显得不够紧</td></tr></tbody></table>
+    <pre><code>{
+  "id": "face_swap_1_1",
+  "aspect": "1:1",
+  "strategy": "tight_headshot",
+  "headshot": {
+    "topMargin": 0.14,
+    "minTopMargin": 0.06,
+    "sideMargin": 0.15,
+    "shoulderDepth": 0.20
+  }
+}</code></pre>
+    <h3>8.2 通用人体参数</h3>
+    <table><thead><tr><th>参数</th><th>作用</th></tr></thead><tbody><tr><td><code>framing.start / end</code></td><td>希望画面覆盖的起止身体部位，是构图目标。</td></tr><tr><td><code>protection.start / end</code></td><td>必须保留的身体区间，优先级高于构图目标。</td></tr><tr><td><code>protection.hands</code></td><td><code>none</code> 不要求手；<code>prefer_one</code> 尽量保留一只；require 类会成为硬约束。</td></tr><tr><td><code>spacing</code></td><td>上右下左留白，可用百分比或像素。</td></tr><tr><td><code>aspectMode</code></td><td><code>fixed</code> 或 <code>approximate</code>。</td></tr><tr><td><code>aspectCandidates</code></td><td>近似模式允许比较的比例列表，常用为 1:1、3:4、4:3、9:16、16:9。</td></tr><tr><td><code>allow_virtual</code></td><td>是否允许超出原图；当前内置预设统一为 false，不自动扩图。</td></tr></tbody></table>
+    <div class="note warn">参数应从小幅调整开始，并使用多种姿势和画幅验证。提高硬保护与留白会减少可用解；不要把一次特殊图片的补丁直接固化到所有预设。</div>
+
+    <h2 id="agent">9. Agent 临时参数</h2>
+    <p>Agent 先调用 <code>media.list_crop_presets</code> 获取共享预设，再用 <code>media.smart_crop_preview</code> 预览。确认后以完全相同的 <code>overrides</code> 调用 <code>media.smart_crop_apply</code>。临时参数不会修改菜单预设。</p>
+    <pre><code>{
+  "version": "0.1",
+  "action": "media.smart_crop_preview",
+  "params": {
+    "tableId": "table_xxx",
+    "presetId": "face_swap_1_1",
+    "overrides": {
+      "aspect": "3:4",
+      "headshot": {
+        "topMargin": 0.18,
+        "minTopMargin": 0.06,
+        "sideMargin": 0.12,
+        "shoulderDepth": 0.60
+      }
+    },
+    "targets": [
+      {"rowId":"row_1","fieldId":"field_images","index":0}
+    ]
+  }
+}</code></pre>
+    <p>通用人体预设可临时覆盖 <code>aspect</code>、<code>aspectMode</code>、<code>aspectCandidates</code>、<code>framing</code>、<code>protection</code>、<code>spacing</code>。Schema 会拒绝模型地址、内部 <code>cropData</code>、未知字段和超范围数字。返回的 <code>effectiveAspect</code> 是每张图片实际采用的比例。</p>
+
+    <h2 id="cache">10. 模型、缓存与隐私</h2>
+    <ul><li>姿态、轮廓与求解都在本机完成，图片不会因智能裁切上传。</li><li>姿态与轮廓结果按本地路径、文件大小和修改时间分别写入 IndexedDB；切换预设会复用识别结果。</li><li>模型和 WASM 通过 HTTPS 下载并使用 Chromium 普通 HTTP Cache，不放入分享工程。</li><li>姿态模型校验文件大小与 SHA-256；轮廓模型执行合理大小校验。</li><li>模型或分割失败时自动退回关键点方案；缓存失效时重新识别。</li></ul>
+
+    <h2 id="trouble">11. 常见问题</h2>
+    <h3>一直显示“正在识别人像”</h3><p>先确认首次下载可访问；再检查 Electron 终端与开发者工具错误。不要反复点击同一任务。清理 HTTP Cache 会触发重新下载。</p>
+    <h3>提示缺少身体参照</h3><p>图片可能没有拍到预设需要的胯、膝或脚踝。改用较短景别预设，或通过 Agent 临时缩短 <code>framing.end</code> / <code>protection.end</code>。</p>
+    <h3>发顶过紧或肩部太多</h3><p>发顶过紧可小幅提高 <code>topMargin</code> 或 <code>minTopMargin</code>；肩部太多可降低 <code>shoulderDepth</code>。最低安全线过高会降低受限画幅的可解性。</p>
+    <h3>短裙被截断</h3><p>确认使用近似比例短裙预设且轮廓模型正常；查看实际 <code>effectiveAspect</code>。若姿势或遮挡导致轮廓分类混淆，先预览其他候选比例，再人工微调，不建议用全局补丁处理单张异常图。</p>
+    <h3>清除裁切为什么没有出现</h3><p>“清除所选裁切”只在选择区域中存在 <code>cropData</code> 时显示；它与“清除全部标注”是不同操作。</p>
+
+    <h2 id="maintain">12. 维护与验证</h2>
+    <table><thead><tr><th>文件</th><th>职责</th></tr></thead><tbody><tr><td><code>public/smart_crop/presets.json</code></td><td>右键菜单与 Agent 共用预设，日常调整的首选入口</td></tr><tr><td><code>src/lib/smartCrop.ts</code></td><td>识别调度、缓存、头像策略、覆盖参数与 cropData 适配</td></tr><tr><td><code>public/smart_crop/engine/</code></td><td>通用人体确定性求解器</td></tr><tr><td><code>public/smart_crop/recognition-worker.js</code></td><td>姿态识别 Worker</td></tr><tr><td><code>public/smart_crop/segmentation-worker.js</code></td><td>语义轮廓 Worker</td></tr><tr><td><code>agent_api/action_definitions.js</code></td><td>Action 参数 Schema 单一事实源</td></tr></tbody></table>
+    <pre><code>npm run lint
+npm run test:ui-workflows
+npm run test:action-api
+npm run build
+npx electron tests/smart_crop_segmentation_smoke.cjs "真实人像.jpg"
+npx electron tests/smart_crop_headshot_smoke.cjs "真实人像.jpg"</code></pre>
+    <p class="small">v2.8.2 正式边界：保留双模型轮廓、近似比例与 Agent 临时参数；不包含后续试验性的手部剔除或下装专用轮廓模式。</p>
+  </main>
+</div>
+</body>
+</html>

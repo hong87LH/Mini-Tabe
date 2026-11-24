@@ -463,7 +463,7 @@ app.whenReady().then(async () => {
     try {
       const sourcePath = normalizeThumbnailPath(filePath);
       const stat = await fs.promises.stat(sourcePath);
-      return { exists: true, isFile: stat.isFile() };
+      return { exists: true, isFile: stat.isFile(), size: stat.size, mtimeMs: stat.mtimeMs };
     } catch (error) {
       if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
         return { exists: false, isFile: false };

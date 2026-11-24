@@ -1,11 +1,11 @@
-// AI Table Studio v2.8.0 / Table Action API Phase 4.7
+// AI Table Studio v2.8.2 / Table Action API Phase 4.7
 // Single source of truth for action metadata, parameter schemas, CLI help and
 // the generated HTTP JSON Schema artifact.
 
 export const TABLE_ACTION_API_VERSION = '0.1';
 export const TABLE_ACTION_API_PHASE = 'phase4.7';
-export const TABLE_ACTION_APP_VERSION = '2.8.0';
-export const ACTION_DEFINITION_VERSION = '1.4';
+export const TABLE_ACTION_APP_VERSION = '2.8.2';
+export const ACTION_DEFINITION_VERSION = '1.7';
 
 const id = { type: 'string', minLength: 1 };
 const text = { type: 'string' };
@@ -33,6 +33,43 @@ const mediaLocatorProperties = { tableId: id, rowId: id, fieldId: id, index: non
 const mediaLocatorRequired = ['tableId', 'rowId', 'fieldId'];
 const mediaSource = object({ rowId: id, fieldId: id, index: nonNegativeInteger }, ['rowId', 'fieldId']);
 const mediaTarget = object({ rowId: id, fieldId: id, index: nonNegativeInteger }, ['rowId', 'fieldId']);
+const smartCropTarget = object({ rowId: id, fieldId: id, index: nonNegativeInteger }, ['rowId', 'fieldId']);
+const smartCropStart = { type: 'string', enum: ['head', 'shoulders', 'above_waist', 'hip'] };
+const smartCropEnd = { type: 'string', enum: ['shoulders', 'waist_hip', 'hip', 'below_hip', 'mid_thigh', 'above_knee', 'knee', 'calf', 'ankle', 'soles'] };
+const smartCropMargin = { type: 'number', minimum: 0, maximum: 0.5 };
+const smartCropOverrides = object({
+  aspect: { type: 'string', enum: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'] },
+  aspectMode: { type: 'string', enum: ['fixed', 'approximate'] },
+  aspectCandidates: { type: 'array', minItems: 1, maxItems: 5, uniqueItems: true, items: { type: 'string', enum: ['1:1', '3:4', '4:3', '9:16', '16:9'] } },
+  headshot: object({
+    topMargin: smartCropMargin,
+    minTopMargin: { type: 'number', minimum: 0, maximum: 0.25 },
+    sideMargin: smartCropMargin,
+    shoulderDepth: { type: 'number', minimum: 0, maximum: 2 }
+  }),
+  framing: object({ start: smartCropStart, end: smartCropEnd }),
+  protection: object({
+    start: smartCropStart,
+    end: smartCropEnd,
+    hands: { type: 'string', enum: ['none', 'prefer_one', 'prefer_all', 'require_one', 'require_all'] }
+  }),
+  spacing: object({
+    top: { type: 'number', minimum: 0, maximum: 50 },
+    right: { type: 'number', minimum: 0, maximum: 50 },
+    bottom: { type: 'number', minimum: 0, maximum: 50 },
+    left: { type: 'number', minimum: 0, maximum: 50 }
+  })
+});
+const smartCropParams = object({
+  tableId: id,
+  presetId: nonEmptyText,
+  overrides: smartCropOverrides,
+  targets: array(smartCropTarget, 1, 500),
+  rowIds: ids(500),
+  fieldIds: ids(100)
+}, ['tableId', 'presetId'], {
+  anyOf: [{ required: ['targets'] }, { required: ['rowIds', 'fieldIds'] }]
+});
 const rowPosition = {
   beforeRowId: id,
   afterRowId: id,
@@ -267,6 +304,19 @@ export const ACTION_DEFINITIONS = {
   'media.set_trim': writeMedia('设置视频或音频媒体实例的 A-B 时间范围', object({ ...mediaLocatorProperties, startMs: { type: 'number', minimum: 0 }, endMs: { type: 'number', exclusiveMinimum: 0 }, durationMs: { type: 'number', exclusiveMinimum: 0 } }, [...mediaLocatorRequired, 'startMs', 'endMs']), { alwaysConfirm: true }),
   'media.clear_trim': writeMedia('清除视频或音频媒体实例的 A-B 时间范围', object({ ...mediaLocatorProperties }, mediaLocatorRequired), { alwaysConfirm: true }),
   'media.set_rating': writeMedia('设置媒体实例 0–5 星评分', object({ ...mediaLocatorProperties, rating: { type: 'number', minimum: 0, maximum: 5 } }, [...mediaLocatorRequired, 'rating']), { alwaysConfirm: true }),
+  'media.list_crop_presets': read('列出右键菜单与 Agent 共用的智能裁切预设', empty, {
+    runtime: true,
+    notes: ['返回 presetId、画幅、身体范围与使用说明；Agent 应选择预设，不自行计算裁切坐标。']
+  }),
+  'media.smart_crop_preview': read('本地识别人像并预览批量智能裁切结果，不写入表格', smartCropParams, {
+    runtime: true,
+    notes: ['图片只在本机处理；缺少目标身体部位的附件会明确列入 failed。', 'overrides 只对本次请求生效，不修改共享预设。']
+  }),
+  'media.smart_crop_apply': writeMedia('按共享预设批量写入图片裁切数据', smartCropParams, {
+    runtime: true,
+    alwaysConfirm: true,
+    notes: ['整批写入只产生一个 Undo token；失败项跳过，不覆盖原裁切。', 'overrides 只对本次请求生效，并记录到结果 cropData 便于复现。']
+  }),
 
   'generation.get_capabilities': read('列出当前已配置的生成 Provider、Model、ComfyUI Workflow、模板默认提示词与 LoRA 提示词策略', empty, {
     runtime: true,

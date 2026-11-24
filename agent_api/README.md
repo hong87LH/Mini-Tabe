@@ -1,12 +1,12 @@
-# AI Table Studio v2.8.0 · Table Action API v0.1 · Phase 4.7
+# AI Table Studio v2.8.2 · Table Action API v0.1 · Phase 4.7
 
 这是从 v2.6.3 分出的 Agent API 探索分支。v2.6.5 / Phase 4.7 在既有协作、完整编辑和长任务能力之上，继续降低 Agent 的调用成本，并补齐“远端已经失联、UI 仍显示处理中”的 Job 专项清理能力。
 
-当前主工程产品版本为 **v2.8.0**，Action Definition 为 **1.4**，协议 v0.1 / phase4.7 保持不变。当前包含 91 个 Action（含项目文件夹管理扩展），以本地 action_definitions.js 为准。保存工程并重启 Electron 后加载新主进程和 preload。最新版本说明见 [v2.8.0 升级报告](../readme/90_版本记录/v2.8.0_Qwen功能LoRA与图片模型扩展.md)。
+当前主工程产品版本为 **v2.8.2**，Action Definition 为 **1.7**，协议 v0.1 / phase4.7 保持不变。当前包含 91 个 Action（含项目文件夹管理扩展），以本地 action_definitions.js 为准。保存工程并重启 Electron 后加载新主进程和 preload。最新版本说明见 [v2.8.2 升级报告](../readme/90_版本记录/v2.8.2_智能裁切双模型轮廓版.md)。
 
 TT Image 2.6 可通过 `field.configure_ai` 配置 `complexity`、`outputFormat`、`frameCount`、`frameDurationMs`，四项均支持固定值或 `{字段名}`。生成前调用 `generation.preview`；`generation.get_capabilities` 的 `lingwuImageProfiles` 是模型别名、可用格式及参数能力的当前准确信息。`tt-image-2.6-guan` 不支持 SVG，预检会明确拒绝该组合。
 
-当前 `lingwuImageProfiles` 也登记 `doubao-seedream-5-5-261028`（最多10图、1K/1.5K/2K）与 `minimax-h3-image`（最多16图、standard/highspeed、1K/2K/4K）；两者固定输出 PNG，忽略普通位图格式字段。Qwen 默认工作流登记 `xiaoxue-a`、`mumu-v02` 人物 LoRA Profile；通过 `loraProfiles` 固定配置或字段引用，预览会校验 Profile ID 并回显实际选择。
+当前 `lingwuImageProfiles` 也登记 `doubao-seedream-5-5-261028`（最多10图、1K/1.5K/2K）与 `minimax-h3-image`（最多16图、standard/highspeed、1K/2K/4K）；两者固定输出 PNG，忽略普通位图格式字段。Qwen 默认工作流登记 `xiaoxue-a`、`mumu-v02`、`youzi-v01`、`mika-v01` 人物 LoRA Profile；通过 `loraProfiles` 固定配置或字段引用，预览会校验 Profile ID 并回显实际选择。
 
 ## v2.6.7 列显示与冻结
 
@@ -217,6 +217,17 @@ Qwen v2.7.7 示例：默认图片工作流启用保真层时，使用 `field.con
 - `media.get_effective_context` 按现有智能字段模板解析当前行真正会使用的媒体，并返回 `<Picture n> / <Video n> / <Audio n>` 顺序。
 - 普通文本可以通过 `temporaryReferenceFieldId` 查询某个智能节点的临时媒体上下文，但不会写入 Field Config。
 - 预览态字段 `mappedUrl / refUrls / refCells` 不通过 API 持久化或复制。
+
+## 智能裁切 Runtime
+
+- `media.list_crop_presets`：读取 UI 与 Agent 共用的裁切预设。
+- `media.smart_crop_preview`：本地识别人像并返回 ready/failed 明细，不修改表格；可传安全白名单 `overrides` 临时覆盖画幅、固定/近似比例模式、头像参数或通用人体规则；`ready[].effectiveAspect` 返回实际采用比例。
+- `media.smart_crop_apply`：按基础预设与本次 `overrides` 批量写入现有 `cropData`，需要 `confirmed=true`，整批返回一个 Undo token，并在 `appliedItems[]` 返回实际采用比例。
+- 参数可使用精确 `targets[{rowId,fieldId,index?}]`，或 `rowIds + fieldIds` 的笛卡尔范围。
+- Agent 选择 `presetId`，必要时追加仅本次有效的 `overrides`；人物关键点、像素坐标和内部裁切结构仍由 Grid Runtime 计算。
+- 图片不上传，模型优先从工程内置资源加载；缺失时自动下载并校验固定 SHA-256。
+
+完整说明见 `readme/智能裁切与Agent批量裁切.md`。
 
 ## Phase 4 协作规则
 

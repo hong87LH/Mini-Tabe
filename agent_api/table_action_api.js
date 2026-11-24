@@ -909,6 +909,8 @@ function applyAction(request, workspace) {
           mediaInstanceAware: true,
           mediaCopyPreservesEdits: true,
           effectiveMediaContext: true,
+          smartCropRuntime: true,
+          sharedCropPresets: true,
           localHttpBridge: true
         }
       })
@@ -1244,6 +1246,24 @@ function applyAction(request, workspace) {
 
   if (action === 'generation.get_capabilities') {
     return { response: success(request, { runtimeRequired: true, runtimeAction: action, params: {} }) };
+  }
+
+  if (action === 'media.list_crop_presets') {
+    return { response: success(request, { runtimeRequired: true, runtimeAction: action, params: {} }) };
+  }
+
+  if (action === 'media.smart_crop_preview' || action === 'media.smart_crop_apply') {
+    const tableId = String(request.params.tableId || '').trim();
+    if (!findTable(workspace, tableId)) return { response: failure(request, 'TABLE_NOT_FOUND', `Table not found: ${tableId}`) };
+    const targets = Array.isArray(request.params.targets) ? request.params.targets : [];
+    const requestedCount = targets.length || (Array.isArray(request.params.rowIds) ? request.params.rowIds.length : 0);
+    return {
+      response: success(
+        request,
+        { runtimeRequired: true, runtimeAction: action, params: clone(request.params) },
+        action === 'media.smart_crop_apply' ? effects({ rowsAffected: requestedCount, mediaAffected: requestedCount }) : effects()
+      )
+    };
   }
 
   if (action === 'job.list') {

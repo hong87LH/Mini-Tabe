@@ -35,6 +35,22 @@ export function restoreCropViewport(
   currentMaskW: number,
   currentMaskH: number
 ) {
+  if (crop?.unit === 'ratio') {
+    const left = Number(crop.x);
+    const top = Number(crop.y);
+    const width = Number(crop.width);
+    const height = Number(crop.height);
+    if ([left, top, width, height, currentImgW, currentImgH, currentMaskW, currentMaskH].every(Number.isFinite) && width > 0 && height > 0) {
+      const scaleX = currentMaskW / (width * currentImgW);
+      const scaleY = currentMaskH / (height * currentImgH);
+      const scale = Math.abs(scaleX - scaleY) <= Math.max(scaleX, scaleY) * 0.01 ? (scaleX + scaleY) / 2 : scaleX;
+      return {
+        scale,
+        x: currentImgW * scale / 2 - currentMaskW / 2 - left * currentImgW * scale,
+        y: currentImgH * scale / 2 - currentMaskH / 2 - top * currentImgH * scale
+      };
+    }
+  }
   const fallback = {
     scale: Number(crop?.scale) || 1,
     x: Number(crop?.x) || 0,

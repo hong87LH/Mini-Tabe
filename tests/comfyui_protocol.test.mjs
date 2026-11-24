@@ -67,10 +67,18 @@ test('Qwen character LoRA profiles prepend complete defaults and keep table text
   const qwen = listComfyUIWorkflows().find(item => item.id === 'qwen-image-2.1');
   const xiaoxue = qwen.loraProfiles.find(profile => profile.id === 'xiaoxue-a');
   const mumu = qwen.loraProfiles.find(profile => profile.id === 'mumu-v02');
+  const youzi = qwen.loraProfiles.find(profile => profile.id === 'youzi-v01');
+  const mika = qwen.loraProfiles.find(profile => profile.id === 'mika-v01');
   assert.equal(xiaoxue.file, 'Xiaoxue-A-high-bun-512-2250.safetensors');
   assert.equal(mumu.file, 'Mumu-v02-step-2000.safetensors');
+  assert.equal(youzi.file, 'Youzi-v1-bun-40pairs-512-2250.safetensors');
+  assert.equal(mika.file, 'Mika-v1-short-brown-512-2250.safetensors');
+  assert.equal(youzi.defaultStrength, 1.2);
+  assert.equal(mika.defaultStrength, 1.2);
   assert.match(xiaoxue.promptPolicy.text, /high bun/);
   assert.doesNotMatch(mumu.promptPolicy.text, /hair|bun/i);
+  assert.match(youzi.promptPolicy.text, /high bun with wispy bangs/);
+  assert.match(mika.promptPolicy.text, /short textured dark brown hair/);
   assert.equal(
     composeLoraProfilePrompt(loadComfyUIWorkflow('qwen-image-2.1-local').manifest, ['xiaoxue-a'], 'Use soft peach makeup.'),
     `${xiaoxue.promptPolicy.text} Use soft peach makeup.`
@@ -800,6 +808,12 @@ test('Qwen character profiles inject the registered LoRA and submit composed pro
   await client.createTask('qwen-image-2.1-local', 'Add pearl earrings.', {
     images: ['base.png'], loraProfiles: ['mumu-v02']
   });
+  await client.createTask('qwen-image-2.1-local', 'Use natural makeup.', {
+    images: ['base.png'], loraProfiles: ['youzi-v01']
+  });
+  await client.createTask('qwen-image-2.1-local', 'Use a dark studio background.', {
+    images: ['base.png'], loraProfiles: ['mika-v01']
+  });
   assert.equal(submitted[0]['2000'].inputs.lora_name, 'Xiaoxue-A-high-bun-512-2250.safetensors');
   assert.match(submitted[0]['7'].inputs.prompt, /^Change the person's facial identity to Xiaoxue.*high bun\./);
   assert.match(submitted[0]['7'].inputs.prompt, /background\. Use soft peach makeup\.$/);
@@ -807,6 +821,14 @@ test('Qwen character profiles inject the registered LoRA and submit composed pro
   assert.equal(submitted[1]['2000'].inputs.lora_name, 'Mumu-v02-step-2000.safetensors');
   assert.match(submitted[1]['7'].inputs.prompt, /^Change the person's facial identity to Mumu\./);
   assert.match(submitted[1]['7'].inputs.prompt, /background\. Add pearl earrings\.$/);
+  assert.equal(submitted[2]['2000'].inputs.lora_name, 'Youzi-v1-bun-40pairs-512-2250.safetensors');
+  assert.equal(submitted[2]['2000'].inputs.strength_model, 1.2);
+  assert.match(submitted[2]['7'].inputs.prompt, /^Change the person's facial identity to Youzi.*high bun with wispy bangs\./);
+  assert.match(submitted[2]['7'].inputs.prompt, /background\. Use natural makeup\.$/);
+  assert.equal(submitted[3]['2000'].inputs.lora_name, 'Mika-v1-short-brown-512-2250.safetensors');
+  assert.equal(submitted[3]['2000'].inputs.strength_model, 1.2);
+  assert.match(submitted[3]['7'].inputs.prompt, /^Change the person's facial identity to Mika.*short textured dark brown hair/);
+  assert.match(submitted[3]['7'].inputs.prompt, /background\. Use a dark studio background\.$/);
 });
 
 test('workflow registry exposes machine-readable model and LoRA maintenance requirements', () => {

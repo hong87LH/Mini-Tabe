@@ -1,0 +1,80 @@
+[
+  {
+    "id": "face_swap_1_1",
+    "label": "换脸 · 紧凑头肩 (1:1)",
+    "group": "人像局部",
+    "description": "换脸与面部精修；完整保留头发和脸，肩部仅作下沿参考，允许截断。",
+    "aspect": "1:1",
+    "strategy": "tight_headshot",
+    "headshot": { "topMargin": 0.14, "minTopMargin": 0.06, "sideMargin": 0.15, "shoulderDepth": 0.2 },
+    "framing": { "start": "head", "end": "shoulders" },
+    "protection": { "start": "head", "end": "shoulders", "hands": "none" },
+    "spacing": { "top": 6, "right": 5, "bottom": 4, "left": 5 },
+    "allow_virtual": false,
+    "enabled": true
+  },
+  {
+    "id": "upper_body_3_4",
+    "label": "上衣修复 · 头部到胯 (3:4)",
+    "group": "服装局部",
+    "description": "上衣高清修复与局部生成，覆盖头部至胯部。",
+    "aspect": "3:4",
+    "framing": { "start": "head", "end": "hip" },
+    "protection": { "start": "shoulders", "end": "hip", "hands": "prefer_one" },
+    "spacing": { "top": 4, "right": 4, "bottom": 5, "left": 4 },
+    "allow_virtual": false,
+    "enabled": true
+  },
+  {
+    "id": "portrait_long_hair_3_4",
+    "label": "长发/胸像 · 头部到胸口 (3:4)",
+    "group": "人像局部",
+    "description": "适合长发、领口与胸像参考；完整保留头发和面部，并向下保留到胸口。",
+    "aspect": "3:4",
+    "strategy": "tight_headshot",
+    "headshot": { "topMargin": 0.1, "sideMargin": 0.18, "shoulderDepth": 0.95 },
+    "framing": { "start": "head", "end": "hip" },
+    "protection": { "start": "head", "end": "shoulders", "hands": "none" },
+    "spacing": { "top": 5, "right": 4, "bottom": 5, "left": 4 },
+    "allow_virtual": false,
+    "enabled": true
+  },
+  {
+    "id": "garment_only_3_4",
+    "label": "上衣主体 · 肩部到胯 (3:4)",
+    "group": "服装局部",
+    "description": "聚焦上衣主体，不强制保留完整头部。",
+    "aspect": "3:4",
+    "framing": { "start": "shoulders", "end": "hip" },
+    "protection": { "start": "shoulders", "end": "hip", "hands": "prefer_one" },
+    "spacing": { "top": 5, "right": 4, "bottom": 5, "left": 4 },
+    "allow_virtual": false,
+    "enabled": true
+  },
+  {
+    "id": "pants_3_4",
+    "label": "裤子/下装 · 腰上到脚踝 (3:4)",
+    "group": "服装局部",
+    "description": "长裤与下装修复，覆盖腰胯至脚踝。",
+    "aspect": "3:4",
+    "framing": { "start": "above_waist", "end": "ankle" },
+    "protection": { "start": "hip", "end": "ankle", "hands": "none" },
+    "spacing": { "top": 4, "right": 4, "bottom": 4, "left": 4 },
+    "allow_virtual": false,
+    "enabled": true
+  },
+  {
+    "id": "shorts_skirt_3_4",
+    "label": "短裤/半裙 · 腰上到膝上 (近似比例)",
+    "group": "服装局部",
+    "description": "短裤与半身裙精修，覆盖腰部至膝上。",
+    "aspect": "3:4",
+    "aspectMode": "approximate",
+    "aspectCandidates": ["1:1", "3:4", "4:3", "9:16", "16:9"],
+    "framing": { "start": "above_waist", "end": "above_knee" },
+    "protection": { "start": "hip", "end": "above_knee", "hands": "none" },
+    "spacing": { "top": 4, "right": 4, "bottom": 5, "left": 4 },
+    "allow_virtual": false,
+    "enabled": true
+  }
+]

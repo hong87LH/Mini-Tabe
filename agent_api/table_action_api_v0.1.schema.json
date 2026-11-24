@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://hongs-ai-table.local/schema/table-action-api/0.1",
-  "title": "AI Table Studio 2.8.0 Table Action API v0.1 phase4.7",
+  "title": "AI Table Studio 2.8.2 Table Action API v0.1 phase4.7",
   "type": "object",
   "required": [
     "version",
@@ -121,6 +121,9 @@
         "media.set_trim",
         "media.clear_trim",
         "media.set_rating",
+        "media.list_crop_presets",
+        "media.smart_crop_preview",
+        "media.smart_crop_apply",
         "generation.get_capabilities",
         "generation.preview",
         "generation.run",
@@ -3465,6 +3468,541 @@
       "if": {
         "properties": {
           "action": {
+            "const": "media.list_crop_presets"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.smart_crop_preview"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "presetId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "presetId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "overrides": {
+                "type": "object",
+                "properties": {
+                  "aspect": {
+                    "type": "string",
+                    "enum": [
+                      "1:1",
+                      "2:3",
+                      "3:2",
+                      "3:4",
+                      "4:3",
+                      "9:16",
+                      "16:9"
+                    ]
+                  },
+                  "aspectMode": {
+                    "type": "string",
+                    "enum": [
+                      "fixed",
+                      "approximate"
+                    ]
+                  },
+                  "aspectCandidates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "1:1",
+                        "3:4",
+                        "4:3",
+                        "9:16",
+                        "16:9"
+                      ]
+                    }
+                  },
+                  "headshot": {
+                    "type": "object",
+                    "properties": {
+                      "topMargin": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 0.5
+                      },
+                      "minTopMargin": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 0.25
+                      },
+                      "sideMargin": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 0.5
+                      },
+                      "shoulderDepth": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 2
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "framing": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "enum": [
+                          "head",
+                          "shoulders",
+                          "above_waist",
+                          "hip"
+                        ]
+                      },
+                      "end": {
+                        "type": "string",
+                        "enum": [
+                          "shoulders",
+                          "waist_hip",
+                          "hip",
+                          "below_hip",
+                          "mid_thigh",
+                          "above_knee",
+                          "knee",
+                          "calf",
+                          "ankle",
+                          "soles"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "protection": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "enum": [
+                          "head",
+                          "shoulders",
+                          "above_waist",
+                          "hip"
+                        ]
+                      },
+                      "end": {
+                        "type": "string",
+                        "enum": [
+                          "shoulders",
+                          "waist_hip",
+                          "hip",
+                          "below_hip",
+                          "mid_thigh",
+                          "above_knee",
+                          "knee",
+                          "calf",
+                          "ankle",
+                          "soles"
+                        ]
+                      },
+                      "hands": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "prefer_one",
+                          "prefer_all",
+                          "require_one",
+                          "require_all"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "spacing": {
+                    "type": "object",
+                    "properties": {
+                      "top": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 50
+                      },
+                      "right": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 50
+                      },
+                      "bottom": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 50
+                      },
+                      "left": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 50
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              },
+              "targets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "rowId",
+                    "fieldId"
+                  ],
+                  "properties": {
+                    "rowId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "fieldId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "index": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 500,
+                "uniqueItems": true
+              },
+              "fieldIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 100,
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": [
+                  "targets"
+                ]
+              },
+              {
+                "required": [
+                  "rowIds",
+                  "fieldIds"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "media.smart_crop_apply"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "required": [
+              "tableId",
+              "presetId"
+            ],
+            "properties": {
+              "tableId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "presetId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "overrides": {
+                "type": "object",
+                "properties": {
+                  "aspect": {
+                    "type": "string",
+                    "enum": [
+                      "1:1",
+                      "2:3",
+                      "3:2",
+                      "3:4",
+                      "4:3",
+                      "9:16",
+                      "16:9"
+                    ]
+                  },
+                  "aspectMode": {
+                    "type": "string",
+                    "enum": [
+                      "fixed",
+                      "approximate"
+                    ]
+                  },
+                  "aspectCandidates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "1:1",
+                        "3:4",
+                        "4:3",
+                        "9:16",
+                        "16:9"
+                      ]
+                    }
+                  },
+                  "headshot": {
+                    "type": "object",
+                    "properties": {
+                      "topMargin": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 0.5
+                      },
+                      "minTopMargin": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 0.25
+                      },
+                      "sideMargin": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 0.5
+                      },
+                      "shoulderDepth": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 2
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "framing": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "enum": [
+                          "head",
+                          "shoulders",
+                          "above_waist",
+                          "hip"
+                        ]
+                      },
+                      "end": {
+                        "type": "string",
+                        "enum": [
+                          "shoulders",
+                          "waist_hip",
+                          "hip",
+                          "below_hip",
+                          "mid_thigh",
+                          "above_knee",
+                          "knee",
+                          "calf",
+                          "ankle",
+                          "soles"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "protection": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "enum": [
+                          "head",
+                          "shoulders",
+                          "above_waist",
+                          "hip"
+                        ]
+                      },
+                      "end": {
+                        "type": "string",
+                        "enum": [
+                          "shoulders",
+                          "waist_hip",
+                          "hip",
+                          "below_hip",
+                          "mid_thigh",
+                          "above_knee",
+                          "knee",
+                          "calf",
+                          "ankle",
+                          "soles"
+                        ]
+                      },
+                      "hands": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "prefer_one",
+                          "prefer_all",
+                          "require_one",
+                          "require_all"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "spacing": {
+                    "type": "object",
+                    "properties": {
+                      "top": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 50
+                      },
+                      "right": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 50
+                      },
+                      "bottom": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 50
+                      },
+                      "left": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 50
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              },
+              "targets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "rowId",
+                    "fieldId"
+                  ],
+                  "properties": {
+                    "rowId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "fieldId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "index": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "rowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 500,
+                "uniqueItems": true
+              },
+              "fieldIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 100,
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": [
+                  "targets"
+                ]
+              },
+              {
+                "required": [
+                  "rowIds",
+                  "fieldIds"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
             "const": "generation.get_capabilities"
           }
         },
@@ -4570,7 +5108,7 @@
       }
     }
   ],
-  "x-action-definition-version": "1.4",
-  "x-app-version": "2.8.0",
+  "x-action-definition-version": "1.7",
+  "x-app-version": "2.8.2",
   "x-phase": "phase4.7"
 }
