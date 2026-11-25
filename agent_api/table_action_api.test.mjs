@@ -93,7 +93,7 @@ test('read capabilities and tables', () => {
   assert.equal(caps.ok, true);
   assert.equal(caps.data.phase, 'phase4.7');
   assert.equal(caps.data.appVersion, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
-  assert.equal(caps.data.actionDefinitionVersion, '1.7');
+  assert.equal(caps.data.actionDefinitionVersion, '1.9.1');
   assert.equal(caps.data.detail, 'summary');
   assert.deepEqual(Object.keys(caps.data.implementedActions[0]), ['name']);
   assert.equal(caps.data.features.actionDefinitions, true);
@@ -876,8 +876,15 @@ test('smart crop HTTP schema accepts safe temporary overrides and rejects intern
   assert.equal(validate(request('media.smart_crop_preview', {
     ...baseParams,
     presetId: 'shorts_skirt_3_4',
-    overrides: { aspect: '3:4', aspectMode: 'approximate', aspectCandidates: ['1:1', '3:4', '4:3'], framing: { start: 'above_waist', end: 'above_knee' } }
+    overrides: {
+      aspect: '3:4',
+      aspectMode: 'approximate',
+      aspectCandidates: ['1:1', '3:4', '4:3'],
+      framing: { start: 'knee', end: 'soles', startOffset: -0.15, endOffset: 0.05 },
+      protection: { start: 'above_knee', end: 'ankle', startOffset: 0.05, hands: 'none' }
+    }
   })), true);
   assert.equal(validate(request('media.smart_crop_preview', { ...baseParams, overrides: { strategy: 'anatomy' } })), false);
   assert.equal(validate(request('media.smart_crop_preview', { ...baseParams, overrides: { headshot: { topMargin: 1.5 } } })), false);
+  assert.equal(validate(request('media.smart_crop_preview', { ...baseParams, presetId: 'pants_3_4', overrides: { framing: { startOffset: 1.1 } } })), false);
 });

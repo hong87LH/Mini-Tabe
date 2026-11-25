@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://hongs-ai-table.local/schema/table-action-api/0.1",
-  "title": "AI Table Studio 2.8.2 Table Action API v0.1 phase4.7",
+  "title": "AI Table Studio 2.8.3 Table Action API v0.1 phase4.7",
   "type": "object",
   "required": [
     "version",
@@ -3526,14 +3526,16 @@
                       "4:3",
                       "9:16",
                       "16:9"
-                    ]
+                    ],
+                    "description": "首选输出比例。fixed 模式严格保持；approximate 模式作为候选排序的首选值。"
                   },
                   "aspectMode": {
                     "type": "string",
                     "enum": [
                       "fixed",
                       "approximate"
-                    ]
+                    ],
+                    "description": "fixed 严格保持 aspect；approximate 可在 aspectCandidates 中逐图选择更适合轮廓的比例。"
                   },
                   "aspectCandidates": {
                     "type": "array",
@@ -3549,7 +3551,8 @@
                         "9:16",
                         "16:9"
                       ]
-                    }
+                    },
+                    "description": "approximate 模式允许逐图比较的比例集合。"
                   },
                   "headshot": {
                     "type": "object",
@@ -3586,8 +3589,13 @@
                           "head",
                           "shoulders",
                           "above_waist",
-                          "hip"
-                        ]
+                          "hip",
+                          "above_knee",
+                          "knee",
+                          "calf",
+                          "ankle"
+                        ],
+                        "description": "期望景别（软约束）的起点锚点。"
                       },
                       "end": {
                         "type": "string",
@@ -3602,10 +3610,24 @@
                           "calf",
                           "ankle",
                           "soles"
-                        ]
+                        ],
+                        "description": "期望景别（软约束）的终点锚点。"
+                      },
+                      "startOffset": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1,
+                        "description": "起点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。"
+                      },
+                      "endOffset": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1,
+                        "description": "终点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。"
                       }
                     },
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "description": "希望获得的构图区间，仅为软偏好。若与 protection、固定比例或原图边界冲突，求解器可以放宽它。"
                   },
                   "protection": {
                     "type": "object",
@@ -3616,8 +3638,13 @@
                           "head",
                           "shoulders",
                           "above_waist",
-                          "hip"
-                        ]
+                          "hip",
+                          "above_knee",
+                          "knee",
+                          "calf",
+                          "ankle"
+                        ],
+                        "description": "最低必保范围（硬约束）的起点锚点。"
                       },
                       "end": {
                         "type": "string",
@@ -3632,7 +3659,20 @@
                           "calf",
                           "ankle",
                           "soles"
-                        ]
+                        ],
+                        "description": "最低必保范围（硬约束）的终点锚点。"
+                      },
+                      "startOffset": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1,
+                        "description": "起点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。"
+                      },
+                      "endOffset": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1,
+                        "description": "终点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。"
                       },
                       "hands": {
                         "type": "string",
@@ -3642,10 +3682,12 @@
                           "prefer_all",
                           "require_one",
                           "require_all"
-                        ]
+                        ],
+                        "description": "手部保护策略；require_* 属于硬保护，prefer_* 仅为构图偏好。"
                       }
                     },
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "description": "最低必须完整保留的人体区间。它优先于 framing；若 protection 比 framing 更宽，最终裁切可超出 framing。"
                   },
                   "spacing": {
                     "type": "object",
@@ -3674,7 +3716,8 @@
                     "additionalProperties": false
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "description": "只影响本次请求。framing 是软景别，protection 是硬必保范围；改变身体区间时通常需要同时检查两者。"
               },
               "targets": {
                 "type": "array",
@@ -3783,14 +3826,16 @@
                       "4:3",
                       "9:16",
                       "16:9"
-                    ]
+                    ],
+                    "description": "首选输出比例。fixed 模式严格保持；approximate 模式作为候选排序的首选值。"
                   },
                   "aspectMode": {
                     "type": "string",
                     "enum": [
                       "fixed",
                       "approximate"
-                    ]
+                    ],
+                    "description": "fixed 严格保持 aspect；approximate 可在 aspectCandidates 中逐图选择更适合轮廓的比例。"
                   },
                   "aspectCandidates": {
                     "type": "array",
@@ -3806,7 +3851,8 @@
                         "9:16",
                         "16:9"
                       ]
-                    }
+                    },
+                    "description": "approximate 模式允许逐图比较的比例集合。"
                   },
                   "headshot": {
                     "type": "object",
@@ -3843,8 +3889,13 @@
                           "head",
                           "shoulders",
                           "above_waist",
-                          "hip"
-                        ]
+                          "hip",
+                          "above_knee",
+                          "knee",
+                          "calf",
+                          "ankle"
+                        ],
+                        "description": "期望景别（软约束）的起点锚点。"
                       },
                       "end": {
                         "type": "string",
@@ -3859,10 +3910,24 @@
                           "calf",
                           "ankle",
                           "soles"
-                        ]
+                        ],
+                        "description": "期望景别（软约束）的终点锚点。"
+                      },
+                      "startOffset": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1,
+                        "description": "起点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。"
+                      },
+                      "endOffset": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1,
+                        "description": "终点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。"
                       }
                     },
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "description": "希望获得的构图区间，仅为软偏好。若与 protection、固定比例或原图边界冲突，求解器可以放宽它。"
                   },
                   "protection": {
                     "type": "object",
@@ -3873,8 +3938,13 @@
                           "head",
                           "shoulders",
                           "above_waist",
-                          "hip"
-                        ]
+                          "hip",
+                          "above_knee",
+                          "knee",
+                          "calf",
+                          "ankle"
+                        ],
+                        "description": "最低必保范围（硬约束）的起点锚点。"
                       },
                       "end": {
                         "type": "string",
@@ -3889,7 +3959,20 @@
                           "calf",
                           "ankle",
                           "soles"
-                        ]
+                        ],
+                        "description": "最低必保范围（硬约束）的终点锚点。"
+                      },
+                      "startOffset": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1,
+                        "description": "起点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。"
+                      },
+                      "endOffset": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1,
+                        "description": "终点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。"
                       },
                       "hands": {
                         "type": "string",
@@ -3899,10 +3982,12 @@
                           "prefer_all",
                           "require_one",
                           "require_all"
-                        ]
+                        ],
+                        "description": "手部保护策略；require_* 属于硬保护，prefer_* 仅为构图偏好。"
                       }
                     },
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "description": "最低必须完整保留的人体区间。它优先于 framing；若 protection 比 framing 更宽，最终裁切可超出 framing。"
                   },
                   "spacing": {
                     "type": "object",
@@ -3931,7 +4016,8 @@
                     "additionalProperties": false
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "description": "只影响本次请求。framing 是软景别，protection 是硬必保范围；改变身体区间时通常需要同时检查两者。"
               },
               "targets": {
                 "type": "array",
@@ -5108,7 +5194,7 @@
       }
     }
   ],
-  "x-action-definition-version": "1.7",
-  "x-app-version": "2.8.2",
+  "x-action-definition-version": "1.9.1",
+  "x-app-version": "2.8.3",
   "x-phase": "phase4.7"
 }

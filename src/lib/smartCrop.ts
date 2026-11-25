@@ -8,8 +8,8 @@ export type SmartCropPreset = {
   aspect: string;
   aspectMode?: 'fixed' | 'approximate';
   aspectCandidates?: string[];
-  framing: { start: string; end: string };
-  protection: { start: string; end: string; hands: string };
+  framing: { start: string; end: string; startOffset?: number; endOffset?: number };
+  protection: { start: string; end: string; hands: string; startOffset?: number; endOffset?: number };
   spacing: { top: number; right: number; bottom: number; left: number };
   allow_virtual: boolean;
   enabled: boolean;
@@ -40,9 +40,53 @@ export type SmartCropTarget = {
   item: any;
 };
 
+export type SmartCropTargetIssue = {
+  rowId: string;
+  fieldId: string;
+  index?: number;
+  reason: 'ROW_NOT_FOUND' | 'FIELD_NOT_FOUND' | 'INVALID_FIELD_TYPE' | 'NO_MEDIA_IN_TARGET' | 'TARGET_INDEX_OUT_OF_RANGE' | 'UNSUPPORTED_MEDIA';
+  message: string;
+};
+
+export class SmartCropActionError extends Error {
+  code: string;
+  details: Record<string, any>;
+
+  constructor(code: string, message: string, details: Record<string, any> = {}) {
+    super(message);
+    this.name = 'SmartCropActionError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export type SmartCropFailure = SmartCropTarget & {
+  error: string;
+  code: string;
+  details?: Record<string, any>;
+};
+
 export type SmartCropChange = SmartCropTarget & {
   cropData: any;
   warnings: string[];
+};
+
+export type SmartCropMediaPatch = {
+  rowId: string;
+  fieldId: string;
+  sourceIndex: number;
+  sourceIdentity: string;
+  sourceFingerprint: string;
+  cropData: any;
+};
+
+export type SmartCropWritebackIssue = {
+  rowId: string;
+  fieldId: string;
+  index: number;
+  code: 'MEDIA_CHANGED';
+  error: string;
+  details: Record<string, any>;
 };
 
 export type SegmentationResult = {
@@ -670,7 +714,7 @@ export function pixelBoxToGridCropData(
   box: { left: number; top: number; right: number; bottom: number },
   naturalW: number,
   naturalH: number,
-  metadata: { presetId: string; overrides?: SmartCropOverrides; effectiveAspect?: string; aspectMode?: 'fixed' | 'approximate'; warnings?: string[]; engineVersion?: string }
+  metadata: { presetId: string; overrides?: SmartCropOverrides; effectiveAspect?: string; aspectMode?: 'fixed' | 'approximate'; warnings?: string[]; engineVersion?: string; constraintResolution?: any }
 ) {
   const left = Math.max(0, Math.min(naturalW, box.left));
   const top = Math.max(0, Math.min(naturalH, box.top));
@@ -696,76 +740,117 @@ export function pixelBoxToGridCropData(
       ...(metadata.overrides && Object.keys(metadata.overrides).length ? { overrides: structuredClone(metadata.overrides) } : {}),
       ...(metadata.effectiveAspect ? { effectiveAspect: metadata.effectiveAspect } : {}),
       ...(metadata.aspectMode ? { aspectMode: metadata.aspectMode } : {}),
+      ...(metadata.constraintResolution ? { constraintResolution: structuredClone(metadata.constraintResolution) } : {}),
       engineVersion: metadata.engineVersion || 'manual-crop/v1+mediapipe-dual',
       warnings: metadata.warnings || []
     }
   };
 }
 
+export function smartCropPreviewEvidence(change: Pick<SmartCropChange, 'item' | 'cropData'>) {
+  const sourceBox = change.cropData?.sourceBox;
+  const width = Number(change.cropData?.naturalW || change.cropData?.imgW || 0);
+  const height = Number(change.cropData?.naturalH || change.cropData?.imgH || 0);
+  const existingCrop = change.item && typeof change.item === 'object' ? change.item.cropData : undefined;
+  return {
+    sourceBoxPx: sourceBox ? { left: sourceBox.left, top: sourceBox.top, right: sourceBox.right, bottom: sourceBox.bottom, unit: 'px' } : null,
+    sourceBoxRatio: sourceBox && width > 0 && height > 0 ? {
+      x: sourceBox.left / width,
+      y: sourceBox.top / height,
+      width: (sourceBox.right - sourceBox.left) / width,
+      height: (sourceBox.bottom - sourceBox.top) / height,
+      unit: 'ratio'
+    } : null,
+    sourceImage: { width, height },
+    constraintResolution: change.cropData?.smartCrop?.constraintResolution || null,
+    wouldOverwrite: existingCrop !== undefined,
+    ...(existingCrop === undefined ? {} : { replacedCrop: structuredClone(existingCrop) })
+  };
+}
+
 const SMART_CROP_ASPECTS = new Set(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9']);
-const SMART_CROP_STARTS = new Set(['head', 'shoulders', 'above_waist', 'hip']);
+const SMART_CROP_STARTS = new Set(['head', 'shoulders', 'above_waist', 'hip', 'above_knee', 'knee', 'calf', 'ankle']);
 const SMART_CROP_ENDS = new Set(['shoulders', 'waist_hip', 'hip', 'below_hip', 'mid_thigh', 'above_knee', 'knee', 'calf', 'ankle', 'soles']);
 const SMART_CROP_HANDS = new Set(['none', 'prefer_one', 'prefer_all', 'require_one', 'require_all']);
 
 function smartCropNumber(value: unknown, name: string, minimum: number, maximum: number) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < minimum || number > maximum) {
-    throw new Error(`${name} 必须在 ${minimum}–${maximum} 之间`);
+    throw smartCropOverrideError(`${name} 必须在 ${minimum}–${maximum} 之间`, { parameter: name, minimum, maximum, value });
   }
   return number;
+}
+
+function smartCropOverrideError(message: string, details: Record<string, any> = {}) {
+  return new SmartCropActionError('INVALID_CROP_OVERRIDE', message, details);
 }
 
 export function applySmartCropOverrides(basePreset: SmartCropPreset, overrides?: SmartCropOverrides | null): SmartCropPreset {
   if (!overrides || !Object.keys(overrides).length) return structuredClone(basePreset);
   const allowed = new Set(['aspect', 'aspectMode', 'aspectCandidates', 'headshot', 'framing', 'protection', 'spacing']);
   const unknown = Object.keys(overrides).find(key => !allowed.has(key));
-  if (unknown) throw new Error(`不支持的临时裁切参数: ${unknown}`);
+  if (unknown) throw smartCropOverrideError(`不支持的临时裁切参数: ${unknown}`, { parameter: unknown });
   const preset = structuredClone(basePreset);
   if (overrides.aspect !== undefined) {
-    if (!SMART_CROP_ASPECTS.has(overrides.aspect)) throw new Error(`不支持的临时画幅: ${overrides.aspect}`);
+    if (!SMART_CROP_ASPECTS.has(overrides.aspect)) throw smartCropOverrideError(`不支持的临时画幅: ${overrides.aspect}`, { parameter: 'aspect' });
     preset.aspect = overrides.aspect;
   }
   if (overrides.aspectMode !== undefined) {
-    if (!['fixed', 'approximate'].includes(overrides.aspectMode)) throw new Error(`不支持的比例模式: ${overrides.aspectMode}`);
-    if (preset.strategy === 'tight_headshot' && overrides.aspectMode === 'approximate') throw new Error('紧凑头像暂不支持近似比例模式');
+    if (!['fixed', 'approximate'].includes(overrides.aspectMode)) throw smartCropOverrideError(`不支持的比例模式: ${overrides.aspectMode}`, { parameter: 'aspectMode' });
+    if (preset.strategy === 'tight_headshot' && overrides.aspectMode === 'approximate') throw new SmartCropActionError('PARAM_NOT_APPLICABLE', '紧凑头像暂不支持近似比例模式', { parameter: 'aspectMode', presetId: preset.id });
     preset.aspectMode = overrides.aspectMode;
   }
   if (overrides.aspectCandidates !== undefined) {
-    if (!Array.isArray(overrides.aspectCandidates) || !overrides.aspectCandidates.length || overrides.aspectCandidates.length > 5) throw new Error('aspectCandidates 需要包含 1–5 个常见比例');
+    if (!Array.isArray(overrides.aspectCandidates) || !overrides.aspectCandidates.length || overrides.aspectCandidates.length > 5) throw smartCropOverrideError('aspectCandidates 需要包含 1–5 个常见比例', { parameter: 'aspectCandidates' });
     const candidates = [...new Set(overrides.aspectCandidates)];
     const invalid = candidates.find(aspect => !SMART_CROP_ASPECTS.has(aspect));
-    if (invalid) throw new Error(`不支持的候选画幅: ${invalid}`);
+    if (invalid) throw smartCropOverrideError(`不支持的候选画幅: ${invalid}`, { parameter: 'aspectCandidates', value: invalid });
     preset.aspectCandidates = candidates;
   }
   if (overrides.headshot !== undefined) {
-    if (preset.strategy !== 'tight_headshot') throw new Error('headshot 临时参数只适用于紧凑头像预设');
+    if (preset.strategy !== 'tight_headshot') throw new SmartCropActionError('PARAM_NOT_APPLICABLE', 'headshot 临时参数只适用于紧凑头像预设', { parameter: 'headshot', presetId: preset.id });
     const source = overrides.headshot;
     const allowedHeadshot = new Set(['topMargin', 'minTopMargin', 'sideMargin', 'shoulderDepth']);
     const unknownHeadshot = Object.keys(source).find(key => !allowedHeadshot.has(key));
-    if (unknownHeadshot) throw new Error(`不支持的头像临时参数: ${unknownHeadshot}`);
+    if (unknownHeadshot) throw smartCropOverrideError(`不支持的头像临时参数: ${unknownHeadshot}`, { parameter: `headshot.${unknownHeadshot}` });
     const headshot = { ...(preset.headshot || {}) };
     if (source.topMargin !== undefined) headshot.topMargin = smartCropNumber(source.topMargin, 'topMargin', 0, 0.5);
     if (source.minTopMargin !== undefined) headshot.minTopMargin = smartCropNumber(source.minTopMargin, 'minTopMargin', 0, 0.25);
     if (source.sideMargin !== undefined) headshot.sideMargin = smartCropNumber(source.sideMargin, 'sideMargin', 0, 0.5);
     if (source.shoulderDepth !== undefined) headshot.shoulderDepth = smartCropNumber(source.shoulderDepth, 'shoulderDepth', 0, 2);
-    if ((headshot.minTopMargin ?? 0) > (headshot.topMargin ?? 0.1)) throw new Error('minTopMargin 不能大于 topMargin');
+    if ((headshot.minTopMargin ?? 0) > (headshot.topMargin ?? 0.1)) throw smartCropOverrideError('minTopMargin 不能大于 topMargin', { parameter: 'headshot.minTopMargin' });
     preset.headshot = headshot;
   }
   if (overrides.framing !== undefined) {
-    if (preset.strategy === 'tight_headshot') throw new Error('紧凑头像请使用 headshot 参数，不接受 framing 临时覆盖');
-    if (overrides.framing.start !== undefined && !SMART_CROP_STARTS.has(overrides.framing.start)) throw new Error(`未知 framing.start: ${overrides.framing.start}`);
-    if (overrides.framing.end !== undefined && !SMART_CROP_ENDS.has(overrides.framing.end)) throw new Error(`未知 framing.end: ${overrides.framing.end}`);
-    preset.framing = { ...preset.framing, ...overrides.framing };
+    if (preset.strategy === 'tight_headshot') throw new SmartCropActionError('PARAM_NOT_APPLICABLE', '紧凑头像请使用 headshot 参数，不接受 framing 临时覆盖', { parameter: 'framing', presetId: preset.id });
+    const allowedFraming = new Set(['start', 'end', 'startOffset', 'endOffset']);
+    const unknownFraming = Object.keys(overrides.framing).find(key => !allowedFraming.has(key));
+    if (unknownFraming) throw smartCropOverrideError(`不支持的 framing 临时参数: ${unknownFraming}`, { parameter: `framing.${unknownFraming}` });
+    if (overrides.framing.start !== undefined && !SMART_CROP_STARTS.has(overrides.framing.start)) throw smartCropOverrideError(`未知 framing.start: ${overrides.framing.start}`, { parameter: 'framing.start' });
+    if (overrides.framing.end !== undefined && !SMART_CROP_ENDS.has(overrides.framing.end)) throw smartCropOverrideError(`未知 framing.end: ${overrides.framing.end}`, { parameter: 'framing.end' });
+    const framing = { ...preset.framing, ...overrides.framing };
+    if (overrides.framing.startOffset !== undefined) framing.startOffset = smartCropNumber(overrides.framing.startOffset, 'framing.startOffset', -1, 1);
+    if (overrides.framing.endOffset !== undefined) framing.endOffset = smartCropNumber(overrides.framing.endOffset, 'framing.endOffset', -1, 1);
+    preset.framing = framing;
   }
   if (overrides.protection !== undefined) {
-    if (preset.strategy === 'tight_headshot') throw new Error('紧凑头像请使用 headshot 参数，不接受 protection 临时覆盖');
-    if (overrides.protection.start !== undefined && !SMART_CROP_STARTS.has(overrides.protection.start)) throw new Error(`未知 protection.start: ${overrides.protection.start}`);
-    if (overrides.protection.end !== undefined && !SMART_CROP_ENDS.has(overrides.protection.end)) throw new Error(`未知 protection.end: ${overrides.protection.end}`);
-    if (overrides.protection.hands !== undefined && !SMART_CROP_HANDS.has(overrides.protection.hands)) throw new Error(`未知 protection.hands: ${overrides.protection.hands}`);
-    preset.protection = { ...preset.protection, ...overrides.protection };
+    if (preset.strategy === 'tight_headshot') throw new SmartCropActionError('PARAM_NOT_APPLICABLE', '紧凑头像请使用 headshot 参数，不接受 protection 临时覆盖', { parameter: 'protection', presetId: preset.id });
+    const allowedProtection = new Set(['start', 'end', 'startOffset', 'endOffset', 'hands']);
+    const unknownProtection = Object.keys(overrides.protection).find(key => !allowedProtection.has(key));
+    if (unknownProtection) throw smartCropOverrideError(`不支持的 protection 临时参数: ${unknownProtection}`, { parameter: `protection.${unknownProtection}` });
+    if (overrides.protection.start !== undefined && !SMART_CROP_STARTS.has(overrides.protection.start)) throw smartCropOverrideError(`未知 protection.start: ${overrides.protection.start}`, { parameter: 'protection.start' });
+    if (overrides.protection.end !== undefined && !SMART_CROP_ENDS.has(overrides.protection.end)) throw smartCropOverrideError(`未知 protection.end: ${overrides.protection.end}`, { parameter: 'protection.end' });
+    if (overrides.protection.hands !== undefined && !SMART_CROP_HANDS.has(overrides.protection.hands)) throw smartCropOverrideError(`未知 protection.hands: ${overrides.protection.hands}`, { parameter: 'protection.hands' });
+    const protection = { ...preset.protection, ...overrides.protection };
+    if (overrides.protection.startOffset !== undefined) protection.startOffset = smartCropNumber(overrides.protection.startOffset, 'protection.startOffset', -1, 1);
+    if (overrides.protection.endOffset !== undefined) protection.endOffset = smartCropNumber(overrides.protection.endOffset, 'protection.endOffset', -1, 1);
+    preset.protection = protection;
   }
   if (overrides.spacing !== undefined) {
-    if (preset.strategy === 'tight_headshot') throw new Error('紧凑头像请使用 headshot 参数，不接受 spacing 临时覆盖');
+    if (preset.strategy === 'tight_headshot') throw new SmartCropActionError('PARAM_NOT_APPLICABLE', '紧凑头像请使用 headshot 参数，不接受 spacing 临时覆盖', { parameter: 'spacing', presetId: preset.id });
+    const allowedSpacing = new Set(['top', 'right', 'bottom', 'left']);
+    const unknownSpacing = Object.keys(overrides.spacing).find(key => !allowedSpacing.has(key));
+    if (unknownSpacing) throw smartCropOverrideError(`不支持的 spacing 临时参数: ${unknownSpacing}`, { parameter: `spacing.${unknownSpacing}` });
     const spacing = { ...preset.spacing };
     for (const side of ['top', 'right', 'bottom', 'left'] as const) {
       if (overrides.spacing[side] !== undefined) spacing[side] = smartCropNumber(overrides.spacing[side], `spacing.${side}`, 0, 50);
@@ -773,6 +858,127 @@ export function applySmartCropOverrides(basePreset: SmartCropPreset, overrides?:
     preset.spacing = spacing;
   }
   return preset;
+}
+
+const SMART_CROP_ANCHOR_ORDER = new Map<string, number>([
+  ['head', 0],
+  ['shoulders', 1],
+  ['above_waist', 2],
+  ['waist_hip', 3],
+  ['hip', 4],
+  ['below_hip', 5],
+  ['mid_thigh', 6],
+  ['above_knee', 7],
+  ['knee', 8],
+  ['calf', 9],
+  ['ankle', 10],
+  ['soles', 11]
+]);
+
+export function smartCropConstraintContract(preset: SmartCropPreset): any {
+  if (preset.strategy === 'tight_headshot') {
+    return {
+      strategy: 'tight_headshot',
+      semantics: {
+        headshot: { mode: 'dedicated_solver', description: '由头发/面部轮廓与肩部参考共同求解；不使用 framing/protection。' },
+        precedence: ['head_contour', 'face', 'headshot_margins', 'aspect', 'source_bounds']
+      },
+      effective: {
+        aspect: preset.aspect,
+        aspectMode: 'fixed',
+        headshot: structuredClone(preset.headshot || {})
+      },
+      warnings: [] as string[]
+    };
+  }
+  const framing = structuredClone(preset.framing);
+  const protection = structuredClone(preset.protection);
+  const warnings: string[] = [];
+  const framingStart = SMART_CROP_ANCHOR_ORDER.get(framing.start);
+  const framingEnd = SMART_CROP_ANCHOR_ORDER.get(framing.end);
+  const protectionStart = SMART_CROP_ANCHOR_ORDER.get(protection.start);
+  const protectionEnd = SMART_CROP_ANCHOR_ORDER.get(protection.end);
+  if (framingStart !== undefined && protectionStart !== undefined && protectionStart < framingStart) {
+    warnings.push(`硬约束 protection.start=${protection.start} 早于软景别 framing.start=${framing.start}；最终裁切可能向上保留到 ${protection.start}`);
+  }
+  if (framingEnd !== undefined && protectionEnd !== undefined && protectionEnd > framingEnd) {
+    warnings.push(`硬约束 protection.end=${protection.end} 晚于软景别 framing.end=${framing.end}；最终裁切可能向下保留到 ${protection.end}`);
+  }
+  return {
+    semantics: {
+      framing: { mode: 'soft_preference', description: '期望景别；可因硬必保范围、固定比例或原图边界而放宽。' },
+      protection: { mode: 'hard_content_containment', description: '最低必须完整包含的内容范围；它不是裁切框边缘。' },
+      aspect: { mode: 'outer_box_geometry', description: '在完整包含 protection 后决定外框形状；可能在保护锚点之外保留更多画面。' },
+      stages: ['contain_protection', 'fit_aspect', 'prefer_framing']
+    },
+    effective: {
+      aspect: preset.aspect,
+      aspectMode: preset.aspectMode || 'fixed',
+      framing,
+      protection
+    },
+    warnings
+  };
+}
+
+export function resolveSmartCropProtection(
+  crop: { left: number; top: number; right: number; bottom: number },
+  required: { left: number; top: number; right: number; bottom: number } | null | undefined,
+  imageWidth: number,
+  imageHeight: number,
+  context: Record<string, any> = {}
+) {
+  if (!required) return { protectionBounds: null, expansionPx: null, warnings: [] as string[] };
+  const tolerance = 1;
+  const clippedSides = [
+    crop.left > required.left + tolerance ? 'left' : null,
+    crop.top > required.top + tolerance ? 'top' : null,
+    crop.right < required.right - tolerance ? 'right' : null,
+    crop.bottom < required.bottom - tolerance ? 'bottom' : null
+  ].filter(Boolean);
+  if (clippedSides.length) {
+    throw new SmartCropActionError('PROTECTION_CLIPPED', '候选裁切框没有完整包含最低必保范围，已保留原裁切', {
+      ...context,
+      clippedSides,
+      requiredBounds: structuredClone(required),
+      candidateCrop: structuredClone(crop)
+    });
+  }
+  const expansionPx = {
+    left: Math.max(0, required.left - crop.left),
+    top: Math.max(0, required.top - crop.top),
+    right: Math.max(0, crop.right - required.right),
+    bottom: Math.max(0, crop.bottom - required.bottom)
+  };
+  const warnings: string[] = [];
+  const verticalThreshold = Math.max(8, imageHeight * 0.01);
+  if (expansionPx.top > verticalThreshold) warnings.push(`画幅为保持比例在 protection 起点上方额外保留 ${Math.round(expansionPx.top)}px；protection 表示必须包含的内容，不是裁切上沿`);
+  if (expansionPx.bottom > verticalThreshold) warnings.push(`画幅为保持比例在 protection 终点下方额外保留 ${Math.round(expansionPx.bottom)}px；protection 表示必须包含的内容，不是裁切下沿`);
+  return {
+    protectionBounds: structuredClone(required),
+    cropBox: structuredClone(crop),
+    imageSize: { width: imageWidth, height: imageHeight },
+    expansionPx,
+    warnings
+  };
+}
+
+export function classifySmartCropFailure(error: unknown) {
+  const message = (error as any)?.message || String(error);
+  const orderConflict = /^(framing|core)顺序与躯干方向冲突$/.exec(message);
+  if (orderConflict) {
+    const constraint = orderConflict[1] === 'core' ? 'protection' : 'framing';
+    return {
+      code: 'ANCHOR_ORDER_CONFLICT',
+      message,
+      details: {
+        constraint,
+        reason: '弯腿、坐姿、横卧或关键点误识别使终点沿肩到胯身体轴落在起点之前',
+        suggestion: '保持该图片未裁切并人工复核；不要通过互换 start/end 绕过人体语义。'
+      }
+    };
+  }
+  return { code: (error as any)?.code || 'SMART_CROP_SOLVE_FAILED', message };
 }
 
 function smartCropAspectValue(aspect: string) {
@@ -1022,6 +1228,83 @@ export function isSmartCropImageItem(item: any) {
   return typeof url === 'string' && isReviewImage(url, item?.type) && !/\.(svg|pdf|ai|psd|psb)([?#]|$)/i.test(url);
 }
 
+export function resolveSmartCropTargets(
+  records: any[],
+  fields: any[],
+  params: { targets?: any[]; rowIds?: any[]; fieldIds?: any[] }
+): { targets: SmartCropTarget[]; skipped: SmartCropTargetIssue[]; requestedTotal: number } {
+  const targets: SmartCropTarget[] = [];
+  const skipped: SmartCropTargetIssue[] = [];
+  const seen = new Set<string>();
+  let requestedTotal = 0;
+
+  const addIssue = (issue: SmartCropTargetIssue) => {
+    skipped.push(issue);
+  };
+  const addItem = (rowId: string, fieldId: string, index: number, item: any) => {
+    requestedTotal += 1;
+    if (!isSmartCropImageItem(item)) {
+      addIssue({ rowId, fieldId, index, reason: 'UNSUPPORTED_MEDIA', message: '目标媒体不是可识别的位图附件' });
+      return;
+    }
+    const key = `${rowId}\u0000${fieldId}\u0000${index}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    targets.push({ rowId, fieldId, index, item });
+  };
+  const resolveCell = (rowId: string, fieldId: string, requestedIndex?: number) => {
+    const record = records.find(item => item.id === rowId);
+    if (!record) {
+      requestedTotal += 1;
+      addIssue({ rowId, fieldId, ...(requestedIndex === undefined ? {} : { index: requestedIndex }), reason: 'ROW_NOT_FOUND', message: `记录不存在: ${rowId}` });
+      return;
+    }
+    const field = fields.find(item => item.id === fieldId);
+    if (!field) {
+      requestedTotal += 1;
+      addIssue({ rowId, fieldId, ...(requestedIndex === undefined ? {} : { index: requestedIndex }), reason: 'FIELD_NOT_FOUND', message: `字段不存在: ${fieldId}` });
+      return;
+    }
+    if (!['attachment', 'aiImage'].includes(field.type)) {
+      requestedTotal += 1;
+      addIssue({ rowId, fieldId, ...(requestedIndex === undefined ? {} : { index: requestedIndex }), reason: 'INVALID_FIELD_TYPE', message: `字段 ${fieldId} 不是图片或附件字段` });
+      return;
+    }
+    const items = normalizeSmartCropItems(record[fieldId]);
+    if (!items.length) {
+      requestedTotal += 1;
+      addIssue({ rowId, fieldId, ...(requestedIndex === undefined ? {} : { index: requestedIndex }), reason: 'NO_MEDIA_IN_TARGET', message: '目标单元格没有媒体' });
+      return;
+    }
+    if (requestedIndex !== undefined) {
+      if (!Number.isInteger(requestedIndex) || requestedIndex < 0 || requestedIndex >= items.length) {
+        requestedTotal += 1;
+        addIssue({ rowId, fieldId, index: requestedIndex, reason: 'TARGET_INDEX_OUT_OF_RANGE', message: `媒体索引越界: ${requestedIndex}` });
+        return;
+      }
+      addItem(rowId, fieldId, requestedIndex, items[requestedIndex]);
+      return;
+    }
+    items.forEach((item, index) => addItem(rowId, fieldId, index, item));
+  };
+
+  const requested = Array.isArray(params.targets) ? params.targets : [];
+  if (requested.length) {
+    for (const target of requested) {
+      const index = target?.index === undefined ? undefined : Number(target.index);
+      resolveCell(String(target?.rowId || ''), String(target?.fieldId || ''), index);
+    }
+  } else {
+    const rowIds = Array.isArray(params.rowIds) ? params.rowIds.map(String) : [];
+    const fieldIds = Array.isArray(params.fieldIds) ? params.fieldIds.map(String) : [];
+    for (const rowId of rowIds) {
+      for (const fieldId of fieldIds) resolveCell(rowId, fieldId);
+    }
+  }
+
+  return { targets, skipped, requestedTotal };
+}
+
 export async function solveSmartCropTargets(
   targets: SmartCropTarget[],
   presetId: string,
@@ -1030,11 +1313,11 @@ export async function solveSmartCropTargets(
 ) {
   const presets = await listSmartCropPresets();
   const basePreset = presets.find(item => item.id === presetId);
-  if (!basePreset) throw new Error(`未知智能裁切预设: ${presetId}`);
+  if (!basePreset) throw new SmartCropActionError('INVALID_PRESET', `未知智能裁切预设: ${presetId}`, { presetId });
   const preset = applySmartCropOverrides(basePreset, overrides);
   const engine = preset.strategy === 'tight_headshot' ? null : await getEngine();
   const changes: SmartCropChange[] = [];
-  const failures: Array<SmartCropTarget & { error: string }> = [];
+  const failures: SmartCropFailure[] = [];
   for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
     const target = targets[targetIndex];
     onProgress?.({ completed: targetIndex, total: targets.length, target, status: 'processing' });
@@ -1058,6 +1341,7 @@ export async function solveSmartCropTargets(
       let crop: any;
       let warnings: string[] = [];
       let effectiveAspect = preset.aspect;
+      let constraintResolution: any = null;
       if (preset.strategy === 'tight_headshot') {
         crop = solveTightHeadshotCrop(analysis, preset);
         warnings = [
@@ -1073,18 +1357,43 @@ export async function solveSmartCropTargets(
         warnings = [...(Array.isArray(result.warnings) ? result.warnings.map(String) : []), ...extraWarnings];
         crop = result.crop;
         if (result.blocked) {
-          if (!preset.allow_virtual && crop) {
-            crop = fitCropInsideSource(crop, analysis.width, analysis.height);
-            warnings.push('理想画幅超出原图，已保持比例自动收缩到原图范围内');
-          } else {
-            throw new Error('人物范围与裁切规则冲突，无法生成安全画幅');
-          }
+          throw new SmartCropActionError('PROTECTION_CLIPPED', '原图与目标画幅无法完整容纳最低必保范围，已保留原裁切', {
+            presetId,
+            allowVirtual: preset.allow_virtual,
+            missingAreaFraction: Number(result?.canvas?.missing_area_fraction) || 0,
+            maxExtensionFraction: Number(result?.rule?.max_extension_fraction) || 0
+          });
         } else if (!preset.allow_virtual && crop && (
           crop.left < 0 || crop.top < 0 || crop.right > analysis.width || crop.bottom > analysis.height
         )) {
-          crop = fitCropInsideSource(crop, analysis.width, analysis.height);
-          warnings.push('裁切框已保持比例平移到原图范围内');
+          const fitted = fitCropInsideSource(crop, analysis.width, analysis.height);
+          const required = result?.protection_bounds;
+          if (required && (
+            fitted.left > required.left || fitted.top > required.top ||
+            fitted.right < required.right || fitted.bottom < required.bottom
+          )) {
+            throw new SmartCropActionError('PROTECTION_CLIPPED', '原图边界内无法在保持比例的同时完整保留最低必保范围，已保留原裁切', {
+              presetId,
+              requiredBounds: required,
+              fittedCrop: fitted
+            });
+          }
+          crop = fitted;
+          warnings.push('裁切框已保持比例平移到原图范围内，最低必保范围仍完整保留');
         }
+        const storedCrop = {
+          left: Math.max(0, Math.min(analysis.width, crop.left)),
+          top: Math.max(0, Math.min(analysis.height, crop.top)),
+          right: Math.max(0, Math.min(analysis.width, crop.right)),
+          bottom: Math.max(0, Math.min(analysis.height, crop.bottom))
+        };
+        constraintResolution = resolveSmartCropProtection(storedCrop, result?.protection_bounds, analysis.width, analysis.height, {
+          presetId,
+          protection: structuredClone(preset.protection),
+          effectiveAspect
+        });
+        crop = storedCrop;
+        warnings.push(...constraintResolution.warnings);
       }
       changes.push({
         ...target,
@@ -1094,37 +1403,104 @@ export async function solveSmartCropTargets(
           overrides: overrides || undefined,
           effectiveAspect,
           aspectMode: preset.aspectMode || 'fixed',
+          constraintResolution,
           warnings
         })
       });
       onProgress?.({ completed: targetIndex + 1, total: targets.length, target, status: 'done' });
     } catch (error: any) {
-      const message = error?.message || String(error);
-      failures.push({ ...target, error: message });
-      onProgress?.({ completed: targetIndex + 1, total: targets.length, target, status: 'failed', error: message });
+      const failure = classifySmartCropFailure(error);
+      failures.push({ ...target, error: failure.message, code: failure.code, ...(failure.details ? { details: failure.details } : {}) });
+      onProgress?.({ completed: targetIndex + 1, total: targets.length, target, status: 'failed', error: failure.message });
     }
   }
   return { preset, overrides: overrides || null, changes, failures, total: targets.length };
 }
 
 export function buildSmartCropCellUpdates(changes: SmartCropChange[], records: any[]) {
-  const byCell = new Map<string, SmartCropChange[]>();
-  for (const change of changes) {
-    const key = `${change.rowId}\u0000${change.fieldId}`;
-    byCell.set(key, [...(byCell.get(key) || []), change]);
+  return applySmartCropMediaPatches(createSmartCropMediaPatches(changes), records).updates;
+}
+
+function smartCropMediaIdentity(item: any) {
+  const value = typeof item === 'string' ? { url: item } : (item || {});
+  const stableId = value.id ?? value.mediaId ?? value.attachmentId;
+  if (stableId !== undefined && stableId !== null && String(stableId).trim()) return `id:${String(stableId).trim()}`;
+  const source = String(value.url || value.path || '').trim().replace(/\\/g, '/');
+  return source ? `source:${/^[a-z]:\//i.test(source) ? source.toLowerCase() : source}` : '';
+}
+
+function smartCropMediaFingerprint(item: any) {
+  if (typeof item === 'string') return JSON.stringify({ url: item });
+  if (!item || typeof item !== 'object') return '';
+  const { cropData: _cropData, mappedUrl: _mappedUrl, refCells: _refCells, ...persistent } = item;
+  return JSON.stringify(persistent);
+}
+
+export function createSmartCropMediaPatches(changes: SmartCropChange[]): SmartCropMediaPatch[] {
+  return changes.map(change => ({
+    rowId: change.rowId,
+    fieldId: change.fieldId,
+    sourceIndex: change.index,
+    sourceIdentity: smartCropMediaIdentity(change.item),
+    sourceFingerprint: smartCropMediaFingerprint(change.item),
+    cropData: structuredClone(change.cropData)
+  }));
+}
+
+export function applySmartCropMediaPatches(patches: SmartCropMediaPatch[], records: any[]) {
+  const byCell = new Map<string, SmartCropMediaPatch[]>();
+  for (const patch of patches) {
+    const key = `${patch.rowId}\u0000${patch.fieldId}`;
+    byCell.set(key, [...(byCell.get(key) || []), patch]);
   }
   const updates: Array<{ recordId: string; fieldId: string; value: any }> = [];
-  for (const [key, cellChanges] of byCell) {
+  const skipped: SmartCropWritebackIssue[] = [];
+  let applied = 0;
+  for (const [key, cellPatches] of byCell) {
     const [recordId, fieldId] = key.split('\u0000');
     const record = records.find(item => item.id === recordId);
-    if (!record) continue;
-    const items = normalizeSmartCropItems(record[fieldId]).map((item, index) => {
-      const change = cellChanges.find(value => value.index === index);
-      if (!change) return item;
-      const base = typeof item === 'string' ? { url: item } : item;
-      return { ...base, cropData: change.cropData };
-    });
-    updates.push({ recordId, fieldId, value: items });
+    if (!record) {
+      for (const patch of cellPatches) skipped.push({ rowId: recordId, fieldId, index: patch.sourceIndex, code: 'MEDIA_CHANGED', error: '裁切期间目标行已被删除', details: { sourceIdentity: patch.sourceIdentity } });
+      continue;
+    }
+    const items = normalizeSmartCropItems(record[fieldId]);
+    const nextItems = [...items];
+    const claimed = new Set<number>();
+    let cellChanged = false;
+    for (const patch of cellPatches) {
+      let index = -1;
+      if (patch.sourceIdentity) {
+        const identityMatches = items.map((item, itemIndex) => smartCropMediaIdentity(item) === patch.sourceIdentity && !claimed.has(itemIndex) ? itemIndex : -1).filter(itemIndex => itemIndex >= 0);
+        if (identityMatches.length === 1) {
+          index = identityMatches[0];
+        } else if (identityMatches.length > 1 && patch.sourceFingerprint) {
+          const fingerprintMatches = identityMatches.filter(itemIndex => smartCropMediaFingerprint(items[itemIndex]) === patch.sourceFingerprint);
+          if (fingerprintMatches.length === 1) index = fingerprintMatches[0];
+        }
+      }
+      if (index < 0) {
+        skipped.push({
+          rowId: recordId,
+          fieldId,
+          index: patch.sourceIndex,
+          code: 'MEDIA_CHANGED',
+          error: '裁切期间目标图片已被删除、替换或变得无法唯一识别，未写入裁切数据',
+          details: { sourceIdentity: patch.sourceIdentity, sourceIndex: patch.sourceIndex, reason: 'missing_or_ambiguous' }
+        });
+        continue;
+      }
+      claimed.add(index);
+      const base = typeof items[index] === 'string' ? { url: items[index] } : items[index];
+      if (patch.cropData === null || patch.cropData === undefined) {
+        const { cropData: _cropData, ...rest } = base || {};
+        nextItems[index] = rest;
+      } else {
+        nextItems[index] = { ...base, cropData: structuredClone(patch.cropData) };
+      }
+      applied += 1;
+      cellChanged = true;
+    }
+    if (cellChanged) updates.push({ recordId, fieldId, value: nextItems });
   }
-  return updates;
+  return { updates, skipped, applied };
 }

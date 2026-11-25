@@ -18,6 +18,7 @@ import { executeTableActionRequest, getActionMetadata, getProjectFolders, preser
 import { removeNetworkJobPlaceholders } from '../network_job_cleanup.js';
 import { getFilterInsertDefaults, getGroupInsertDefaults, insertRecordsAtAnchor, matchesViewFilters } from './lib/filteredRowInsertion';
 import { isSupportedAttachmentDescriptor } from './lib/mediaFileTypes';
+import { applySmartCropMediaPatches } from './lib/smartCrop';
 
 const computeFormulaValue = (field: any, record: any, fields: any[]) => {
   if (!field.prompt) return '';
@@ -504,6 +505,7 @@ export default function App() {
   const pendingWorkspaceRevisionRef = useRef<number | null>(null);
   const lastObservedTablesRef = useRef(tables);
   const tableActionIdempotencyRef = useRef<Map<string, any>>(new Map());
+  const tableActionInFlightRef = useRef<Map<string, { fingerprint: string; promise: Promise<any>; resolve: (response: any) => void }>>(new Map());
   const tableActionUndoRef = useRef<Map<string, any>>(new Map());
   const tableActionUndoOrderRef = useRef<string[]>([]);
   const tableActionHistoryRevisionRef = useRef(0);
@@ -1455,6 +1457,31 @@ export default function App() {
            return;
         }
 
+        if (idempotencyKey && tableActionInFlightRef.current.has(idempotencyKey)) {
+           const inFlight = tableActionInFlightRef.current.get(idempotencyKey)!;
+           if (inFlight.fingerprint !== idempotencyFingerprint) {
+              electronApi.sendTableActionResponse(bridgeId, {
+                 ok: false, version: '0.1', action: payload?.request?.action || null, requestId: payload?.request?.requestId || null,
+                 workspaceRevision: workspaceRevisionRef.current,
+                 error: { code: 'IDEMPOTENCY_CONFLICT', message: 'idempotencyKey is currently used by a different action payload', retryable: false, details: { idempotencyKey, inFlight: true } }
+              });
+              return;
+           }
+           const replay = structuredClone(await inFlight.promise);
+           replay.data = { ...(replay.data || {}), idempotentReplay: true, joinedInFlight: true, originalWorkspaceRevision: replay.workspaceRevision };
+           replay.workspaceRevision = workspaceRevisionRef.current;
+           electronApi.sendTableActionResponse(bridgeId, replay);
+           return;
+        }
+
+        let resolveInFlight: ((response: any) => void) | null = null;
+        let inFlightEntry: { fingerprint: string; promise: Promise<any>; resolve: (response: any) => void } | null = null;
+        if (idempotencyKey) {
+           const promise = new Promise<any>(resolve => { resolveInFlight = resolve; });
+           inFlightEntry = { fingerprint: idempotencyFingerprint, promise, resolve: response => resolveInFlight?.(response) };
+           tableActionInFlightRef.current.set(idempotencyKey, inFlightEntry);
+        }
+
         const snapshot = {
            tables: tablesRef.current,
            activeTableId: activeTableIdRef.current,
@@ -1543,7 +1570,7 @@ export default function App() {
                     runtimeData = await runtime.previewSmartCrop(runtimeParams);
                  } else if (runtimeAction === 'media.smart_crop_apply') {
                     const result = await runtime.applySmartCrop(runtimeParams);
-                    const updates = Array.isArray(result?.updates) ? result.updates : [];
+                    const mediaPatches = Array.isArray(result?.mediaPatches) ? result.mediaPatches : [];
                     const currentTables = tablesRef.current;
                     const tableIndex = currentTables.findIndex((table: any) => table.id === runtimeParams.tableId);
                     if (tableIndex < 0) {
@@ -1554,10 +1581,26 @@ export default function App() {
                     const beforeTables = structuredClone(currentTables);
                     const nextTables = structuredClone(currentTables);
                     const targetTable = nextTables[tableIndex];
+                    const writeback = applySmartCropMediaPatches(mediaPatches, targetTable.data.records);
+                    const updates = writeback.updates;
                     for (const update of updates) {
                        const row = targetTable.data.records.find((item: any) => item.id === update.recordId);
                        if (row) row[update.fieldId] = update.value;
                     }
+                    const writebackFailures = writeback.skipped.map((issue: any) => ({
+                       rowId: issue.rowId,
+                       fieldId: issue.fieldId,
+                       index: issue.index,
+                       code: issue.code,
+                       error: issue.error,
+                       details: issue.details
+                    }));
+                    const safeResult = {
+                       ...result,
+                       mediaPatches: undefined,
+                       applied: writeback.applied,
+                       failed: [...(Array.isArray(result?.failed) ? result.failed : []), ...writebackFailures]
+                    };
                     if (updates.length) {
                        const nextRevision = workspaceRevisionRef.current + 1;
                        await commitTablesFromAgent(nextTables, nextRevision);
@@ -1571,15 +1614,15 @@ export default function App() {
                           beforeRevision: nextRevision - 1,
                           afterRevision: nextRevision,
                           state: 'applied',
-                          effects: { rowsAffected: new Set(updates.map((item: any) => item.recordId)).size, cellsAffected: updates.length, mediaAffected: result.applied || updates.length }
+                          effects: { rowsAffected: new Set(updates.map((item: any) => item.recordId)).size, cellsAffected: updates.length, mediaAffected: writeback.applied }
                        });
                        tableActionUndoOrderRef.current = [...tableActionUndoOrderRef.current, undoToken].slice(-100);
                        tableActionHistoryRevisionRef.current = nextRevision;
                        response.undoToken = undoToken;
                        response.workspaceRevision = nextRevision;
-                       runtimeData = { ...result, updates: undefined, workspaceChanged: true, revision: nextRevision, effects: { rowsAffected: new Set(updates.map((item: any) => item.recordId)).size, cellsAffected: updates.length, mediaAffected: result.applied || updates.length } };
+                       runtimeData = { ...safeResult, workspaceChanged: true, revision: nextRevision, effects: { rowsAffected: new Set(updates.map((item: any) => item.recordId)).size, cellsAffected: updates.length, mediaAffected: writeback.applied } };
                     } else {
-                       runtimeData = { ...result, updates: undefined, workspaceChanged: false };
+                       runtimeData = { ...safeResult, workspaceChanged: false };
                     }
                  } else {
                     runtimeData = await runtime.run(response.data.params);
@@ -1948,10 +1991,14 @@ export default function App() {
               error: {
                  code: error?.code || 'INTERNAL_ERROR',
                  message: error?.message || String(error),
-                 retryable: error?.code === 'GENERATION_RUNTIME_UNAVAILABLE',
-                 details: {}
+                 retryable: error?.retryable === true || error?.code === 'GENERATION_RUNTIME_UNAVAILABLE',
+                 details: error?.details && typeof error.details === 'object' ? error.details : {}
               }
            };
+        }
+        if (idempotencyKey && inFlightEntry && tableActionInFlightRef.current.get(idempotencyKey) === inFlightEntry) {
+           inFlightEntry.resolve(structuredClone(response));
+           tableActionInFlightRef.current.delete(idempotencyKey);
         }
         electronApi.sendTableActionResponse(bridgeId, response);
      };

@@ -1,8 +1,8 @@
-# AI Table Studio v2.8.2 · Table Action API v0.1 · Phase 4.7
+# AI Table Studio v2.8.3 · Table Action API v0.1 · Phase 4.7
 
 这是从 v2.6.3 分出的 Agent API 探索分支。v2.6.5 / Phase 4.7 在既有协作、完整编辑和长任务能力之上，继续降低 Agent 的调用成本，并补齐“远端已经失联、UI 仍显示处理中”的 Job 专项清理能力。
 
-当前主工程产品版本为 **v2.8.2**，Action Definition 为 **1.7**，协议 v0.1 / phase4.7 保持不变。当前包含 91 个 Action（含项目文件夹管理扩展），以本地 action_definitions.js 为准。保存工程并重启 Electron 后加载新主进程和 preload。最新版本说明见 [v2.8.2 升级报告](../readme/90_版本记录/v2.8.2_智能裁切双模型轮廓版.md)。
+当前主工程产品版本为 **v2.8.3**，Action Definition 为 **1.9.1**，协议 v0.1 / phase4.7 保持不变。Action 数量与参数以本地 action_definitions.js 和运行时 `system.get_capabilities` 为准。保存工程并重启 Electron 后加载新主进程和 preload。最新版本说明见 [v2.8.3 升级报告](../readme/90_版本记录/v2.8.3_智能裁切约束与安全写回.md)。
 
 TT Image 2.6 可通过 `field.configure_ai` 配置 `complexity`、`outputFormat`、`frameCount`、`frameDurationMs`，四项均支持固定值或 `{字段名}`。生成前调用 `generation.preview`；`generation.get_capabilities` 的 `lingwuImageProfiles` 是模型别名、可用格式及参数能力的当前准确信息。`tt-image-2.6-guan` 不支持 SVG，预检会明确拒绝该组合。
 
@@ -221,8 +221,13 @@ Qwen v2.7.7 示例：默认图片工作流启用保真层时，使用 `field.con
 ## 智能裁切 Runtime
 
 - `media.list_crop_presets`：读取 UI 与 Agent 共用的裁切预设。
-- `media.smart_crop_preview`：本地识别人像并返回 ready/failed 明细，不修改表格；可传安全白名单 `overrides` 临时覆盖画幅、固定/近似比例模式、头像参数或通用人体规则；`ready[].effectiveAspect` 返回实际采用比例。
-- `media.smart_crop_apply`：按基础预设与本次 `overrides` 批量写入现有 `cropData`，需要 `confirmed=true`，整批返回一个 Undo token，并在 `appliedItems[]` 返回实际采用比例。
+- `media.smart_crop_preview`：本地识别人像并返回 `ready / skipped / failed` 明细，不修改表格；`ready[]` 返回实际比例、像素/归一化裁切框、原图尺寸与 `wouldOverwrite`。可用 `framing/protection.startOffset/endOffset` 按肩胯长度临时微调锚点。
+- `framing` 是期望景别（软约束），`protection` 是最低必保范围（硬约束）。只改 `framing` 不会清除预设原有的 `protection`；Preview / Apply 的 `constraintContract` 会回显合并后的范围与潜在冲突。
+- 腰上到脚踝的普通下装构图使用 `framing: above_waist→ankle`、`protection: hip→ankle`；若腰上也必须始终保留，则把 `protection.start` 同步设为 `above_waist`。
+- 坐姿、蜷腿或横卧图片若使终点沿肩胯身体轴投影到起点之前，会进入 `failed[]`，错误码为 `ANCHOR_ORDER_CONFLICT`。该项保持原裁切，不允许 Agent 通过互换 start/end 绕过人体语义。
+- `media.smart_crop_apply`：按基础预设与本次 `overrides` 批量写入现有 `cropData`，需要 `confirmed=true`，整批返回一个 Undo token；成功项会更新已有裁切，无法解析和求解失败项保留原值。
+- 明确目标全部无效时返回 `NO_VALID_TARGETS`；错误目标分别进入 `skipped[]`。未知预设、参数不适用和非法覆盖分别使用 `INVALID_PRESET / PARAM_NOT_APPLICABLE / INVALID_CROP_OVERRIDE`，不可重试。
+- 智能裁切 Runtime 的 Bridge 等待上限为 60 秒；`RENDERER_TIMEOUT` 与 `RENDERER_UNAVAILABLE` 分开返回。写请求超时后如需重试，必须复用原 `idempotencyKey`。
 - 参数可使用精确 `targets[{rowId,fieldId,index?}]`，或 `rowIds + fieldIds` 的笛卡尔范围。
 - Agent 选择 `presetId`，必要时追加仅本次有效的 `overrides`；人物关键点、像素坐标和内部裁切结构仍由 Grid Runtime 计算。
 - 图片不上传，模型优先从工程内置资源加载；缺失时自动下载并校验固定 SHA-256。

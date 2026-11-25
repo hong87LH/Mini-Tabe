@@ -91,6 +91,7 @@ v2.7.8  TT Image 2.6 / PNG·SVG·GIF 输出 / 专业媒体附件、丢失状态�
 v2.7.9  图片模型字段引用精简 / 按模型过滤参数 / GIF 默认参数 / Qwen 高保真
 v2.8.0  Qwen 人物功能 LoRA / 即梦 5.5 / MiniMax H3 图片模型扩展
 v2.8.2  智能裁切双模型轮廓 / 发顶与服装边缘保护 / 近似比例 / Agent 临时参数
+v2.8.3  智能裁切软硬约束 / 媒体身份安全写回 / 批量幂等与保护校验
 ```
 
 ### v2.4.x → v2.5.x
@@ -121,3 +122,5 @@ v2.5.7   图片、视频、音频附件分类导出
 - v2.8.0：正式登记 Xiaoxue、Mumu 人物功能 LoRA，支持默认提示词前置、表格文本追加与 Profile ID 字段引用；新增即梦 5.5、MiniMax H3 图片模型路由，普通位图统一输出 PNG，并同步 Action 能力和工作流维护资料。详见 [更新说明](readme/90_版本记录/v2.8.0_Qwen功能LoRA与图片模型扩展.md)。
 
 - v2.8.2：智能裁切升级为 PoseLandmarker 与独立 ImageSegmenter 双模型轮廓方案；头像保护真实发顶，服装读取语义横向边缘，支持固定/近似比例与 Agent 一次性覆盖参数。模型和 WASM 使用 Chromium HTTP Cache，失败时退回关键点方案。详见 [更新说明](readme/90_版本记录/v2.8.2_智能裁切双模型轮廓版.md)与 [HTML 使用指南](readme/Hongs_AI_Table_Studio_v2.8.2_完整使用指南.html)。
+
+- v2.8.3：明确 `framing` 软构图与 `protection` 硬必保范围，Preview 回显硬范围、最终框和比例扩展；写入前再次校验硬范围，并按媒体身份安全定位，图片变化时返回 `MEDIA_CHANGED`。补齐执行中幂等合并、下半身锚点与稳定错误分类。详见 [更新说明](readme/90_版本记录/v2.8.3_智能裁切约束与安全写回.md)与 [HTML 使用指南](readme/Hongs_AI_Table_Studio_v2.8.3_完整使用指南.html)。

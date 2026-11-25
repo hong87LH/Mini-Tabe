@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applySmartCropOverrides, buildSmartCropCellUpdates, chooseApproximateAspect, fitCropInsideSource, imageMimeFromPath, mergePoseAndSegmentation, pixelBoxToGridCropData, solveTightHeadshotCrop } from '../src/lib/smartCrop';
+import { applySmartCropMediaPatches, applySmartCropOverrides, buildSmartCropCellUpdates, chooseApproximateAspect, classifySmartCropFailure, createSmartCropMediaPatches, fitCropInsideSource, imageMimeFromPath, mergePoseAndSegmentation, pixelBoxToGridCropData, resolveSmartCropProtection, resolveSmartCropTargets, smartCropConstraintContract, smartCropPreviewEvidence, solveTightHeadshotCrop } from '../src/lib/smartCrop';
 import { restoreCropViewport } from '../src/lib/reviewMedia';
 
 test('local image blobs receive a decoder-friendly MIME type', () => {
@@ -26,6 +26,83 @@ test('pixel crop adapter preserves the exact original-pixel rectangle', () => {
   assert.ok(Math.abs(top - 80) < 1e-6);
 });
 
+test('smart crop preview evidence exposes exact boxes and overwrite risk without mutating the old crop', () => {
+  const previous = { ratio: 1, sourceBox: { left: 0, top: 0, right: 100, bottom: 100, unit: 'px' } };
+  const cropData = pixelBoxToGridCropData(
+    { left: 100, top: 200, right: 700, bottom: 1000 },
+    1200,
+    1600,
+    { presetId: 'upper_body_3_4' }
+  );
+  const evidence = smartCropPreviewEvidence({ item: { url: 'F:/portrait.png', cropData: previous }, cropData });
+  assert.deepEqual(evidence.sourceBoxPx, { left: 100, top: 200, right: 700, bottom: 1000, unit: 'px' });
+  assert.deepEqual(evidence.sourceBoxRatio, { x: 1 / 12, y: 0.125, width: 0.5, height: 0.5, unit: 'ratio' });
+  assert.deepEqual(evidence.sourceImage, { width: 1200, height: 1600 });
+  assert.equal(evidence.wouldOverwrite, true);
+  assert.deepEqual(evidence.replacedCrop, previous);
+  assert.notStrictEqual(evidence.replacedCrop, previous);
+});
+
+test('smart crop contract distinguishes soft framing from hard protection', () => {
+  const contract = smartCropConstraintContract({
+    id: 'lower_body', label: 'lower body', group: 'test', description: 'test', aspect: '3:4',
+    framing: { start: 'knee', end: 'soles' },
+    protection: { start: 'hip', end: 'ankle', hands: 'none' },
+    spacing: { top: 0, right: 0, bottom: 0, left: 0 }, allow_virtual: false, enabled: true
+  });
+  assert.equal(contract.semantics.framing.mode, 'soft_preference');
+  assert.equal(contract.semantics.protection.mode, 'hard_content_containment');
+  assert.equal(contract.semantics.aspect.mode, 'outer_box_geometry');
+  assert.match(contract.warnings.join('\n'), /protection\.start=hip.*framing\.start=knee/);
+});
+
+test('protection guard rejects a crop that misses the required soles', () => {
+  assert.throws(
+    () => resolveSmartCropProtection(
+      { left: 100, top: 2432, right: 1900, bottom: 3674 },
+      { left: 300, top: 3000, right: 1700, bottom: 4066 },
+      2000,
+      4500,
+      { presetId: 'lower_body' }
+    ),
+    (error: any) => error.code === 'PROTECTION_CLIPPED' && error.details.clippedSides.includes('bottom')
+  );
+});
+
+test('protection resolution reports aspect expansion beyond the requested start without calling it clipping', () => {
+  const resolution = resolveSmartCropProtection(
+    { left: 100, top: 1126, right: 2305, bottom: 4066 },
+    { left: 300, top: 3088, right: 2100, bottom: 4066 },
+    2400,
+    4400,
+    { presetId: 'lower_body' }
+  );
+  assert.equal(resolution.expansionPx.top, 1962);
+  assert.match(resolution.warnings.join('\n'), /protection 起点上方额外保留 1962px/);
+});
+
+test('tight headshot contract only advertises constraints used by its dedicated solver', () => {
+  const contract = smartCropConstraintContract({
+    id: 'face', label: 'face', group: 'test', description: 'test', aspect: '1:1',
+    framing: { start: 'head', end: 'shoulders' },
+    protection: { start: 'head', end: 'shoulders', hands: 'none' },
+    spacing: { top: 0, right: 0, bottom: 0, left: 0 }, allow_virtual: false, enabled: true,
+    strategy: 'tight_headshot', headshot: { topMargin: 0.14, sideMargin: 0.15, shoulderDepth: 0.4 }
+  });
+  assert.equal(contract.strategy, 'tight_headshot');
+  assert.equal(contract.semantics.headshot.mode, 'dedicated_solver');
+  assert.equal(contract.effective.framing, undefined);
+  assert.equal(contract.effective.protection, undefined);
+  assert.deepEqual(contract.effective.headshot, { topMargin: 0.14, sideMargin: 0.15, shoulderDepth: 0.4 });
+});
+
+test('smart crop classifies bent-pose anchor ordering failures for agents', () => {
+  const failure = classifySmartCropFailure(new Error('framing顺序与躯干方向冲突'));
+  assert.equal(failure.code, 'ANCHOR_ORDER_CONFLICT');
+  assert.equal(failure.details?.constraint, 'framing');
+  assert.match(failure.details?.reason || '', /弯腿|坐姿/);
+});
+
 test('smart crop changes preserve untouched media items and string URLs', () => {
   const records = [{ id: 'r1', media: ['F:/a.png', { url: 'F:/b.png', rating: 4 }] }];
   const updates = buildSmartCropCellUpdates([{
@@ -34,6 +111,39 @@ test('smart crop changes preserve untouched media items and string URLs', () => 
   assert.equal(updates.length, 1);
   assert.equal(updates[0].value[0], 'F:/a.png');
   assert.deepEqual(updates[0].value[1], { url: 'F:/b.png', rating: 4, cropData: { ratio: 1 } });
+});
+
+test('smart crop writeback follows media identity after reordering instead of stale array index', () => {
+  const original = [{ id: 'r1', media: [{ url: 'F:/a.png' }, { url: 'F:/b.png' }] }];
+  const patches = createSmartCropMediaPatches([{
+    rowId: 'r1', fieldId: 'media', index: 1, item: original[0].media[1], warnings: [], cropData: { ratio: 1 }
+  }]);
+  const current = [{ id: 'r1', media: [{ url: 'F:/b.png', rating: 5 }, { url: 'F:/a.png' }] }];
+  const result = applySmartCropMediaPatches(patches, current);
+  assert.equal(result.applied, 1);
+  assert.equal(result.skipped.length, 0);
+  assert.deepEqual(result.updates[0].value[0], { url: 'F:/b.png', rating: 5, cropData: { ratio: 1 } });
+  assert.deepEqual(result.updates[0].value[1], { url: 'F:/a.png' });
+});
+
+test('smart crop writeback rejects deleted or replaced media without touching the cell', () => {
+  const patches = createSmartCropMediaPatches([{
+    rowId: 'r1', fieldId: 'media', index: 0, item: { url: 'F:/old.png' }, warnings: [], cropData: { ratio: 1 }
+  }]);
+  const result = applySmartCropMediaPatches(patches, [{ id: 'r1', media: [{ url: 'F:/new.png' }] }]);
+  assert.equal(result.applied, 0);
+  assert.equal(result.updates.length, 0);
+  assert.equal(result.skipped[0].code, 'MEDIA_CHANGED');
+});
+
+test('smart crop writeback refuses indistinguishable duplicate sources after concurrent edits', () => {
+  const patches = createSmartCropMediaPatches([{
+    rowId: 'r1', fieldId: 'media', index: 0, item: { url: 'F:/same.png' }, warnings: [], cropData: { ratio: 1 }
+  }]);
+  const result = applySmartCropMediaPatches(patches, [{ id: 'r1', media: [{ url: 'F:/same.png' }, { url: 'F:/same.png' }] }]);
+  assert.equal(result.applied, 0);
+  assert.equal(result.updates.length, 0);
+  assert.equal(result.skipped[0].details.reason, 'missing_or_ambiguous');
 });
 
 test('legacy ratio crop restores deterministically at the current preview size', () => {
@@ -66,6 +176,74 @@ test('temporary smart crop overrides merge safely without mutating the shared pr
   assert.equal(base.headshot.topMargin, 0.14);
   assert.throws(() => applySmartCropOverrides(base, { headshot: { topMargin: 0.05, minTopMargin: 0.08 } }), /不能大于/);
   assert.throws(() => applySmartCropOverrides(base, { framing: { end: 'hip' } }), /紧凑头像/);
+});
+
+test('smart crop override errors expose stable caller-facing codes', () => {
+  const bodyPreset = {
+    id: 'pants_3_4', label: '裤子', group: '服装', description: '', aspect: '3:4',
+    framing: { start: 'above_waist', end: 'ankle' }, protection: { start: 'hip', end: 'ankle', hands: 'none' },
+    spacing: { top: 2, right: 2, bottom: 2, left: 2 }, allow_virtual: false, enabled: true,
+    strategy: 'anatomy' as const
+  };
+  const effective = applySmartCropOverrides(bodyPreset, {
+    framing: { start: 'knee', end: 'soles', startOffset: -0.1, endOffset: 0.05 },
+    protection: { start: 'above_knee', end: 'ankle', startOffset: 0.05, hands: 'none' }
+  });
+  assert.deepEqual(effective.framing, { start: 'knee', end: 'soles', startOffset: -0.1, endOffset: 0.05 });
+  assert.equal(effective.protection.start, 'above_knee');
+  assert.throws(
+    () => applySmartCropOverrides(bodyPreset, { framing: { startOffset: 1.2 } }),
+    (error: any) => error.code === 'INVALID_CROP_OVERRIDE' && /startOffset/.test(error.message)
+  );
+  assert.throws(
+    () => applySmartCropOverrides(bodyPreset, { headshot: { topMargin: 0.1 } }),
+    (error: any) => error.code === 'PARAM_NOT_APPLICABLE'
+  );
+});
+
+test('agent smart crop target resolution reports every invalid or unsupported target', () => {
+  const records = [{
+    id: 'r1',
+    media: [{ url: 'F:/portrait.png', cropData: { ratio: 1 } }, { url: 'F:/clip.mp4', type: 'video/mp4' }],
+    empty: [],
+    text: 'not media'
+  }];
+  const fields = [
+    { id: 'media', type: 'attachment' },
+    { id: 'empty', type: 'attachment' },
+    { id: 'text', type: 'text' }
+  ];
+  const result = resolveSmartCropTargets(records, fields, {
+    targets: [
+      { rowId: 'r1', fieldId: 'media', index: 0 },
+      { rowId: 'r1', fieldId: 'media', index: 5 },
+      { rowId: 'r1', fieldId: 'empty' },
+      { rowId: 'r1', fieldId: 'text' },
+      { rowId: 'missing', fieldId: 'media' },
+      { rowId: 'r1', fieldId: 'missing' }
+    ]
+  });
+  assert.equal(result.targets.length, 1);
+  assert.equal(result.targets[0].item.cropData.ratio, 1);
+  assert.deepEqual(result.skipped.map(item => item.reason), [
+    'TARGET_INDEX_OUT_OF_RANGE',
+    'NO_MEDIA_IN_TARGET',
+    'INVALID_FIELD_TYPE',
+    'ROW_NOT_FOUND',
+    'FIELD_NOT_FOUND'
+  ]);
+  assert.equal(result.requestedTotal, 6);
+});
+
+test('agent smart crop cell selectors keep images and explicitly skip other media', () => {
+  const result = resolveSmartCropTargets(
+    [{ id: 'r1', media: ['F:/portrait.jpg', { url: 'F:/voice.mp3', type: 'audio/mpeg' }] }],
+    [{ id: 'media', type: 'attachment' }],
+    { rowIds: ['r1'], fieldIds: ['media'] }
+  );
+  assert.equal(result.targets.length, 1);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].reason, 'UNSUPPORTED_MEDIA');
 });
 
 test('approximate aspect follows the protected garment shape while staying on common ratios', () => {

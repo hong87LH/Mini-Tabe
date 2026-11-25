@@ -1,7 +1,7 @@
 # 智能裁切与 Agent 批量裁切
 
-最后更新：2026-11-23
-适用版本：AI Table Studio v2.8.2
+最后更新：2026-11-25
+适用版本：AI Table Studio v2.8.3
 
 ## 能力概览
 
@@ -11,7 +11,7 @@
 
 - 支持图片/AI 图片列的单元格、框选区域和多选单元格；
 - 一个单元格有多张图片时默认逐张处理；
-- 成功项写入现有 `cropData`，原裁切预览、局部修图和生成引用继续复用原流程；
+- 成功项写入现有 `cropData`；已有裁切会被成功结果更新，预览会提前返回 `wouldOverwrite` 与 `replacedCrop`；
 - 缺少人物或目标身体部位时跳过该图片，不覆盖原数据；
 - UI 批量写入通过一次批量更新完成；Agent 写入返回一个 Undo token；
 - 图片、模型推理与裁切求解均在本机完成，不上传图片。
@@ -81,7 +81,7 @@
 }
 ```
 
-`targets` 不写 `index` 时处理该 Cell 的全部可识别图片；写 `index` 时只处理对应媒体实例。Agent 应始终先读取预设，不应自行生成内部 `cropData`。
+`targets` 不写 `index` 时检查该 Cell 的全部媒体；写 `index` 时只处理对应媒体实例。不存在的行/字段、空单元格、越界索引和非位图媒体不会再静默消失，而是进入 `skipped[]` 并返回稳定的 `reason`。所有目标都无效时返回 `NO_VALID_TARGETS`。Agent 应始终先读取预设，不应自行生成内部 `cropData`。
 
 ### Agent 临时参数
 
@@ -112,6 +112,40 @@
 
 紧凑头像只接受 `aspect` 与 `headshot`；通用人体预设接受 `aspect`、`aspectMode`、`aspectCandidates`、`framing`、`protection` 与 `spacing`。Action Schema 会拒绝 `strategy`、模型地址、内部 `cropData`、超范围数字和未知字段。成功应用后，本次覆盖值会记录在 `cropData.smartCrop.overrides` 中，便于审计和复现。
 
+`framing` 与 `protection` 不是两个同义参数：
+
+- `framing` 是**期望景别（软约束）**，表示希望画面从哪里开始、到哪里结束；当固定比例、原图边界或硬保护范围冲突时，求解器可以放宽它。
+- `protection` 是**必须完整包含的内容范围（硬约束）**，表示无论怎样构图都不能裁掉的身体区间；它不是裁切框的起止边缘。固定比例可以在它的上、下或两侧额外保留画面，但不能漏掉其中内容。
+- `overrides` 是叠加到预设上，不是从空配置开始。只改 `framing.start` 时，预设原有的 `protection.start` 仍然生效。
+- Preview 与 Apply 都返回 `constraintContract`，其中包含合并后的 `framing / protection / aspect`、优先级和冲突提示。Agent 必须读取它，不能只看请求参数。
+- 每张成功结果还返回 `constraintResolution`：`protectionBounds` 是检测到的硬必保矩形，`cropBox` 是最终实际写入矩形，`expansionPx` 表示为了保持画幅在硬范围之外多保留了多少像素。扩展较大时会进入 `warnings`，但只有裁掉硬范围才会失败。
+- `tight_headshot` 使用独立头像求解器，`constraintContract` 只返回实际参与计算的头发/面部轮廓、头像留白和画幅参数，不再把占位用的 `framing / protection` 描述成有效约束。
+
+处理当前活动单元格内全部图片，要求“腰上到脚踝”时，推荐先 Preview：
+
+```json
+{
+  "action": "media.smart_crop_preview",
+  "params": {
+    "tableId": "当前 tableId",
+    "presetId": "pants_3_4",
+    "targets": [
+      { "rowId": "当前 rowId", "fieldId": "当前 fieldId" }
+    ],
+    "overrides": {
+      "framing": { "start": "above_waist", "end": "ankle" },
+      "protection": { "start": "hip", "end": "ankle", "hands": "none" }
+    }
+  }
+}
+```
+
+这个写法把“腰上”作为希望保留的构图语境，把“胯到脚踝”作为最低必保内容。若业务要求腰上也绝不能裁掉，应把 `protection.start` 改成 `above_waist`。不写 `index` 会处理该 Cell 的全部图片。
+
+坐姿、蜷腿、横卧或关键点误识别时，脚踝沿“肩→胯”身体轴的投影可能落在腰/胯起点之前。此时会返回 `ANCHOR_ORDER_CONFLICT`，失败项保持原裁切并进入人工复核；这不是比例问题，也不应通过互换 `start/end` 强行绕过。响应的 `details.constraint` 会指出冲突来自软 `framing` 还是硬 `protection`。
+
+Apply 在识别完成后不会再按开始时的数组索引覆盖整个 Cell，而会在最新工程数据中按媒体稳定 ID 或来源地址重新定位图片。识别期间若图片被删除、替换或出现无法唯一判断的重复来源，该项返回 `MEDIA_CHANGED` 并保持 Cell 当前内容。固定比例或原图边界无法完整容纳 `protection` 时，最终写入前会再次逐边核验；只要遗漏头/脚或服装轮廓的任一硬边界就返回 `PROTECTION_CLIPPED`，不会用“缩小后看似成功”的裁切破坏硬必保范围。
+
 通用人体预设还支持临时切换到近似比例。`aspect` 是首选比例，`aspectCandidates` 是本次允许求解器比较的常用比例集合：
 
 ```json
@@ -125,8 +159,8 @@
       "aspect": "3:4",
       "aspectMode": "approximate",
       "aspectCandidates": ["1:1", "3:4", "4:3", "9:16", "16:9"],
-      "framing": { "start": "above_waist", "end": "knee" },
-      "protection": { "start": "hip", "end": "above_knee", "hands": "none" }
+      "framing": { "start": "knee", "end": "soles", "startOffset": -0.1, "endOffset": 0.05 },
+      "protection": { "start": "above_knee", "end": "ankle", "startOffset": 0.05, "hands": "none" }
     },
     "targets": [
       { "rowId": "row_1", "fieldId": "field_images", "index": 0 }
@@ -139,6 +173,8 @@
 - `approximate`：逐张尝试候选比例，先比较必保区域是否完整、是否越界，再比较目标轮廓形状与首选比例的接近程度；同一批图片可以得到不同的最终比例；
 - 紧凑头像仍只允许 `fixed`，避免自动换比例破坏换脸素材的一致性；
 - preview 的 `ready[].effectiveAspect` 与 apply 的 `appliedItems[].effectiveAspect` 会返回每张图实际采用的比例。
+- preview 的 `ready[]` 同时返回 `sourceBoxPx`、`sourceBoxRatio`、`sourceImage`、`wouldOverwrite`；已有裁切时附带 `replacedCrop`，因此无需先写入表格就能核验范围与覆盖风险。
+- `skipped[]` 表示目标解析失败；`failed[]` 表示目标有效但识别或求解失败，两者不要混为一类。
 
 ## 维护入口
 
@@ -160,6 +196,10 @@ public/smart_crop/presets.json
 头像策略把完整头发、面部和 `minTopMargin` 作为硬约束；`topMargin` 是理想构图目标，肩部是可以缩减的软语境。画幅受限时，求解器先在理想顶部留白与最低安全线之间回收少量空间给肩部，不会拿头发像素换身体。普通服装与下装预设继续使用 `framing`、`protection`、`spacing` 三组人体规则，并可配置 `aspectMode` 与 `aspectCandidates`。
 
 普通服装裁切采用“骨骼定纵向、语义轮廓定横向”的组合：腰、胯、膝等关键点确定需要保留的身体高度区间；该区间内的 `clothes` 语义行区间直接决定服装最左和最右边界，不再被肩宽、胯宽等骨骼走廊横向截断。因此宽摆短裙、蓬松上衣等超出骨架宽度的布料会进入硬保护区。轮廓缺失时才退回原人物轮廓与骨骼规则。
+
+通用人体规则的起点支持 `head / shoulders / above_waist / hip / above_knee / knee / calf / ankle`，终点支持到 `soles`。`startOffset` 与 `endOffset` 是相对肩到胯长度的有符号偏移，范围 `-1～1`：负数沿身体轴向头部移动，正数沿身体轴向脚部移动。例如 `start: knee, startOffset: -0.1` 表示从膝盖上方约 0.1 个肩胯长度开始。偏移同时可用于 `framing` 和 `protection`；大幅偏移可能造成起止顺序冲突，应先 preview。
+
+Agent Runtime 的裁切冷启动等待上限为 60 秒。没有可用窗口返回 `RENDERER_UNAVAILABLE`；超过等待时间返回 `RENDERER_TIMEOUT` 与 `retryAfterMs`。写操作超时后渲染端可能仍在完成原请求，重试必须沿用原 `idempotencyKey`，不能创建新 Key。
 
 头像分级保底顺序：
 

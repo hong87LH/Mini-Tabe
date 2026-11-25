@@ -15,6 +15,14 @@ const ALL_PERMISSIONS = new Set([
   'filesystem:export', 'workspace:save', 'destructive'
 ]);
 
+export function rendererActionTimeoutMs(actionName) {
+  if (actionName === 'generation.run') return 120000;
+  if (actionName === 'generation.preview') return 30000;
+  if (actionName === 'media.smart_crop_preview' || actionName === 'media.smart_crop_apply') return 60000;
+  if (actionName.startsWith('job.')) return 30000;
+  return 12000;
+}
+
 function argValue(name) {
   const prefix = `--${name}=`;
   const found = process.argv.find(arg => arg.startsWith(prefix));
@@ -73,13 +81,25 @@ export function createTableActionServer({ app, BrowserWindow, ipcMain }) {
     return new Promise((resolve, reject) => {
       const win = getRendererWindow();
       if (!win) {
-        reject(new Error('No AI Table Studio renderer window is available.'));
+        const error = new Error('No AI Table Studio renderer window is available.');
+        error.code = 'RENDERER_UNAVAILABLE';
+        error.retryable = true;
+        reject(error);
         return;
       }
       const bridgeId = `bridge_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
       const timer = setTimeout(() => {
         pending.delete(bridgeId);
-        reject(new Error(`Renderer action timed out after ${timeoutMs}ms.`));
+        const error = new Error(`Renderer action timed out after ${timeoutMs}ms.`);
+        error.code = 'RENDERER_TIMEOUT';
+        error.retryable = true;
+        error.details = {
+          timeoutMs,
+          retryAfterMs: 1500,
+          retryWithSameIdempotencyKey: true,
+          note: 'The renderer may still finish the original request; do not create a new idempotency key when retrying a write.'
+        };
+        reject(error);
       }, timeoutMs);
       pending.set(bridgeId, { resolve, reject, timer });
       win.webContents.send('table-action-api:request', { bridgeId, request });
@@ -182,10 +202,7 @@ export function createTableActionServer({ app, BrowserWindow, ipcMain }) {
       }
       const request = { ...req.body, actor: req.body.actor || { type: 'agent', name: actorName } };
       try {
-        const timeoutMs = actionName === 'generation.run' ? 120000
-          : actionName === 'generation.preview' ? 30000
-          : actionName.startsWith('job.') ? 30000
-          : 12000;
+        const timeoutMs = rendererActionTimeoutMs(actionName);
         const response = await enqueueDispatch(request, timeoutMs);
         const status = response?.ok ? 200
           : ['CONFIRMATION_REQUIRED', 'STALE_WORKSPACE', 'WRITE_CONFLICT'].includes(response?.error?.code) ? 409
@@ -206,13 +223,15 @@ export function createTableActionServer({ app, BrowserWindow, ipcMain }) {
         }
         res.status(status).json(response);
       } catch (error) {
-        writeAudit({ actorId, action: actionName, requestId: req.body?.requestId || null, ok: false, code: 'RENDERER_UNAVAILABLE', message: error?.message || String(error) });
+        const code = error?.code || 'RENDERER_UNAVAILABLE';
+        const retryable = error?.retryable !== false;
+        writeAudit({ actorId, action: actionName, requestId: req.body?.requestId || null, ok: false, code, message: error?.message || String(error) });
         res.status(503).json({
           ok: false,
           version: API_VERSION,
           action: req.body?.action || null,
           requestId: req.body?.requestId || null,
-          error: { code: 'RENDERER_UNAVAILABLE', message: error?.message || String(error), retryable: true }
+          error: { code, message: error?.message || String(error), retryable, details: error?.details || {} }
         });
       }
     });

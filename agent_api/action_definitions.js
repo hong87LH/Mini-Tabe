@@ -1,11 +1,11 @@
-// AI Table Studio v2.8.2 / Table Action API Phase 4.7
+// AI Table Studio v2.8.3 / Table Action API Phase 4.7
 // Single source of truth for action metadata, parameter schemas, CLI help and
 // the generated HTTP JSON Schema artifact.
 
 export const TABLE_ACTION_API_VERSION = '0.1';
 export const TABLE_ACTION_API_PHASE = 'phase4.7';
-export const TABLE_ACTION_APP_VERSION = '2.8.2';
-export const ACTION_DEFINITION_VERSION = '1.7';
+export const TABLE_ACTION_APP_VERSION = '2.8.3';
+export const ACTION_DEFINITION_VERSION = '1.9.1';
 
 const id = { type: 'string', minLength: 1 };
 const text = { type: 'string' };
@@ -34,25 +34,37 @@ const mediaLocatorRequired = ['tableId', 'rowId', 'fieldId'];
 const mediaSource = object({ rowId: id, fieldId: id, index: nonNegativeInteger }, ['rowId', 'fieldId']);
 const mediaTarget = object({ rowId: id, fieldId: id, index: nonNegativeInteger }, ['rowId', 'fieldId']);
 const smartCropTarget = object({ rowId: id, fieldId: id, index: nonNegativeInteger }, ['rowId', 'fieldId']);
-const smartCropStart = { type: 'string', enum: ['head', 'shoulders', 'above_waist', 'hip'] };
+const smartCropStart = { type: 'string', enum: ['head', 'shoulders', 'above_waist', 'hip', 'above_knee', 'knee', 'calf', 'ankle'] };
 const smartCropEnd = { type: 'string', enum: ['shoulders', 'waist_hip', 'hip', 'below_hip', 'mid_thigh', 'above_knee', 'knee', 'calf', 'ankle', 'soles'] };
 const smartCropMargin = { type: 'number', minimum: 0, maximum: 0.5 };
+const smartCropAnchorOffset = { type: 'number', minimum: -1, maximum: 1 };
+const smartCropRange = (withHands = false, mode = 'framing') => {
+  const hard = mode === 'protection';
+  const label = hard ? '最低必保范围（硬约束）' : '期望景别（软约束）';
+  return object({
+    start: { ...smartCropStart, description: `${label}的起点锚点。` },
+    end: { ...smartCropEnd, description: `${label}的终点锚点。` },
+    startOffset: { ...smartCropAnchorOffset, description: '起点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。' },
+    endOffset: { ...smartCropAnchorOffset, description: '终点沿肩→胯身体轴的有符号偏移；负值向头部，正值向脚部，单位为肩胯长度。' },
+    ...(withHands ? { hands: { type: 'string', enum: ['none', 'prefer_one', 'prefer_all', 'require_one', 'require_all'], description: '手部保护策略；require_* 属于硬保护，prefer_* 仅为构图偏好。' } } : {})
+  }, [], {
+    description: hard
+      ? '最低必须完整保留的人体区间。它优先于 framing；若 protection 比 framing 更宽，最终裁切可超出 framing。'
+      : '希望获得的构图区间，仅为软偏好。若与 protection、固定比例或原图边界冲突，求解器可以放宽它。'
+  });
+};
 const smartCropOverrides = object({
-  aspect: { type: 'string', enum: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'] },
-  aspectMode: { type: 'string', enum: ['fixed', 'approximate'] },
-  aspectCandidates: { type: 'array', minItems: 1, maxItems: 5, uniqueItems: true, items: { type: 'string', enum: ['1:1', '3:4', '4:3', '9:16', '16:9'] } },
+  aspect: { type: 'string', enum: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'], description: '首选输出比例。fixed 模式严格保持；approximate 模式作为候选排序的首选值。' },
+  aspectMode: { type: 'string', enum: ['fixed', 'approximate'], description: 'fixed 严格保持 aspect；approximate 可在 aspectCandidates 中逐图选择更适合轮廓的比例。' },
+  aspectCandidates: { type: 'array', minItems: 1, maxItems: 5, uniqueItems: true, items: { type: 'string', enum: ['1:1', '3:4', '4:3', '9:16', '16:9'] }, description: 'approximate 模式允许逐图比较的比例集合。' },
   headshot: object({
     topMargin: smartCropMargin,
     minTopMargin: { type: 'number', minimum: 0, maximum: 0.25 },
     sideMargin: smartCropMargin,
     shoulderDepth: { type: 'number', minimum: 0, maximum: 2 }
   }),
-  framing: object({ start: smartCropStart, end: smartCropEnd }),
-  protection: object({
-    start: smartCropStart,
-    end: smartCropEnd,
-    hands: { type: 'string', enum: ['none', 'prefer_one', 'prefer_all', 'require_one', 'require_all'] }
-  }),
+  framing: smartCropRange(false, 'framing'),
+  protection: smartCropRange(true, 'protection'),
   spacing: object({
     top: { type: 'number', minimum: 0, maximum: 50 },
     right: { type: 'number', minimum: 0, maximum: 50 },
@@ -63,7 +75,7 @@ const smartCropOverrides = object({
 const smartCropParams = object({
   tableId: id,
   presetId: nonEmptyText,
-  overrides: smartCropOverrides,
+  overrides: { ...smartCropOverrides, description: '只影响本次请求。framing 是软景别，protection 是硬必保范围；改变身体区间时通常需要同时检查两者。' },
   targets: array(smartCropTarget, 1, 500),
   rowIds: ids(500),
   fieldIds: ids(100)
@@ -306,16 +318,16 @@ export const ACTION_DEFINITIONS = {
   'media.set_rating': writeMedia('设置媒体实例 0–5 星评分', object({ ...mediaLocatorProperties, rating: { type: 'number', minimum: 0, maximum: 5 } }, [...mediaLocatorRequired, 'rating']), { alwaysConfirm: true }),
   'media.list_crop_presets': read('列出右键菜单与 Agent 共用的智能裁切预设', empty, {
     runtime: true,
-    notes: ['返回 presetId、画幅、身体范围与使用说明；Agent 应选择预设，不自行计算裁切坐标。']
+    notes: ['返回 presetId、画幅、身体范围与使用说明；Agent 应选择预设，不自行计算裁切坐标。', 'framing 是期望景别（软约束）；protection 是必须完整包含的内容范围（硬约束），不是裁切框边缘。固定比例可以在 protection 之外保留更多画面，但不得裁掉 protection。']
   }),
   'media.smart_crop_preview': read('本地识别人像并预览批量智能裁切结果，不写入表格', smartCropParams, {
     runtime: true,
-    notes: ['图片只在本机处理；缺少目标身体部位的附件会明确列入 failed。', 'overrides 只对本次请求生效，不修改共享预设。']
+    notes: ['图片只在本机处理；无法解析的目标列入 skipped，求解失败的目标列入 failed。', 'ready 返回像素与归一化裁切框、原图尺寸、wouldOverwrite 与 constraintResolution；constraintResolution.expansionPx 表示固定比例在 protection 边界外额外保留的像素。', 'overrides 只对本次请求生效，不修改共享预设。', 'framing 是软景别；protection 是必须完整包含的硬内容范围而非裁切边缘。若只修改 framing，原预设的 protection 仍会生效。候选框遗漏 protection 任一边时返回 PROTECTION_CLIPPED。']
   }),
   'media.smart_crop_apply': writeMedia('按共享预设批量写入图片裁切数据', smartCropParams, {
     runtime: true,
     alwaysConfirm: true,
-    notes: ['整批写入只产生一个 Undo token；失败项跳过，不覆盖原裁切。', 'overrides 只对本次请求生效，并记录到结果 cropData 便于复现。']
+    notes: ['整批写入只产生一个 Undo token；成功项会更新已有裁切，无法解析或求解失败的目标保留原裁切。', '写回前会按媒体 ID 或来源地址重新定位当前图片；裁切期间图片被删除、替换或无法唯一识别时返回 MEDIA_CHANGED，不按旧数组索引覆盖。', 'protection 是必须完整包含的内容范围，不是裁切框边缘；固定比例可以向锚点外扩展并通过 constraintResolution.expansionPx 回显，但遗漏 protection 任一边时返回 PROTECTION_CLIPPED。', 'overrides 只对本次请求生效，并记录到结果 cropData 便于复现。', '身体起止范围改变时必须核对 constraintContract、constraintResolution 和 Preview warnings 后再确认写入。']
   }),
 
   'generation.get_capabilities': read('列出当前已配置的生成 Provider、Model、ComfyUI Workflow、模板默认提示词与 LoRA 提示词策略', empty, {

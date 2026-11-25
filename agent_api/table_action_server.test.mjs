@@ -4,8 +4,29 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { createTableActionServer } from './table_action_server.js';
+import { createTableActionServer, rendererActionTimeoutMs } from './table_action_server.js';
 import { executeTableActionRequest } from './table_action_api.js';
+
+test('renderer bridge separates unavailable windows and gives smart crop a cold-start budget', async () => {
+  const ipcMain = new EventEmitter();
+  const server = createTableActionServer({
+    app: { getPath: () => os.tmpdir() },
+    BrowserWindow: { getFocusedWindow: () => null, getAllWindows: () => [] },
+    ipcMain
+  });
+  try {
+    await assert.rejects(
+      server.dispatchToRenderer({ version: '0.1', action: 'media.smart_crop_preview', params: {} }),
+      error => error.code === 'RENDERER_UNAVAILABLE' && error.retryable === true
+    );
+    assert.equal(rendererActionTimeoutMs('media.smart_crop_preview'), 60000);
+    assert.equal(rendererActionTimeoutMs('media.smart_crop_apply'), 60000);
+    assert.equal(rendererActionTimeoutMs('generation.run'), 120000);
+    assert.equal(rendererActionTimeoutMs('table.list'), 12000);
+  } finally {
+    server.dispose();
+  }
+});
 
 test('HTTP bridge enforces auth/schema and exposes health/SSE/audit', async () => {
   const previous = {

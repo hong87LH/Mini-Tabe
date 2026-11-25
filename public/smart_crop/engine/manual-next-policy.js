@@ -2,7 +2,7 @@
 (function(root){
   const A=root.AnatomyCrop||(typeof require==='function'?require('./manual-next-crop-policy.js'):null);
   const ends={shoulders:'肩膀',waist_hip:'腰胯之间',hip:'胯部',below_hip:'胯部稍下',mid_thigh:'胯膝中点',above_knee:'膝上',knee:'膝盖',calf:'腿肚',ankle:'脚踝',soles:'脚底'};
-  const starts={head:'头部',shoulders:'肩部',above_waist:'腰部稍上',hip:'胯部'};
+  const starts={head:'头部',shoulders:'肩部',above_waist:'腰部稍上',hip:'胯部',above_knee:'膝上',knee:'膝盖',calf:'腿肚',ankle:'脚踝'};
   function defaults(){return {schema:'manual-crop/v1',name:'秋冬套装 · 膝上紧凑',category:'套装',estimation:{enabled:true,auto_downgrade:true,canvas_fallback:true},aspect:'3:4',framing:{start:'head',end:'above_knee'},protection:{start:'head',end:'hip',hands:'prefer_one',preference_extension_limit:.15},avoid_regions:[{name:'左上 Logo',enabled:true,target:'head_contour',strength:'required',box:{left:.03,top:.02,right:.2,bottom:.15}},{name:'左下文案',enabled:false,target:'body_contour',strength:'moderate',box:{left:.03,top:.58,right:.61,bottom:.96}}],balance:{enabled:true,diagonal_degrees:15,horizontal_degrees:60,horizontal_top_percent:20,diagonal_shift_percent:5},spacing:{unit:'percent',top:3,right:2,bottom:3,left:2},output:{width:900,height:1200},allow_virtual:true,max_extension_fraction:.25};}
   function avoidZones(r){return r.avoid_regions||[r.avoid];}
   function spacingUnit(r,side){return r.spacing.units?.[side]||r.spacing.unit;}
@@ -12,6 +12,7 @@
     if(r.avoidance_frame&&(!/^[1-9]\d{0,4}:[1-9]\d{0,4}$/.test(r.avoidance_frame.aspect)||!['width_fraction','left_fraction','top_fraction'].every(k=>Number.isFinite(r.avoidance_frame[k]))||r.avoidance_frame.width_fraction<=0||r.avoidance_frame.width_fraction>40))throw Error('无效方向锁定画幅');
     if(typeof r.name!=='string'||!r.name.trim()||r.name.length>120)throw Error('模板名称需为1–120字符');
     if(!Object.hasOwn(starts,r.framing?.start)||!Object.hasOwn(ends,r.framing?.end)||!Object.hasOwn(starts,r.protection?.start)||!Object.hasOwn(ends,r.protection?.end))throw Error('未知身体参照');
+    for(const spec of [r.framing,r.protection])for(const key of ['startOffset','endOffset'])if(spec?.[key]!==undefined&&(!Number.isFinite(spec[key])||spec[key]<-1||spec[key]>1))throw Error(`${key} 必须在 -1 到 1 个肩胯长度之间`);
     if(!['none','prefer_one','prefer_all','require_one','require_all'].includes(r.protection.hands))throw Error('未知手部保护方式');
     for(const side of ['top','right','bottom','left'])if(!Number.isFinite(r.spacing?.[side])||r.spacing[side]<0)throw Error('留白必须是非负数字');
     if(!['percent','px'].includes(r.spacing.unit))throw Error('留白单位必须为 percent 或 px');
@@ -55,7 +56,13 @@
       const native=parameters.holistic?.targets?.find(t=>t.id===id)?.native;
       const nativeRegion=native?.coordinate_region_xyxy||[0,0,width,height];
       function foot(side){const ps=[side===0?29:30,side===0?31:32].map(k=>native?.pose_landmarks?.[k]).filter(q=>q&&q.visibility>=.35&&q.x>=0&&q.x<=1&&q.y>=0&&q.y<=1).map(q=>({x:nativeRegion[0]+q.x*(nativeRegion[2]-nativeRegion[0]),y:nativeRegion[1]+q.y*(nativeRegion[3]-nativeRegion[1]),s:q.visibility}));return ps.length?ps.reduce((a,q)=>project(q)>project(a)?q:a):null;}
-      function start(key){if(key==='head'){if(!head)throw Error(`${id} 缺少头部观测，含头景别需人工确认`);return {x:(head.left+head.right)/2,y:head.top,s:1};}if(key==='shoulders')return shoulder;if(key==='hip')return hip;warnings.push('腰部以肩胯连线约65%处估算，腰上参照取55%处，需按服装复核');return lerp(shoulder,hip,.55);}
+      function start(key){
+        if(key==='head'){if(!head)throw Error(`${id} 缺少头部观测，含头景别需人工确认`);return {x:(head.left+head.right)/2,y:head.top,s:1};}
+        if(key==='shoulders')return shoulder;
+        if(key==='hip')return hip;
+        if(key==='above_waist'){warnings.push('腰部以肩胯连线约65%处估算，腰上参照取55%处，需按服装复核');return lerp(shoulder,hip,.55);}
+        return end(key,'start');
+      }
       function fromKnee(side,fraction,label){
         if(rule.estimation?.enabled===false||angle>35||u.y<=0||hipPoints.length<2||shoulders.length<2)return null;
         const h=b[side?11:8],k=b[side?12:9];if(!valid(h)||!valid(k))return null;
@@ -69,9 +76,9 @@
         const h=b[side?11:8];if(!valid(h))return null;if(kind==='ankle'&&valid(b[side?12:9]))return fromKnee(side,1,'脚踝');const ankle=b[side?13:10];let q=kind==='knee'&&valid(ankle)?lerp(h,ankle,.5):{x:h.x+u.x*len*(kind==='knee'?.95:1.9),y:h.y+u.y*len*(kind==='knee'?.95:1.9),s:1};
         const outside=q.x<0||q.x>width||q.y<0||q.y>height;if(outside&&(!rule.allow_virtual||q.x< -width*.25||q.x>width*1.25||q.y< -height*.25||q.y>height*1.25))return null;
         if(!estimated.some(e=>e.person_id===id&&e.index===index)){estimated.push({...q,person_id:id,index,from:h,kind:kind==='knee'?'膝盖':'脚踝'});warnings.push(`${id} ${side?'左':'右'}${kind==='knee'?'膝盖':'脚踝'}为肩胯比例估算，并非模型观测，需人工确认`);}return q;}
-      function end(key){if(key==='shoulders')return shoulders.reduce((a,q)=>project(q)>project(a)?q:a);if(key==='hip')return hip;if(key==='waist_hip'){warnings.push('腰胯中间位置为肩胯比例估算');return lerp(shoulder,hip,.82);}const tips=[];for(let side=0;side<2;side++){const h=b[side?11:8],k=['below_hip','mid_thigh','above_knee','knee','calf'].includes(key)?leg(side,'knee'):b[side?12:9],a=['ankle','soles'].includes(key)?leg(side,'ankle'):b[side?13:10];if(!valid(h))continue;if(key==='below_hip'&&valid(k))tips.push(lerp(h,k,.15));if(['mid_thigh','above_knee','knee'].includes(key)&&valid(k))tips.push(lerp(h,k,key==='mid_thigh'?.5:key==='above_knee'?.85:1));if(key==='calf'){let calf=valid(k)&&valid(a)?lerp(k,a,.55):fromKnee(side,.55,'腿肚');if(!calf&&!valid(b[side?12:9])&&valid(k)){const ankle=leg(side,'ankle');if(valid(ankle))calf=lerp(k,ankle,.55);}if(calf)tips.push(calf);}if(key==='ankle'&&valid(a))tips.push(a);if(key==='soles'){let f=foot(side);if(!f&&valid(a)&&rule.estimation?.enabled!==false&&angle<=35){const q={x:a.x+u.x*len*.12,y:a.y+u.y*len*.12,s:1};if(q.x>=-width*(rule.allow_virtual?.25:0)&&q.x<=width*(rule.allow_virtual?1.25:1)&&q.y>=0&&q.y<=height*(rule.allow_virtual?1.25:1)){f=q;estimated.push({...q,from:a,person_id:id,kind:'脚底'});warnings.push(`${id} 脚底为脚踝沿身体轴的比例估计，非鞋底轮廓观测`);}}if(f)tips.push(f);}}
-        if(!tips.length)throw Error(`${id} 缺少“${ends[key]}”可靠观测；观测不足且不满足安全估算条件，请选择更短景别或人工确认`);return tips.reduce((a,q)=>project(q)>project(a)?q:a);}
-      function range(spec,label){const from=start(spec.start),to=end(spec.end),low=project(from),high=project(to);if(high<=low)throw Error(`${label}顺序与躯干方向冲突`);
+      function end(key,edge='end'){if(key==='shoulders')return shoulders.reduce((a,q)=>(edge==='start'?project(q)<project(a):project(q)>project(a))?q:a);if(key==='hip')return hip;if(key==='waist_hip'){warnings.push('腰胯中间位置为肩胯比例估算');return lerp(shoulder,hip,.82);}const tips=[];for(let side=0;side<2;side++){const h=b[side?11:8],k=['below_hip','mid_thigh','above_knee','knee','calf'].includes(key)?leg(side,'knee'):b[side?12:9],a=['ankle','soles'].includes(key)?leg(side,'ankle'):b[side?13:10];if(!valid(h))continue;if(key==='below_hip'&&valid(k))tips.push(lerp(h,k,.15));if(['mid_thigh','above_knee','knee'].includes(key)&&valid(k))tips.push(lerp(h,k,key==='mid_thigh'?.5:key==='above_knee'?.72:1));if(key==='calf'){let calf=valid(k)&&valid(a)?lerp(k,a,.55):fromKnee(side,.55,'腿肚');if(!calf&&!valid(b[side?12:9])&&valid(k)){const ankle=leg(side,'ankle');if(valid(ankle))calf=lerp(k,ankle,.55);}if(calf)tips.push(calf);}if(key==='ankle'&&valid(a))tips.push(a);if(key==='soles'){let f=foot(side);if(!f&&valid(a)&&rule.estimation?.enabled!==false&&angle<=35){const q={x:a.x+u.x*len*.12,y:a.y+u.y*len*.12,s:1};if(q.x>=-width*(rule.allow_virtual?.25:0)&&q.x<=width*(rule.allow_virtual?1.25:1)&&q.y>=0&&q.y<=height*(rule.allow_virtual?1.25:1)){f=q;estimated.push({...q,from:a,person_id:id,kind:'脚底'});warnings.push(`${id} 脚底为脚踝沿身体轴的比例估计，非鞋底轮廓观测`);}}if(f)tips.push(f);}}
+        if(!tips.length)throw Error(`${id} 缺少“${ends[key]}”可靠观测；观测不足且不满足安全估算条件，请选择更短景别或人工确认`);return tips.reduce((a,q)=>(edge==='start'?project(q)<project(a):project(q)>project(a))?q:a);}
+      function range(spec,label){const rawFrom=start(spec.start),rawTo=end(spec.end),startOffset=Number(spec.startOffset||0),endOffset=Number(spec.endOffset||0),from={...rawFrom,x:rawFrom.x+u.x*len*startOffset,y:rawFrom.y+u.y*len*startOffset},to={...rawTo,x:rawTo.x+u.x*len*endOffset,y:rawTo.y+u.y*len*endOffset},low=project(from),high=project(to);if(high<=low)throw Error(`${label}顺序与躯干方向冲突`);
         const selected=b.slice(0,14).filter(valid).filter(q=>project(q)>=low&&project(q)<=high);selected.push(from,to);if(spec.end==='shoulders')selected.push(...shoulders);if(spec.start==='head'&&head)selected.push({x:head.left,y:head.top},{x:head.right,y:head.bottom});
         const bounds=box(selected),margin=len*.12;bounds.left-=margin;bounds.right+=margin;
         // Restrict silhouette rows to this person's anatomical corridor and axial slice.
@@ -83,7 +90,7 @@
       for(const key of ['hand_left_keypoints_2d','hand_right_keypoints_2d']){const ps=A.points(p[key]).filter(valid);if(ps.length>=3)hands.push({...box(ps),person_id:id,part:'hand'});}
       for(const q of b.filter(valid))skeleton.push({left:q.x-len*.04,right:q.x+len*.04,top:q.y-len*.04,bottom:q.y+len*.04,part:'joint'});
       for(const [a,c]of [[1,2],[2,3],[3,4],[1,5],[5,6],[6,7],[1,8],[8,9],[9,10],[1,11],[11,12],[12,13]])if(valid(b[a])&&valid(b[c])){const q=box([b[a],b[c]]),pad=len*.04;skeleton.push({left:q.left-pad,right:q.right+pad,top:q.top-pad,bottom:q.bottom+pad,part:'bone_corridor'});}
-      trace.push(`${id} 躯干倾角 ${angle.toFixed(1)}°；${starts[rule.framing.start]} → ${ends[rule.framing.end]}；服装轮廓 ${clothesRows.length?'已参与':'未获得'}`);
+      trace.push(`${id} 躯干倾角 ${angle.toFixed(1)}°；${starts[rule.framing.start]}${rule.framing.startOffset?`(${rule.framing.startOffset>0?'+':''}${rule.framing.startOffset})`:''} → ${ends[rule.framing.end]}${rule.framing.endOffset?`(${rule.framing.endOffset>0?'+':''}${rule.framing.endOffset})`:''}；服装轮廓 ${clothesRows.length?'已参与':'未获得'}`);
     }
     if(all.length!==people.length)throw Error('部分人物缺少可靠肩胯参数，停止自动裁切，请改为单人或人工复核');
     if(!all.length)throw Error('没有可靠人物参数');
@@ -124,7 +131,7 @@
       const candidates=[{parts:[...hard,...desired,...softHands],balanced:true},{parts:[...hard,...desired],balanced:false}];
       let accepted=false;for(const c of candidates){try{const p=run(c.parts,c.balanced);if(p.canvas.missing_area_fraction<=rule.max_extension_fraction&&p.canvas.missing_area_fraction<=r.canvas.missing_area_fraction+rule.protection.preference_extension_limit){r=p;accepted=true;break;}}catch(e){failures.push(e.message);}}
       if(!accepted)r.warnings.push('期望景别／构图偏好超出预算，已退回最低必保范围');
-      const blocked=r.canvas.missing_area_fraction>rule.max_extension_fraction;
+      r.protection_bounds=A.union(hard);const blocked=r.canvas.missing_area_fraction>rule.max_extension_fraction;
       r.blocked=blocked;r.trace=[...trace,`构图路由：${mode}`,`外补占成片 ${(r.canvas.missing_area_fraction*100).toFixed(1)}%`,accepted?'采用期望景别（含可满足的偏好）':'采用最低必保兜底'];
       r.warnings=[...new Set(r.warnings)];if(blocked)r.warnings.push('外扩上限未满足：仅显示候选，不可直接导出');
       r.preference_applied=accepted;r.extension_over_budget=r.canvas.missing_area_fraction>rule.max_extension_fraction;r.estimated_heads=estimatedHeads;r.estimated_points=estimated;r.review_required=r.review_required||estimated.length+estimatedHeads.length>0;if(estimated.length+estimatedHeads.length)r.trace.push(`使用 ${estimated.length+estimatedHeads.length} 个估计参照，需人工复核`);r.rule=rule;r.mode=mode;if(r.movement){const d=r.movement.source_delta;r.trace.push((r.movement.axis==='horizontal'?'仅横移':'仅纵移')+'：人物位移 '+(r.movement.axis==='horizontal'?d.x:d.y).toFixed(1)+' 原图px；画幅尺寸锁定');}for(const z of r.manual_avoid_checks){if(z.ignored){r.trace.push(z.name+'：与上方避让冲突，本次忽略');r.review_required=true;continue;}const label=z.required?'严格':z.strength==='moderate'?'适中':'宽松',text=`${z.name}：重叠 ${(z.overlap_ratio*100).toFixed(1)}% / 目标 ≤${Math.round(z.allowed_overlap*100)}%（${label}）`;r.trace.push(text);if(!z.target_met){r.review_required=true;r.warnings.push(text+'；已保留限制内的最佳候选，可导出并建议复核');}}

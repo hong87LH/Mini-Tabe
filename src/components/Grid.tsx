@@ -9,7 +9,7 @@ import { FieldIcon } from './FieldIcon';
 import { cn, getStringColor } from '../lib/utils';
 import { Lock, Plus, GripVertical, ChevronDown, Check, Image as ImageIcon, X, Sparkles, ArrowDownUp, Trash2, Filter, Copy, Download, ChevronLeft, ChevronRight, EyeOff, Send, MessageSquare, MessageSquareText, Star, Loader2, Play, Music2, Crop, Expand, Palette, Link, Unlink, ClipboardCopy, ClipboardPaste, Maximize2, RefreshCw } from 'lucide-react';
 import { reviewLocalPath, isReviewImage, isThumbnailVisible, refreshReviewImages, loadFreshReviewThumbnail, restoreCropViewport, SYSTEM_THUMBNAIL_SIZE, requestSystemThumbnail } from '../lib/reviewMedia';
-import { buildSmartCropCellUpdates, isSmartCropImageItem, listSmartCropPresets, normalizeSmartCropItems, solveSmartCropTargets, SmartCropPreset, SmartCropTarget } from '../lib/smartCrop';
+import { applySmartCropMediaPatches, buildSmartCropCellUpdates, createSmartCropMediaPatches, isSmartCropImageItem, listSmartCropPresets, normalizeSmartCropItems, resolveSmartCropTargets, smartCropConstraintContract, smartCropPreviewEvidence, SmartCropActionError, solveSmartCropTargets, SmartCropPreset, SmartCropTarget } from '../lib/smartCrop';
 import { getMediaFileInfo, isInlinePreviewableProfessionalMedia, isProfessionalMedia, isSupportedAttachmentFile, MEDIA_FILE_ACCEPT } from '../lib/mediaFileTypes';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { Parser } from 'expr-eval';
@@ -3797,6 +3797,8 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
   const [smartCropBusy, setSmartCropBusy] = useState(false);
   const [smartCropStatus, setSmartCropStatus] = useState<{ kind: 'running' | 'success' | 'error'; message: string } | null>(null);
   const smartCropStatusTimerRef = useRef<number | null>(null);
+  const latestSmartCropRecordsRef = useRef(allRecords || data.records);
+  latestSmartCropRecordsRef.current = allRecords || data.records;
 
   const showSmartCropStatus = (kind: 'running' | 'success' | 'error', message: string, autoClose = false) => {
     if (smartCropStatusTimerRef.current !== null) window.clearTimeout(smartCropStatusTimerRef.current);
@@ -3857,70 +3859,66 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
     return targets;
   };
 
-  const resolveAgentSmartCropTargets = (params: any): SmartCropTarget[] => {
-    if (params?.tableId && params.tableId !== tableId) throw new Error(`Smart crop runtime is mounted for ${tableId}, not ${params.tableId}`);
-    const requested = Array.isArray(params?.targets) ? params.targets : [];
-    const cells: Array<{ r: number; c: number }> = [];
-    if (requested.length) {
-      for (const target of requested) {
-        const r = data.records.findIndex(record => record.id === target.rowId);
-        const c = visibleFields.findIndex(field => field.id === target.fieldId);
-        if (r >= 0 && c >= 0) cells.push({ r, c });
-      }
-    } else {
-      const rowIds = Array.isArray(params?.rowIds) && params.rowIds.length ? new Set(params.rowIds.map(String)) : null;
-      const fieldIds = Array.isArray(params?.fieldIds) && params.fieldIds.length ? new Set(params.fieldIds.map(String)) : null;
-      data.records.forEach((record, r) => {
-        if (rowIds && !rowIds.has(record.id)) return;
-        visibleFields.forEach((field, c) => {
-          if (!fieldIds || fieldIds.has(field.id)) cells.push({ r, c });
-        });
-      });
+  const resolveAgentSmartCropTargets = (params: any) => {
+    if (params?.tableId && params.tableId !== tableId) {
+      throw new SmartCropActionError('TABLE_NOT_FOUND', `Smart crop runtime is mounted for ${tableId}, not ${params.tableId}`, { tableId: params.tableId });
     }
-    let targets = collectSmartCropTargets(cells);
-    if (requested.length) {
-      const allowed = new Set(requested.map((target: any) => `${target.rowId}\u0000${target.fieldId}\u0000${target.index ?? '*'}`));
-      targets = targets.filter(target => allowed.has(`${target.rowId}\u0000${target.fieldId}\u0000*`) || allowed.has(`${target.rowId}\u0000${target.fieldId}\u0000${target.index}`));
+    const resolution = resolveSmartCropTargets(latestSmartCropRecordsRef.current, data.fields, params || {});
+    if (!resolution.targets.length) {
+      throw new SmartCropActionError('NO_VALID_TARGETS', '没有可执行智能裁切的有效图片目标', { skipped: resolution.skipped });
     }
-    return targets;
+    return resolution;
   };
 
   const previewAgentSmartCrop = async (params: any) => {
-    const targets = resolveAgentSmartCropTargets(params);
+    const resolution = resolveAgentSmartCropTargets(params);
+    const targets = resolution.targets;
     const result = await solveSmartCropTargets(targets, String(params?.presetId || ''), undefined, params?.overrides);
+    const constraintContract = smartCropConstraintContract(result.preset);
     return {
       preset: result.preset,
       overrides: result.overrides,
+      constraintContract,
       total: result.total,
+      requestedTotal: resolution.requestedTotal,
+      skipped: resolution.skipped,
       ready: result.changes.map(change => ({
         rowId: change.rowId,
         fieldId: change.fieldId,
         index: change.index,
         effectiveAspect: change.cropData?.smartCrop?.effectiveAspect,
         aspectMode: change.cropData?.smartCrop?.aspectMode,
-        warnings: change.warnings
+        warnings: [...constraintContract.warnings, ...change.warnings],
+        ...smartCropPreviewEvidence(change)
       })),
-      failed: result.failures.map(failure => ({ rowId: failure.rowId, fieldId: failure.fieldId, index: failure.index, error: failure.error }))
+      failed: result.failures.map(failure => ({ rowId: failure.rowId, fieldId: failure.fieldId, index: failure.index, code: failure.code, error: failure.error, details: failure.details }))
     };
   };
 
   const applyAgentSmartCrop = async (params: any) => {
-    const targets = resolveAgentSmartCropTargets(params);
+    const resolution = resolveAgentSmartCropTargets(params);
+    const targets = resolution.targets;
     const result = await solveSmartCropTargets(targets, String(params?.presetId || ''), undefined, params?.overrides);
+    const constraintContract = smartCropConstraintContract(result.preset);
     return {
       preset: result.preset,
       overrides: result.overrides,
+      constraintContract,
       total: result.total,
+      requestedTotal: resolution.requestedTotal,
+      skipped: resolution.skipped,
       applied: result.changes.length,
       appliedItems: result.changes.map(change => ({
         rowId: change.rowId,
         fieldId: change.fieldId,
         index: change.index,
         effectiveAspect: change.cropData?.smartCrop?.effectiveAspect,
-        aspectMode: change.cropData?.smartCrop?.aspectMode
+        aspectMode: change.cropData?.smartCrop?.aspectMode,
+        warnings: change.warnings,
+        ...smartCropPreviewEvidence(change)
       })),
-      failed: result.failures.map(failure => ({ rowId: failure.rowId, fieldId: failure.fieldId, index: failure.index, error: failure.error })),
-      updates: buildSmartCropCellUpdates(result.changes, data.records)
+      failed: result.failures.map(failure => ({ rowId: failure.rowId, fieldId: failure.fieldId, index: failure.index, code: failure.code, error: failure.error, details: failure.details })),
+      mediaPatches: createSmartCropMediaPatches(result.changes)
     };
   };
 
@@ -3938,15 +3936,23 @@ export function Grid({ tableId, locateCellRequest, onLocateCellResult, viewMode 
         const prefix = progress.status === 'processing' ? '正在识别人像并计算裁切' : '正在写入裁切结果';
         showSmartCropStatus('running', `${prefix}… ${progress.completed}/${progress.total}`);
       });
-      const updates = buildSmartCropCellUpdates(result.changes, data.records);
+      const writeback = applySmartCropMediaPatches(createSmartCropMediaPatches(result.changes), latestSmartCropRecordsRef.current);
+      const updates = writeback.updates;
       if (updates.length && onUpdateRecordsBatch) {
         onUpdateRecordsBatch(updates);
       }
-      if (result.changes.length === 0) {
-        const reason = result.failures[0]?.error || '没有生成可用裁切结果';
+      if (result.changes.length === 0 || writeback.applied === 0) {
+        const firstFailure = result.failures[0];
+        const reason = writeback.skipped[0]?.error || (firstFailure?.code === 'ANCHOR_ORDER_CONFLICT'
+          ? '人物为坐姿、弯腿或横卧，身体锚点顺序无法可靠判断；已保留原裁切，请人工复核'
+          : firstFailure?.error || '没有生成可用裁切结果');
         showSmartCropStatus('error', `智能裁切未完成：${reason}`, true);
-      } else if (result.failures.length) {
-        showSmartCropStatus('error', `已裁切 ${result.changes.length}/${result.total}；跳过原因：${result.failures[0].error}`, true);
+      } else if (result.failures.length || writeback.skipped.length) {
+        const firstFailure = result.failures[0];
+        const reason = writeback.skipped[0]?.error || (firstFailure?.code === 'ANCHOR_ORDER_CONFLICT'
+          ? '部分图片为坐姿、弯腿或横卧，身体锚点顺序无法可靠判断，原裁切已保留'
+          : firstFailure?.error);
+        showSmartCropStatus('error', `已裁切 ${writeback.applied}/${result.total}；跳过原因：${reason}`, true);
       } else {
         showSmartCropStatus('success', `智能裁切完成：已更新 ${result.changes.length} 张图片`, true);
       }
